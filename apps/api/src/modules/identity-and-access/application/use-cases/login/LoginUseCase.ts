@@ -19,6 +19,13 @@ export interface LoginDependencies {
   readonly idGenerator: IdGenerator;
   readonly clock: Clock;
   readonly sessionPolicy: SessionPolicy;
+  /**
+   * Hash of a throwaway secret. Verifying the presented password against it on
+   * the unknown-email and disabled paths makes every rejection pay one Argon2
+   * verification, so response time does not reveal whether the account exists
+   * (T1 review finding R1-001).
+   */
+  readonly dummyPasswordHash: string;
 }
 
 /**
@@ -26,6 +33,9 @@ export interface LoginDependencies {
  *
  * Unknown email, wrong password and disabled account all raise the same generic
  * error, so the endpoint cannot be used to enumerate accounts (ADR-003 §5).
+ * Every failure path performs exactly one password verification, including the
+ * paths where there is no stored user hash to check (R1-001).
+ *
  * A successful login creates a new refresh family; every later rotation of that
  * family keeps the same `familyId`.
  */
@@ -42,6 +52,12 @@ export class LoginUseCase {
     );
 
     if (user === null || user.status !== 'active') {
+      // Constant work on the enumeration-sensitive paths: verify against a
+      // throwaway hash so an unknown email costs the same as a wrong password.
+      await this.dependencies.passwordHasher.verify(
+        this.dependencies.dummyPasswordHash,
+        command.password,
+      );
       throw new InvalidCredentialsError();
     }
 

@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import type { DataSource } from 'typeorm';
 
 import type { AuthConfig } from '../../../config/config.js';
@@ -5,10 +7,7 @@ import { SystemClock, type Clock } from '../../../shared/clock.js';
 import { generateUuidV4 } from '../../../shared/ids.js';
 import type { OrganizationRepository } from '../application/ports/OrganizationRepository.js';
 import type { PasswordHasher } from '../application/ports/PasswordHasher.js';
-import type {
-  RefreshTokenStore,
-  StoredRefreshToken,
-} from '../application/ports/RefreshTokenStore.js';
+import type { RefreshTokenStore } from '../application/ports/RefreshTokenStore.js';
 import type { TokenService } from '../application/ports/TokenService.js';
 import type { UserRepository } from '../application/ports/UserRepository.js';
 import { CreateUserUseCase } from '../application/use-cases/create-user/CreateUserUseCase.js';
@@ -16,8 +15,6 @@ import { LoginUseCase } from '../application/use-cases/login/LoginUseCase.js';
 import { LogoutUseCase } from '../application/use-cases/logout/LogoutUseCase.js';
 import { RefreshSessionUseCase } from '../application/use-cases/refresh-session/RefreshSessionUseCase.js';
 import { RegisterOrganizationUseCase } from '../application/use-cases/register-organization/RegisterOrganizationUseCase.js';
-import { Organization } from '../domain/entities/Organization.js';
-import type { User } from '../domain/entities/User.js';
 import {
   createSessionPolicy,
   DEFAULT_SESSION_POLICY,
@@ -26,103 +23,31 @@ import {
 import type { IdGenerator } from '../application/ports/IdGenerator.js';
 
 /**
- * In-memory organization repository for tests and the demo composition.
+ * Composition root for the `identity-and-access` module.
  *
- * Deliberately not a production adapter: data disappears with the process.
- */
-export class InMemoryOrganizationRepository implements OrganizationRepository {
-  private readonly organizations = new Map<string, Organization>();
-
-  async save(organization: Organization): Promise<void> {
-    this.organizations.set(organization.id, organization);
-  }
-
-  async findById(organizationId: string): Promise<Organization | null> {
-    return this.organizations.get(organizationId) ?? null;
-  }
-}
-
-/**
- * In-memory user repository.
+ * Every persistence adapter is required. There is deliberately no in-memory
+ * default: a production composition that forgot to pass a repository would
+ * work until the process restarted and then lose data, which is worse than a
+ * startup failure. Tests wire in-memory adapters explicitly through
+ * `buildInMemoryIdentityModule` below.
  *
- * Mirrors the port contract: `findByEmail` is tenant-scoped and emails are
- * already normalized by the domain.
+ * Password hasher, token service and dummy password hash are also required
+ * because none can have a safe default: a default secret or a reversible hasher
+ * would be a security defect, and an empty dummy hash would silently disable
+ * the constant-time login path.
  */
-export class InMemoryUserRepository implements UserRepository {
-  private readonly users = new Map<string, User>();
-
-  async save(user: User): Promise<void> {
-    this.users.set(user.id, user);
-  }
-
-  async findById(userId: string): Promise<User | null> {
-    return this.users.get(userId) ?? null;
-  }
-
-  async findByEmail(organizationId: string, email: string): Promise<User | null> {
-    for (const user of this.users.values()) {
-      if (user.organizationId === organizationId && user.email === email) {
-        return user;
-      }
-    }
-
-    return null;
-  }
-}
-
-/**
- * In-memory refresh token store with the same single-winner revocation
- * semantics as the PostgreSQL adapter.
- */
-export class InMemoryRefreshTokenStore implements RefreshTokenStore {
-  private readonly tokens = new Map<string, StoredRefreshToken>();
-
-  async save(token: StoredRefreshToken): Promise<void> {
-    this.tokens.set(token.id, token);
-  }
-
-  async findByHash(tokenHash: string): Promise<StoredRefreshToken | null> {
-    for (const token of this.tokens.values()) {
-      if (token.tokenHash === tokenHash) {
-        return token;
-      }
-    }
-
-    return null;
-  }
-
-  async revokeOne(tokenId: string, revokedAt: string): Promise<boolean> {
-    const token = this.tokens.get(tokenId);
-
-    if (token === undefined || token.revokedAt !== null) {
-      return false;
-    }
-
-    this.tokens.set(tokenId, { ...token, revokedAt });
-    return true;
-  }
-
-  async revokeFamily(familyId: string, revokedAt: string): Promise<void> {
-    for (const [tokenId, token] of this.tokens) {
-      if (token.familyId === familyId && token.revokedAt === null) {
-        this.tokens.set(tokenId, { ...token, revokedAt });
-      }
-    }
-  }
-}
-
-export class CryptoIdGenerator implements IdGenerator {
-  nextId(): string {
-    return generateUuidV4();
-  }
-}
-
 export interface IdentityModuleDependencies {
+  readonly userRepository: UserRepository;
+  readonly organizationRepository: OrganizationRepository;
+  readonly refreshTokenStore: RefreshTokenStore;
   readonly passwordHasher: PasswordHasher;
   readonly tokenService: TokenService;
-  readonly userRepository?: UserRepository;
-  readonly organizationRepository?: OrganizationRepository;
-  readonly refreshTokenStore?: RefreshTokenStore;
+  /**
+   * Argon2id hash of a throwaway secret. `LoginUseCase` verifies against it
+   * when the email is unknown or the account is disabled, so both failure paths
+   * pay one Argon2 verification (T1 review finding R1-001).
+   */
+  readonly dummyPasswordHash: string;
   readonly clock?: Clock;
   readonly idGenerator?: IdGenerator;
   readonly sessionPolicy?: SessionPolicy;
@@ -139,68 +64,64 @@ export interface IdentityModule {
   readonly refreshTokens: RefreshTokenStore;
   readonly tokenService: TokenService;
   readonly passwordHasher: PasswordHasher;
+  readonly sessionPolicy: SessionPolicy;
 }
 
-/**
- * Composition root for the `identity-and-access` module.
- *
- * Password hasher and token service are required because neither can have a
- * safe default: a default secret or a reversible hasher would be a security
- * defect. Tests inject deterministic doubles; the process factory below wires
- * the Argon2id/jose adapters from validated configuration.
- */
+export class CryptoIdGenerator implements IdGenerator {
+  nextId(): string {
+    return generateUuidV4();
+  }
+}
+
 export function buildIdentityModule(
   dependencies: IdentityModuleDependencies,
 ): IdentityModule {
-  const users = dependencies.userRepository ?? new InMemoryUserRepository();
-  const organizations =
-    dependencies.organizationRepository ?? new InMemoryOrganizationRepository();
-  const refreshTokens =
-    dependencies.refreshTokenStore ?? new InMemoryRefreshTokenStore();
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new CryptoIdGenerator();
   const sessionPolicy = dependencies.sessionPolicy ?? DEFAULT_SESSION_POLICY;
 
   return {
     registerOrganization: new RegisterOrganizationUseCase({
-      organizations,
+      organizations: dependencies.organizationRepository,
       idGenerator,
       clock,
     }),
     createUser: new CreateUserUseCase({
-      users,
-      organizations,
+      users: dependencies.userRepository,
+      organizations: dependencies.organizationRepository,
       passwordHasher: dependencies.passwordHasher,
       idGenerator,
       clock,
     }),
     login: new LoginUseCase({
-      users,
+      users: dependencies.userRepository,
       passwordHasher: dependencies.passwordHasher,
       tokenService: dependencies.tokenService,
-      refreshTokens,
+      refreshTokens: dependencies.refreshTokenStore,
       idGenerator,
       clock,
       sessionPolicy,
+      dummyPasswordHash: dependencies.dummyPasswordHash,
     }),
     refreshSession: new RefreshSessionUseCase({
-      users,
+      users: dependencies.userRepository,
       tokenService: dependencies.tokenService,
-      refreshTokens,
+      refreshTokens: dependencies.refreshTokenStore,
       idGenerator,
       clock,
       sessionPolicy,
     }),
     logout: new LogoutUseCase({
       tokenService: dependencies.tokenService,
-      refreshTokens,
+      refreshTokens: dependencies.refreshTokenStore,
       clock,
     }),
-    users,
-    organizations,
-    refreshTokens,
+    users: dependencies.userRepository,
+    organizations: dependencies.organizationRepository,
+    refreshTokens: dependencies.refreshTokenStore,
     tokenService: dependencies.tokenService,
     passwordHasher: dependencies.passwordHasher,
+    sessionPolicy,
   };
 }
 
@@ -210,14 +131,19 @@ export interface TypeOrmIdentityModuleOptions {
   readonly passwordHasher?: PasswordHasher;
   readonly tokenService?: TokenService;
   readonly sessionPolicy?: SessionPolicy;
+  /** Precomputed dummy hash, for tests that inject a fake hasher. */
+  readonly dummyPasswordHash?: string;
 }
 
 /**
- * Composes the module with PostgreSQL adapters and the real security adapters.
+ * Production composition: PostgreSQL for persistence, Argon2id/jose for
+ * security.
  *
  * Adapters are imported dynamically so unit tests that import this file do not
  * load TypeORM decorators or the native Argon2 binding. The caller owns the
- * data source lifecycle; this factory only wires ports.
+ * data source lifecycle; this factory only wires ports. All three repositories
+ * are constructed here and passed explicitly, so the module cannot fall back to
+ * a process-local store.
  */
 export async function createIdentityModuleFromDataSource(
   dataSource: DataSource,
@@ -238,11 +164,20 @@ export async function createIdentityModuleFromDataSource(
     import('../infrastructure/security/jwt-token-service.js'),
   ]);
 
+  const passwordHasher = options.passwordHasher ?? new Argon2PasswordHasher();
+
+  // Hashing a random throwaway secret once at startup gives the login use case a
+  // real Argon2 hash to verify against, so an unknown email costs the same as a
+  // wrong password without storing a password anywhere.
+  const dummyPasswordHash =
+    options.dummyPasswordHash ??
+    (await passwordHasher.hash(randomBytes(32).toString('hex')));
+
   return buildIdentityModule({
     userRepository: new UserTypeOrmRepository(dataSource),
     organizationRepository: new OrganizationTypeOrmRepository(dataSource),
     refreshTokenStore: new RefreshTokenTypeOrmStore(dataSource),
-    passwordHasher: options.passwordHasher ?? new Argon2PasswordHasher(),
+    passwordHasher,
     tokenService:
       options.tokenService ??
       new JwtTokenService({
@@ -250,6 +185,7 @@ export async function createIdentityModuleFromDataSource(
         issuer: auth.jwtIssuer,
         audience: auth.jwtAudience,
       }),
+    dummyPasswordHash,
     sessionPolicy:
       options.sessionPolicy ??
       createSessionPolicy({

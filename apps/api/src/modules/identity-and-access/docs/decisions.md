@@ -14,7 +14,7 @@ stable: a superseded decision gets a new ADR instead of an edit that moves secti
 | [006](#adr-006--validation-at-the-boundary-policy-in-explicit-functions) | Zod at the edge, policy in named functions, typed errors | Accepted |
 | [007](#adr-007--shared-primitives-clock-ids-and-instants) | Clock, id generation and timestamp ownership | Accepted |
 | [008](#adr-008--separate-loadauthconfig-from-appconfig) | Separate `loadAuthConfig` from `AppConfig` | Accepted |
-| [009](#adr-009--http-contract-deferred-to-t2) | No HTTP contract in this milestone | Accepted |
+| [009](#adr-009--http-contract-deferred-to-t2) | No HTTP contract in this milestone (superseded by T2) | Superseded |
 
 ## ADR-001 — Module boundary rules
 
@@ -109,8 +109,8 @@ The trade-off is that a database dump plus read access to the application code s
 yield usable tokens, but a leaked pepper would add defense in depth. A peppered HMAC with
 versioned keys is a deliberate follow-up, together with key rotation. Note that `.env.example`
 still names the earlier `JWT_ACCESS_SECRET` and `JWT_REFRESH_TOKEN_PEPPER` variables; the
-implemented configuration reads `JWT_SECRET` and does not use a pepper. That file is outside
-this task's edit surfaces and must be updated with the T2 environment work.
+implemented configuration reads `JWT_SECRET` and does not use a pepper. Reconciling that file
+to `JWT_SECRET` is part of the HTTP/environment work.
 
 ## ADR-006 — Validation at the boundary, policy in explicit functions
 
@@ -147,11 +147,16 @@ outside this task's edit surfaces, so extending `AppConfig` would have forced an
 change.
 
 `loadAuthConfig` validates `JWT_SECRET` (minimum 32 characters, no default), issuer, audience,
-token lifetimes, `COOKIE_SECURE` and the login rate-limit placeholders. Composition receives the
-validated object and never reads `process.env` itself. The cost is two loaders that T2 must call
-together when it mounts the HTTP adapter.
+token lifetimes, `COOKIE_SECURE` and the login rate-limit window. Composition receives the
+validated object and never reads `process.env` itself. The cost is two loaders; the process
+entry point calls both at boot before composing the HTTP app.
 
 ## ADR-009 — HTTP contract deferred to T2
+
+**Status: superseded.** T2 mounted the transport layer: `apps/api/src/http` owns the auth and
+user routes, the JWT middleware, `requireRole`, the refresh cookie and the in-memory login
+limiter, and `docs/api/openapi.yaml` publishes the contract. The original deferral rationale
+is kept below for history.
 
 This milestone ships no routes, middleware, cookies or `docs/api-contracts.md`. The transport
 decisions that shape the contract — cookie flags and CSRF strategy, rate-limit storage,
@@ -170,5 +175,5 @@ endpoints and the cookie policy as the starting point for that contract.
 | `argon2.needsRehash` and a parameter-migration path | ADR-003 §5; requires a rehash-on-login write path |
 | Cleanup job for expired/revoked refresh rows | Not needed for correctness; table growth is the only cost |
 | Access-token denylist or key rotation (JWKS) | Contradicts the 15-minute stateless trade-off unless requirements change |
-| Login rate limiting | Placeholders exist in `AuthConfig`; enforcement needs a shared store (T2) |
+| Shared (Redis) login rate limiting | The MVP limiter is process-local (S9); a shared store is a deployment change |
 | Delivery-orders integration tests seeding organizations | Existing tests insert random organization ids, so the new FK rejects them; the fix belongs to that module's test fixture |

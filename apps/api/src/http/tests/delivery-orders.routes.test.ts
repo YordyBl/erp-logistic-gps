@@ -5,26 +5,62 @@ import { describe, expect, it } from 'vitest';
 import type { DeliveryOrderRepository } from '../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
 import { DeliveryOrderInvariantError } from '../../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
 import {
+  ADMIN_EMAIL,
+  ADMIN_ID,
+  bearer,
   buildTestApp,
   createFailingRepository,
   CREATED_AT,
   FIRST_ORDER_ID,
-  ORGANIZATION_HEADER,
   ORGANIZATION_ID,
+  OTHER_ADMIN_EMAIL,
+  OTHER_ADMIN_ID,
   OTHER_ORGANIZATION_ID,
+  type TestAppOptions,
   validOrderBody,
 } from './support/test-app.js';
 
 const UNKNOWN_ORDER_ID = '99999999-9999-4999-8999-999999999999';
 
+interface SeededApp {
+  readonly app: Express;
+  readonly token: string;
+  readonly otherToken: string;
+}
+
+/** Two tenants, each with one ADMIN actor, and one bearer token per tenant. */
+async function buildSeededApp(options: TestAppOptions = {}): Promise<SeededApp> {
+  const testApp = buildTestApp(options);
+
+  await testApp.seedOrganization({ id: ORGANIZATION_ID, name: 'Lima Express' });
+  await testApp.seedOrganization({ id: OTHER_ORGANIZATION_ID, name: 'Callao Express' });
+
+  const admin = await testApp.seedUser({
+    id: ADMIN_ID,
+    email: ADMIN_EMAIL,
+    organizationId: ORGANIZATION_ID,
+  });
+  const otherAdmin = await testApp.seedUser({
+    id: OTHER_ADMIN_ID,
+    email: OTHER_ADMIN_EMAIL,
+    organizationId: OTHER_ORGANIZATION_ID,
+  });
+
+  return {
+    app: testApp.app,
+    token: await testApp.signIn(admin),
+    otherToken: await testApp.signIn(otherAdmin),
+  };
+}
+
 async function createOrder(
   app: Express,
-  organizationId = ORGANIZATION_ID,
+  token: string,
   body: Record<string, unknown> = validOrderBody(),
 ): Promise<string> {
   const response = await request(app)
     .post('/api/v1/delivery-orders')
-    .set(ORGANIZATION_HEADER, organizationId)
+    .set(bearer(token))
     .send(body);
 
   expect(response.status).toBe(201);
@@ -32,12 +68,12 @@ async function createOrder(
 }
 
 describe('POST /api/v1/delivery-orders', () => {
-  it('creates an order and returns 201 with the full resource and Location header', async () => {
-    const { app } = buildTestApp();
+  it('creates an order in the JWT organization and returns 201 with Location', async () => {
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(validOrderBody());
 
     expect(response.status).toBe(201);
@@ -67,11 +103,11 @@ describe('POST /api/v1/delivery-orders', () => {
   });
 
   it('returns 400 with field details and stores nothing when the body is invalid', async () => {
-    const { app } = buildTestApp();
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(
         validOrderBody({
           recipient: { name: 'Ana Torres', phone: 'not-a-phone' },
@@ -92,17 +128,17 @@ describe('POST /api/v1/delivery-orders', () => {
     const lookup = await request(app)
       .get('/api/v1/delivery-orders')
       .query({ publicCode: 'ORD-2026-0001' })
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(lookup.status).toBe(404);
   });
 
   it('rejects an organizationId in the body instead of trusting it', async () => {
-    const { app } = buildTestApp();
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(validOrderBody({ organizationId: OTHER_ORGANIZATION_ID }));
 
     expect(response.status).toBe(400);
@@ -110,46 +146,47 @@ describe('POST /api/v1/delivery-orders', () => {
     expect(response.body.error.details.issues.length).toBeGreaterThan(0);
   });
 
-  it('returns 401 and stores nothing when the organization header is absent', async () => {
-    const { app } = buildTestApp();
+  it('returns 401 and stores nothing when the access token is absent', async () => {
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
       .send(validOrderBody());
 
     expect(response.status).toBe(401);
-    expect(response.body.error.code).toBe('ORGANIZATION_REQUIRED');
+    expect(response.body.error.code).toBe('AUTH_TOKEN_MISSING');
     expect(response.body.error.message).toBe(
-      'The x-organization-id header is required',
+      'The Authorization header with a Bearer access token is required',
     );
 
     const lookup = await request(app)
       .get('/api/v1/delivery-orders')
       .query({ publicCode: 'ORD-2026-0001' })
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(lookup.status).toBe(404);
   });
 
-  it('returns 401 for a malformed organization header', async () => {
-    const { app } = buildTestApp();
+  it('ignores a spoofed x-organization-id header: the verified token wins', async () => {
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, 'not-a-uuid')
+      .set(bearer(token))
+      .set('x-organization-id', OTHER_ORGANIZATION_ID)
       .send(validOrderBody());
 
-    expect(response.status).toBe(401);
-    expect(response.body.error.code).toBe('ORGANIZATION_INVALID');
+    expect(response.status).toBe(201);
+    expect(response.body.data.organizationId).toBe(ORGANIZATION_ID);
   });
 
   it('returns 409 when the public code already exists in the organization', async () => {
-    const { app } = buildTestApp();
-    await createOrder(app);
+    const { app, token } = await buildSeededApp();
+    await createOrder(app, token);
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(validOrderBody());
 
     expect(response.status).toBe(409);
@@ -184,11 +221,11 @@ describe('POST /api/v1/delivery-orders', () => {
       },
     };
 
-    const { app } = buildTestApp({ repository });
+    const { app, token } = await buildSeededApp({ repository });
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(validOrderBody());
 
     expect(saveCalls).toBe(1);
@@ -205,11 +242,13 @@ describe('POST /api/v1/delivery-orders', () => {
   });
 
   it('returns a generic 500 when the repository fails', async () => {
-    const { app } = buildTestApp({ repository: createFailingRepository() });
+    const { app, token } = await buildSeededApp({
+      repository: createFailingRepository(),
+    });
 
     const response = await request(app)
       .post('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .set(bearer(token))
       .send(validOrderBody());
 
     expect(response.status).toBe(500);
@@ -223,12 +262,12 @@ describe('POST /api/v1/delivery-orders', () => {
 
 describe('GET /api/v1/delivery-orders/{orderId}', () => {
   it('returns 200 with the stored order', async () => {
-    const { app } = buildTestApp();
-    const orderId = await createOrder(app);
+    const { app, token } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
 
     const response = await request(app)
       .get(`/api/v1/delivery-orders/${orderId}`)
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(200);
     expect(response.body.data.id).toBe(orderId);
@@ -237,11 +276,11 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
   });
 
   it('returns 400 with field details for a malformed order id', async () => {
-    const { app } = buildTestApp();
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .get('/api/v1/delivery-orders/not-a-uuid')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
@@ -251,11 +290,11 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
   });
 
   it('returns 404 for an unknown order id', async () => {
-    const { app } = buildTestApp();
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .get(`/api/v1/delivery-orders/${UNKNOWN_ORDER_ID}`)
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(404);
     expect(response.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
@@ -265,16 +304,16 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
     expect(response.body.error.details).toBeUndefined();
   });
 
-  it('returns 404 with the same envelope as an unknown id for a cross-organization read', async () => {
-    const { app } = buildTestApp();
-    const orderId = await createOrder(app, ORGANIZATION_ID);
+  it('returns 404 with the same envelope as an unknown id for another tenant token', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
 
     const forbidden = await request(app)
       .get(`/api/v1/delivery-orders/${orderId}`)
-      .set(ORGANIZATION_HEADER, OTHER_ORGANIZATION_ID);
+      .set(bearer(otherToken));
     const ownerRead = await request(app)
       .get(`/api/v1/delivery-orders/${orderId}`)
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(forbidden.status).toBe(404);
     expect(forbidden.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
@@ -289,11 +328,13 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
   });
 
   it('returns a generic 500 when the repository read fails', async () => {
-    const { app } = buildTestApp({ repository: createFailingRepository() });
+    const { app, token } = await buildSeededApp({
+      repository: createFailingRepository(),
+    });
 
     const response = await request(app)
       .get(`/api/v1/delivery-orders/${UNKNOWN_ORDER_ID}`)
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(500);
     expect(response.body.error.code).toBe('INTERNAL_ERROR');
@@ -303,13 +344,13 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
 
 describe('GET /api/v1/delivery-orders?publicCode=...', () => {
   it('returns 200 for a code in the caller organization', async () => {
-    const { app } = buildTestApp();
-    const orderId = await createOrder(app);
+    const { app, token } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
 
     const response = await request(app)
       .get('/api/v1/delivery-orders')
       .query({ publicCode: 'ord-2026-0001' })
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(200);
     expect(response.body.data.id).toBe(orderId);
@@ -317,24 +358,24 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
   });
 
   it('returns 404 for a code owned by another organization', async () => {
-    const { app } = buildTestApp();
-    await createOrder(app, ORGANIZATION_ID);
+    const { app, token, otherToken } = await buildSeededApp();
+    await createOrder(app, token);
 
     const response = await request(app)
       .get('/api/v1/delivery-orders')
       .query({ publicCode: 'ORD-2026-0001' })
-      .set(ORGANIZATION_HEADER, OTHER_ORGANIZATION_ID);
+      .set(bearer(otherToken));
 
     expect(response.status).toBe(404);
     expect(response.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
   });
 
   it('returns 400 when publicCode is missing', async () => {
-    const { app } = buildTestApp();
+    const { app, token } = await buildSeededApp();
 
     const response = await request(app)
       .get('/api/v1/delivery-orders')
-      .set(ORGANIZATION_HEADER, ORGANIZATION_ID);
+      .set(bearer(token));
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');

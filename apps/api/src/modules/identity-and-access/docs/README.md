@@ -5,9 +5,10 @@ organization they belong to, how they prove identity, and how a device session i
 or revoked. It is the authorization foundation every other module will consume.
 
 **Status:** domain, application, the five core use cases, Argon2id/jose adapters,
-PostgreSQL persistence and migration 2 are implemented and tested. HTTP routes, JWT
-middleware, cookies and rate limiting belong to the HTTP task (T2); this module exposes no
-Express code.
+PostgreSQL persistence and migration 2 are implemented and tested. The HTTP adapter lives in
+`apps/api/src/http` (routes `POST /api/v1/auth/login`, `/refresh`, `/logout`,
+`GET /api/v1/auth/me` and `POST /api/v1/users`), with JWT middleware, the refresh cookie and
+the in-memory login limiter wired by the process composition root.
 
 ## Quick path
 
@@ -19,22 +20,23 @@ Express code.
 
    ```bash
    env -u DATABASE_URL npm test                        # unit suite; integration skips
-   DATABASE_URL=postgres://erp_logistic:change-me-local-only@localhost:5432/erp_logistic \
+   DATABASE_URL=postgres://<user>:<password>@localhost:5432/erp_logistic \
      npm test                                          # unit + PostgreSQL integration
    ```
 
 ## Responsibility
 
-| In scope | Out of scope (T2 and later) |
+| In scope | Out of scope (later tasks) |
 |---|---|
-| `Organization` and `User` entities, roles and statuses | Express routes, JWT middleware, `requireRole` guard |
-| Password policy and Argon2id hashing | Login rate limiting implementation and shared store |
-| ADMIN-only user provisioning | Password reset, invitations by email, user disable/enable use cases |
-| Login, refresh rotation with reuse detection, idempotent logout | Refresh cookie flags and set/clear wiring |
-| HS256 access tokens with an explicit claim set | Key rotation, asymmetric keys, JWKS |
-| Refresh-token family model and server-side hash storage | Scheduled cleanup of expired rows |
-| TypeORM entities and migration 2 (organizations, users, refresh_tokens) | Demo seed and documented demo credentials (T4) |
-| Organization backfill for existing `delivery_orders` rows | Corporate-client role (explicitly out of the MVP) |
+| `Organization` and `User` entities, roles and statuses | Password reset, invitations by email, user disable/enable use cases |
+| Password policy and Argon2id hashing | Key rotation, asymmetric keys, JWKS |
+| ADMIN-only user provisioning (use case + `POST /api/v1/users`) | Scheduled cleanup of expired rows |
+| Login, refresh rotation with reuse detection, idempotent logout | Demo seed and documented demo credentials (T4) |
+| HS256 access tokens with an explicit claim set | Corporate-client role (explicitly out of the MVP) |
+| Refresh-token family model and server-side hash storage | Shared (Redis) rate-limit storage |
+| JWT middleware, `requireRole`, refresh cookie and login limiter | CSRF token issuance (not needed with `SameSite=Strict` in the MVP) |
+| TypeORM entities and migration 2 (organizations, users, refresh_tokens) | |
+| Organization backfill for existing `delivery_orders` rows | |
 
 ## Boundaries and dependencies
 
@@ -97,10 +99,11 @@ identity-and-access/
 └── docs/
 ```
 
-## Next step
+## HTTP adapter
 
-T2 mounts the use cases behind `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`,
-`POST /api/v1/auth/logout` and `GET /api/v1/auth/me`, stores the refresh token in the
-HttpOnly/Secure/SameSite=Strict cookie and replaces the temporary `x-organization-id`
-header. The HTTP contract will live in `docs/api/openapi.yaml` and this module's
-`api-contracts.md` when that task lands.
+`apps/api/src/http` mounts the use cases behind `POST /api/v1/auth/login`,
+`POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` and
+`POST /api/v1/users`. The refresh token travels only in an
+`HttpOnly`/`SameSite=Strict`/`Path=/api/v1/auth` cookie (`Secure` from `COOKIE_SECURE`);
+login is rate-limited by IP + email. Verified JWT claims replaced the temporary
+`x-organization-id` header, and the contract is published in `docs/api/openapi.yaml`.
