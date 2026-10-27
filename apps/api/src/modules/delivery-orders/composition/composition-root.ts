@@ -1,3 +1,5 @@
+import type { DataSource } from 'typeorm';
+
 import { SystemClock, type Clock } from '../../../shared/clock.js';
 import { generateUuidV4 } from '../../../shared/ids.js';
 import type { DeliveryOrder } from '../domain/entities/DeliveryOrder.js';
@@ -81,10 +83,10 @@ export interface DeliveryOrdersModule {
 /**
  * Composition root for the `delivery-orders` module.
  *
- * The pilot wires in-memory adapters so the module is runnable and testable
- * without a database. The process-wide composition root (`apps/api/src/main.ts`)
- * will replace them with TypeORM and messaging adapters in a later phase; use
- * cases do not change.
+ * The default wiring uses in-memory adapters so the module is runnable and
+ * testable without a database. The HTTP process composes the same use cases with
+ * PostgreSQL through {@link createDeliveryOrdersModuleFromDataSource}; use cases
+ * do not change.
  */
 export function createDeliveryOrdersModule(
   options: DeliveryOrdersModuleOptions = {},
@@ -105,4 +107,26 @@ export function createDeliveryOrdersModule(
     repository,
     eventPublisher,
   };
+}
+
+/**
+ * Composes the module with the PostgreSQL adapter for one initialized (or soon
+ * to be initialized) data source.
+ *
+ * The adapter is imported dynamically so importing this file from unit tests
+ * does not load TypeORM entities and decorators. Callers own the data source
+ * lifecycle; this factory only wires the repository port.
+ */
+export async function createDeliveryOrdersModuleFromDataSource(
+  dataSource: DataSource,
+  options: Omit<DeliveryOrdersModuleOptions, 'repository'> = {},
+): Promise<DeliveryOrdersModule> {
+  const { DeliveryOrderTypeOrmRepository } = await import(
+    '../infrastructure/persistence/DeliveryOrderTypeOrmRepository.js'
+  );
+
+  return createDeliveryOrdersModule({
+    ...options,
+    repository: new DeliveryOrderTypeOrmRepository(dataSource),
+  });
 }

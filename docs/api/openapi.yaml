@@ -1,0 +1,628 @@
+openapi: 3.1.0
+info:
+  title: ERP Logistic API
+  version: 0.1.0
+  summary: Last-mile delivery ERP for Lima Metropolitana and Callao
+  description: |
+    Fase 0 HTTP contract for the pilot `delivery-orders` module.
+
+    **Authentication is Fase 1.** No endpoint verifies a JWT yet. The `bearerAuth`
+    scheme below documents the intended contract (ADR-003) but is not enforced.
+
+    **Tenant context is temporary.** Every `/api/v1/delivery-orders` request must
+    send the `x-organization-id` header. This dev-only middleware is replaced by
+    verified JWT claims in Fase 1 and is not an authorization mechanism: any
+    caller can claim any organization today. The organization is never read from
+    the request body, path or query.
+
+    **Timestamps.** `createdAt` and `updatedAt` are ISO-8601 instants (UTC `Z` on
+    the wire, `timestamptz` in PostgreSQL). The ratified convention is
+    America/Lima: clients and logs render the same instant at `-05:00`. Lima has
+    no daylight saving time.
+
+    **Correlation.** Every response carries `x-request-id`. A safe incoming value
+    is honored; otherwise the API generates a UUIDv4. The same value appears as
+    `correlationId` in error bodies.
+
+    **Errors.** Non-2xx API responses use one envelope:
+    `{ "error": { "code", "message", "details?", "correlationId" } }`. Health
+    readiness (`/readyz`) is the documented exception: it returns a status
+    document because it reports a dependency state, not a client error.
+servers:
+  - url: http://localhost:3000
+    description: Local development (Docker Compose or `npx tsx src/main.ts`)
+tags:
+  - name: delivery-orders
+    description: Create and read delivery orders inside one organization
+  - name: health
+    description: Liveness and readiness probes
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getLiveness
+      summary: Liveness probe
+      description: |
+        Returns 200 while the process can serve HTTP. The container healthcheck
+        uses this endpoint. It never depends on the database.
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LivenessStatus'
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadiness
+      summary: Readiness probe
+      description: |
+        Runs the injected readiness probe (a `SELECT 1` against PostgreSQL) and
+        reports 503 while the dependency is unavailable. The API starts before the
+        database is reachable and retries lazily, so a 503 can recover without a
+        restart. Probe error details stay in the logs.
+      responses:
+        '200':
+          description: Required dependencies are available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+              examples:
+                ready:
+                  summary: Database reachable
+                  value:
+                    status: ready
+                    checks:
+                      database: up
+        '503':
+          description: A required dependency is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessStatus'
+              examples:
+                notReady:
+                  summary: Database unreachable
+                  value:
+                    status: not_ready
+                    checks:
+                      database: down
+  /api/v1/delivery-orders:
+    post:
+      tags: [delivery-orders]
+      operationId: createDeliveryOrder
+      summary: Create a delivery order
+      description: |
+        Creates one order in the caller's organization.
+
+        `organizationId` is not part of the request body: it comes from the
+        request context and a body field with that name is rejected as an unknown
+        property. `publicCode` is normalized to uppercase and must be unique per
+        organization (409 on duplicates).
+
+        Latitude and longitude are optional individually but must be provided
+        together. `weightKg` is optional per package.
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeliveryOrderRequest'
+            examples:
+              twoPackages:
+                summary: Order with two packages and coordinates
+                value:
+                  publicCode: ORD-2026-0001
+                  recipient:
+                    name: Ana Torres
+                    phone: '+51 987 654 321'
+                  deliveryAddress:
+                    addressLine: Av. Javier Prado Este 1234
+                    district: San Borja
+                    latitude: -12.0975
+                    longitude: -77.0023
+                  packages:
+                    - code: PKG-001
+                      description: Sealed box
+                      weightKg: 2.5
+                    - code: PKG-002
+                      description: Document envelope
+      responses:
+        '201':
+          description: Order created.
+          headers:
+            Location:
+              description: Relative URL of the created order.
+              schema:
+                type: string
+              example: /api/v1/delivery-orders/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryOrderResponse'
+              examples:
+                created:
+                  summary: Created order
+                  value:
+                    data:
+                      id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+                      organizationId: 11111111-1111-4111-8111-111111111111
+                      publicCode: ORD-2026-0001
+                      status: created
+                      recipient:
+                        name: Ana Torres
+                        phone: '+51 987 654 321'
+                      deliveryAddress:
+                        addressLine: Av. Javier Prado Este 1234
+                        district: San Borja
+                        latitude: -12.0975
+                        longitude: -77.0023
+                      packages:
+                        - code: PKG-001
+                          description: Sealed box
+                          weightKg: 2.5
+                        - code: PKG-002
+                          description: Document envelope
+                          weightKg: null
+                      createdAt: '2026-10-26T20:00:00.000Z'
+                      updatedAt: '2026-10-26T20:00:00.000Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [delivery-orders]
+      operationId: getDeliveryOrderByPublicCode
+      summary: Read a delivery order by public code
+      description: |
+        Looks up one order by its readable public code inside the caller's
+        organization and returns the same resource shape as the other read
+        endpoint. Unknown codes and codes owned by another organization are both
+        404 (enumeration safety).
+
+        Other list filters and pagination are future work; a request without
+        `publicCode` is rejected with 400.
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/RequestId'
+        - name: publicCode
+          in: query
+          required: true
+          description: Readable order code, case-insensitive (normalized to uppercase).
+          schema:
+            type: string
+            minLength: 3
+            maxLength: 32
+            pattern: '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$'
+          example: ORD-2026-0001
+      responses:
+        '200':
+          description: Order found in the caller's organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryOrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-orders/{orderId}:
+    get:
+      tags: [delivery-orders]
+      operationId: getDeliveryOrder
+      summary: Read a delivery order by internal id
+      description: |
+        Returns one order owned by the caller's organization. A cross-organization
+        read is indistinguishable from an unknown id: both return 404 with code
+        `DELIVERY_ORDER_NOT_FOUND` (DO-010).
+      parameters:
+        - $ref: '#/components/parameters/OrganizationId'
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          description: Internal order UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Order found in the caller's organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryOrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access JWT (15 minutes) plus a rotating refresh cookie. **Not enforced in
+        Fase 0**; declared so Fase 1 can add verification without changing paths.
+  parameters:
+    OrganizationId:
+      name: x-organization-id
+      in: header
+      required: true
+      description: |
+        **Temporary Fase 0 tenant context.** Replaced by verified JWT claims in
+        Fase 1. Missing or malformed values return 401. Not an authorization
+        mechanism.
+      schema:
+        type: string
+        format: uuid
+      example: 11111111-1111-4111-8111-111111111111
+    RequestId:
+      name: x-request-id
+      in: header
+      required: false
+      description: |
+        Optional correlation id. A value matching `^[A-Za-z0-9._:-]{1,128}$` is
+        honored; otherwise the API generates a UUIDv4. The resolved value is
+        echoed in the response header and in error bodies.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]+$'
+      example: dispatcher-request-42
+  headers:
+    XRequestId:
+      description: Correlation id for this request and its logs.
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: |
+        Invalid input: Zod validation issues (`DELIVERY_ORDER_INVALID_INPUT` with
+        `details.issues`), a malformed UUID, or malformed JSON (`INVALID_JSON`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            validation:
+              summary: Field-level validation failure
+              value:
+                error:
+                  code: DELIVERY_ORDER_INVALID_INPUT
+                  message: Create delivery order request body is invalid
+                  details:
+                    issues:
+                      - path: recipient.phone
+                        message: phone may contain digits, spaces, parentheses, hyphens and an optional leading +
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+            invalidJson:
+              summary: Malformed JSON body
+              value:
+                error:
+                  code: INVALID_JSON
+                  message: Request body is not valid JSON
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    Unauthorized:
+      description: |
+        Missing or malformed tenant context: `ORGANIZATION_REQUIRED` or
+        `ORGANIZATION_INVALID`. Fase 1 adds expired/invalid JWT variants.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            missingHeader:
+              summary: Tenant header absent
+              value:
+                error:
+                  code: ORGANIZATION_REQUIRED
+                  message: The x-organization-id header is required
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    NotFound:
+      description: |
+        The order does not exist, or it belongs to another organization. Both
+        cases return the same body and code (`DELIVERY_ORDER_NOT_FOUND`) so a
+        caller cannot confirm existence across tenants.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unknownOrder:
+              summary: Unknown order id or public code
+              value:
+                error:
+                  code: DELIVERY_ORDER_NOT_FOUND
+                  message: Delivery order 99999999-9999-4999-8999-999999999999 was not found
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    Conflict:
+      description: |
+        A business invariant was violated, for example a duplicate `publicCode`
+        inside one organization (`DELIVERY_ORDER_INVARIANT_VIOLATION`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            duplicatePublicCode:
+              summary: Public code already used
+              value:
+                error:
+                  code: DELIVERY_ORDER_INVARIANT_VIOLATION
+                  message: Public code ORD-2026-0001 is already used in organization 11111111-1111-4111-8111-111111111111
+                  details:
+                    field: publicCode
+                    publicCode: ORD-2026-0001
+                    organizationId: 11111111-1111-4111-8111-111111111111
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    InternalServerError:
+      description: |
+        Unexpected failure. The response is generic (`INTERNAL_ERROR`); details are
+        logged with the correlation id and never returned.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unexpected:
+              summary: Unhandled failure
+              value:
+                error:
+                  code: INTERNAL_ERROR
+                  message: An unexpected error occurred while processing the request
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+  schemas:
+    DeliveryOrderStatus:
+      type: string
+      description: |
+        Canonical order statuses (DO-001). The pilot only creates `created` orders;
+        transitions arrive with later modules.
+      enum: [created, planned, assigned, in_transit, delivered, returned, cancelled]
+    Recipient:
+      type: object
+      additionalProperties: false
+      required: [name, phone]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          example: Ana Torres
+        phone:
+          type: string
+          minLength: 6
+          maxLength: 20
+          pattern: '^\+?[0-9][0-9 ()-]*$'
+          description: Digits, spaces, parentheses, hyphens and an optional leading `+`.
+          example: '+51 987 654 321'
+    DeliveryAddress:
+      type: object
+      additionalProperties: false
+      required: [addressLine, district]
+      properties:
+        addressLine:
+          type: string
+          minLength: 5
+          maxLength: 200
+          example: Av. Javier Prado Este 1234
+        district:
+          type: string
+          minLength: 2
+          maxLength: 80
+          example: San Borja
+        latitude:
+          type: [number, 'null']
+          minimum: -90
+          maximum: 90
+          example: -12.0975
+        longitude:
+          type: [number, 'null']
+          minimum: -180
+          maximum: 180
+          example: -77.0023
+      dependentRequired:
+        latitude: [longitude]
+        longitude: [latitude]
+    Package:
+      type: object
+      additionalProperties: false
+      required: [code, description, weightKg]
+      description: Response shape; `weightKg` is `null` when it was not supplied.
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '^[A-Z0-9][A-Z0-9_-]{0,39}$'
+          example: PKG-001
+        description:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Sealed box
+        weightKg:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+          maximum: 1000
+          example: 2.5
+    CreatePackage:
+      type: object
+      additionalProperties: false
+      required: [code, description]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 40
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$'
+          description: Letters, digits, hyphens and underscores; normalized to uppercase.
+          example: PKG-001
+        description:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Sealed box
+        weightKg:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1000
+          example: 2.5
+    DeliveryOrder:
+      type: object
+      required:
+        - id
+        - organizationId
+        - publicCode
+        - status
+        - recipient
+        - deliveryAddress
+        - packages
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        publicCode:
+          type: string
+          example: ORD-2026-0001
+        status:
+          $ref: '#/components/schemas/DeliveryOrderStatus'
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        deliveryAddress:
+          allOf:
+            - $ref: '#/components/schemas/DeliveryAddress'
+          description: Response shape; absent coordinates are `null`.
+        packages:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/Package'
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO-8601 instant (UTC `Z`). Render at America/Lima (`-05:00`).
+          example: '2026-10-26T20:00:00.000Z'
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO-8601 instant (UTC `Z`). Render at America/Lima (`-05:00`).
+          example: '2026-10-26T20:00:00.000Z'
+    CreateDeliveryOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [publicCode, recipient, deliveryAddress, packages]
+      properties:
+        publicCode:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$'
+          description: Normalized to uppercase and unique per organization.
+          example: ORD-2026-0001
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        deliveryAddress:
+          $ref: '#/components/schemas/DeliveryAddress'
+        packages:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CreatePackage'
+    DeliveryOrderResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/DeliveryOrder'
+    ValidationIssue:
+      type: object
+      required: [path, message]
+      properties:
+        path:
+          type: string
+          description: Dot-separated field path; empty for a body-level issue.
+          example: recipient.phone
+        message:
+          type: string
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, correlationId]
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error code.
+              example: DELIVERY_ORDER_INVALID_INPUT
+            message:
+              type: string
+              description: Human-readable message; never contains raw input or internals.
+            details:
+              type: object
+              additionalProperties: true
+              description: |
+                Optional structured context. Validation failures carry
+                `issues: ValidationIssue[]`; conflicts may carry the offending
+                field. Never contains request bodies or personal data.
+            correlationId:
+              type: string
+              format: uuid
+              description: Matches the `x-request-id` response header.
+    LivenessStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    ReadinessStatus:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: object
+          required: [database]
+          properties:
+            database:
+              type: string
+              enum: [up, down]

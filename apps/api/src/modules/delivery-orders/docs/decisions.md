@@ -4,13 +4,14 @@
 |---|---|---|
 | DO-001 | Canonical order statuses exclude `failed`; failure lives on the attempt | Accepted |
 | DO-002 | Caller supplies `publicCode`; server-side sequences deferred | Accepted, revisit with persistence |
-| DO-003 | Cross-organization read throws a distinct forbidden error | Accepted, HTTP mapping to revisit |
+| DO-003 | Cross-organization read throws a distinct forbidden error | Accepted; HTTP maps it to 404 (DO-010) |
 | DO-004 | `Package` is a value object of the order aggregate | Accepted |
 | DO-005 | Zod validates only at the application boundary | Accepted |
 | DO-006 | UUIDv4 for internal ids; UUIDv7 remains pending | Accepted, pending plan §11.9 |
 | DO-007 | Events are published in-process through a port; no outbox yet | Accepted for pilot |
-| DO-008 | The composition root wires in-memory adapters by default | Accepted for pilot |
+| DO-008 | The composition root wires in-memory adapters by default | Accepted for tests/demo |
 | DO-009 | `Clock` returns ISO-8601 instants; Lima presentation is an infrastructure concern | Accepted |
+| DO-010 | HTTP maps cross-organization reads to 404 with the not-found envelope | Accepted |
 
 ## DO-001 — Canonical status vocabulary excludes `failed`
 
@@ -55,8 +56,8 @@ found" to avoid confirming that an order exists. The delegated task explicitly r
 forbidden error so the distinction is testable.
 
 **Decision.** `GetDeliveryOrderUseCase` loads by id without a tenant filter and throws
-`DeliveryOrderNotFoundError` or `DeliveryOrderForbiddenError`. The HTTP adapter may later map
-both to `404` for production.
+`DeliveryOrderNotFoundError` or `DeliveryOrderForbiddenError`. The HTTP adapter decides the
+wire behavior; Fase 0 maps both to `404` (DO-010).
 
 **Why.** The application layer keeps enough information to make an explicit authorization
 decision; HTTP can choose the disclosure policy without re-querying.
@@ -119,12 +120,15 @@ event payload omits recipient PII.
 
 **Decision.** `createDeliveryOrdersModule()` wires `InMemoryDeliveryOrderRepository`,
 `CryptoIdGenerator`, `SystemClock` and `InMemoryEventPublisher` unless overrides are passed.
+`createDeliveryOrdersModuleFromDataSource()` swaps in the PostgreSQL adapter for the HTTP
+process; the module and its use cases are identical in both wirings.
 
 **Why.** It keeps the pilot runnable and testable without PostgreSQL or Docker. Tests inject
 a fixed clock and sequential id generator for determinism.
 
 **Risk.** The in-memory repository has no transactions, durability or unique-constraint
-enforcement. It is not a production adapter and must be replaced before the HTTP layer ships.
+enforcement. It is confined to tests and demos; `apps/api/src/main.ts` uses the TypeORM
+adapter.
 
 ## DO-009 — ISO-8601 strings from the Clock
 
@@ -136,6 +140,26 @@ format and stores `createdAt`/`updatedAt` without converting time zones.
 of date libraries; the API/UI will render `-05:00` Lima time, and database `timestamptz`
 handles persistence later.
 
-**Risk.** Until infrastructure enforces the Lima zone on serialization and logs, a careless
-consumer could display UTC. That is a presentation bug, not a data-loss bug, and is covered
-by the integration phase.
+**Risk.** The API keeps UTC instants on the wire and the persistence session plus structured logs
+use America/Lima, so a careless client could still display UTC. That is a presentation bug, not a
+data-loss bug; the OpenAPI document states the rendering convention explicitly.
+
+## DO-010 — Cross-organization reads return 404 over HTTP
+
+**Context.** DO-003 keeps a distinct forbidden error in the application so the distinction
+stays testable. Fase 0 had to choose what the wire exposes; the parent decision is
+enumeration safety.
+
+**Decision.** `DeliveryOrderForbiddenError` maps to `404` with code
+`DELIVERY_ORDER_NOT_FOUND` and the same message shape as an unknown id
+(`Delivery order <id> was not found`). The real `DELIVERY_ORDER_FORBIDDEN` error and the
+organization ids are logged at warn level with the correlation id. No delivery-order
+endpoint returns `403` for a cross-organization read.
+
+**Why.** A `403` confirms that the order exists in another tenant, which enables enumeration.
+The application keeps the distinction for audits and a future authorization policy; HTTP
+does not disclose it.
+
+**Consequences / risk.** Operators diagnose tenant mismatches from logs, not responses. Every
+new delivery-order read path must reuse the same mapping; the HTTP tests assert that the
+cross-organization and unknown-id responses are indistinguishable.
