@@ -1,7 +1,7 @@
+import type { IdentityModule } from '../../composition/composition-root.js';
 import {
-  buildIdentityModule,
-  type IdentityModule,
-} from '../../composition/composition-root.js';
+  buildInMemoryIdentityModule,
+} from './in-memory-adapters.js';
 import { Organization } from '../../domain/entities/Organization.js';
 import { User, type UserRole } from '../../domain/entities/User.js';
 import {
@@ -13,6 +13,15 @@ import {
 
 /** Lima morning of 2026-10-27 (15:00Z is 10:00 in America/Lima). */
 export const NOW = '2026-10-27T15:00:00.000Z';
+
+/**
+ * Dummy hash matching {@link FakePasswordHasher}'s reversible format.
+ *
+ * The login use case verifies against it on the unknown-email and disabled
+ * paths; tests assert that this verification happens (T1 review finding
+ * R1-001).
+ */
+export const TEST_DUMMY_PASSWORD_HASH = 'hashed:test-dummy-password';
 
 export const ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
 export const OTHER_ORGANIZATION_ID = '11111111-1111-4111-8111-111111111112';
@@ -32,8 +41,9 @@ export interface IdentityTestContext {
 /**
  * Builds the module with in-memory adapters and deterministic doubles.
  *
- * The composition root owns the in-memory repositories, so tests exercise the
- * same wiring the demo uses instead of a parallel test-only implementation.
+ * It goes through the explicitly named in-memory factory: the production
+ * composition requires every persistence adapter, so tests cannot accidentally
+ * rely on a hidden process-local fallback.
  */
 export function buildTestModule(): IdentityTestContext {
   const clock = new FixedClock(NOW);
@@ -41,9 +51,10 @@ export function buildTestModule(): IdentityTestContext {
   const tokens = new FakeTokenService();
   const ids = new SequentialIdGenerator();
 
-  const module = buildIdentityModule({
+  const module = buildInMemoryIdentityModule({
     passwordHasher: hasher,
     tokenService: tokens,
+    dummyPasswordHash: TEST_DUMMY_PASSWORD_HASH,
     clock,
     idGenerator: ids,
   });

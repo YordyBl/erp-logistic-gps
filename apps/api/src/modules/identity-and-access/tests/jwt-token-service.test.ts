@@ -123,6 +123,15 @@ describe('JwtTokenService', () => {
     );
   });
 
+  it('rejects a token that is not valid yet (nbf in the future)', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await foreignToken({ nbf: now + 600, exp: now + 1200 });
+
+    await expect(
+      buildService({ clockToleranceSeconds: 0 }).verifyAccess(token),
+    ).rejects.toBeInstanceOf(InvalidTokenError);
+  });
+
   it('rejects a malformed token as a typed error', async () => {
     await expect(buildService().verifyAccess('not-a-jwt')).rejects.toBeInstanceOf(
       InvalidTokenError,

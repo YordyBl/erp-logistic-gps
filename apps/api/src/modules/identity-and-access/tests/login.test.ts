@@ -5,6 +5,7 @@ import {
   DISPATCHER_ID,
   NOW,
   ORGANIZATION_ID,
+  TEST_DUMMY_PASSWORD_HASH,
   buildTestModule,
   seedOrganization,
   seedUser,
@@ -124,5 +125,38 @@ describe('Login', () => {
         password: PASSWORD,
       }),
     ).rejects.toBeInstanceOf(InvalidCredentialsError);
+  });
+
+  it('pays one password verification on the unknown-email and disabled paths', async () => {
+    const context = buildTestModule();
+    await seedOrganization(context);
+    await seedUser(context, {
+      email: 'admin@lima.test',
+      password: PASSWORD,
+      status: 'disabled',
+    });
+
+    await expect(
+      context.module.login.execute({
+        organizationId: ORGANIZATION_ID,
+        email: 'admin@lima.test',
+        password: PASSWORD,
+      }),
+    ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+    await expect(
+      context.module.login.execute({
+        organizationId: ORGANIZATION_ID,
+        email: 'nobody@lima.test',
+        password: PASSWORD,
+      }),
+    ).rejects.toBeInstanceOf(InvalidCredentialsError);
+
+    // Both enumeration-sensitive paths verify against the dummy hash, so the
+    // account lookup cannot be distinguished by timing (R1-001).
+    expect(context.hasher.verifications).toHaveLength(2);
+    expect(
+      context.hasher.verifications.map((verification) => verification.passwordHash),
+    ).toEqual([TEST_DUMMY_PASSWORD_HASH, TEST_DUMMY_PASSWORD_HASH]);
   });
 });

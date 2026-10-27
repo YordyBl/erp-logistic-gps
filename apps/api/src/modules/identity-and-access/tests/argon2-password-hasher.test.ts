@@ -28,4 +28,18 @@ describe('Argon2PasswordHasher', () => {
     await expect(hasher.verify(hash, 'another-password-1')).resolves.toBe(false);
     await expect(hasher.verify('not-a-hash', password)).resolves.toBe(false);
   });
+
+  it('round-trips unicode and empty passwords without normalization', async () => {
+    const unicodePassword = 'contraseña-ñ-2026';
+    const unicodeHash = await hasher.hash(unicodePassword);
+
+    await expect(hasher.verify(unicodeHash, unicodePassword)).resolves.toBe(true);
+    await expect(hasher.verify(unicodeHash, 'contrasena-n-2026')).resolves.toBe(false);
+
+    // Empty is not a policy-valid password, but the hasher must still be a
+    // total function: a corrupted or hand-written row can reach verify.
+    const emptyHash = await hasher.hash('');
+    await expect(hasher.verify(emptyHash, '')).resolves.toBe(true);
+    await expect(hasher.verify(emptyHash, 'x')).resolves.toBe(false);
+  });
 });
