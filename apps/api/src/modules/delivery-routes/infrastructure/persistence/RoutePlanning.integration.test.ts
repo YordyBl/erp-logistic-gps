@@ -179,4 +179,43 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
       'SELECT count(*)::int AS count FROM delivery_stop_orders WHERE order_id = $1 AND active = true', [id]);
     expect(links[0]?.count).toBe(1);
   });
+
+  it('reassigns resources without touching orders or history and rejects busy resources', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const alternateDriverId = randomUUID();
+    const alternateVehicleId = randomUUID();
+    await source.query(`INSERT INTO drivers
+      (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+      VALUES ($1,$2,'Alternate Driver',$3,'+51 911 222 333',$4,'active',$5,$5)`,
+    [alternateDriverId, organizationId, `DNI-${alternateDriverId.slice(0, 8).toUpperCase()}`,
+      `L-${alternateDriverId.slice(0, 8).toUpperCase()}`, CREATED_AT]);
+    await source.query(`INSERT INTO vehicles
+      (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
+      VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
+    [alternateVehicleId, organizationId,
+      `R${alternateVehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
+    const firstOrderId = await makeOrder('REASSIGN-DB-1');
+    const firstRoute = plannedRoute(organizationId, driverId, vehicleId, [firstOrderId]);
+    const actor = randomUUID();
+    await store.plan(firstRoute, actor);
+    const historyBefore = await orders.findStatusHistory(organizationId, firstOrderId);
+    const reassigned = await store.reassign(organizationId, firstRoute.id,
+      { driverId: alternateDriverId, vehicleId: alternateVehicleId });
+    expect(reassigned.driverId).toBe(alternateDriverId);
+    expect(reassigned.vehicleId).toBe(alternateVehicleId);
+    await expect(store.findById(organizationId, firstRoute.id))
+      .resolves.toMatchObject({ driverId: alternateDriverId, vehicleId: alternateVehicleId });
+    expect((await orders.findById(firstOrderId))?.status).toBe('assigned');
+    expect(await orders.findStatusHistory(organizationId, firstOrderId)).toEqual(historyBefore);
+
+    const secondOrderId = await makeOrder('REASSIGN-DB-2');
+    const secondRoute = plannedRoute(organizationId, driverId, vehicleId, [secondOrderId]);
+    await store.plan(secondRoute, actor);
+    await expect(store.reassign(organizationId, secondRoute.id, { driverId: alternateDriverId }))
+      .rejects.toThrow();
+    await expect(store.findById(organizationId, secondRoute.id))
+      .resolves.toMatchObject({ driverId, vehicleId });
+    await expect(store.reassign(randomUUID(), secondRoute.id, { driverId }))
+      .rejects.toThrow();
+  });
 });

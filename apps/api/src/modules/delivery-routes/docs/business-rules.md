@@ -12,7 +12,11 @@
 4. Creating a route assigns its orders. Each transition
    `created → planned → assigned` has its own actor-bound history row in the
    same transaction. No delivery attempt or confirmation occurs here.
-5. Rejected commands leave route, stops, links, orders and history unchanged.
+5. A planned route may be reassigned to another active driver or vehicle while
+   it remains `planned`. Reassignment never touches stops, links, order
+   statuses or history, and a driver/vehicle cannot be active on two routes at
+   once.
+6. Rejected commands leave route, stops, links, orders and history unchanged.
    Foreign and unknown orders have the same 404 response; duplicate assignments
    and unavailable resources are conflicts.
 

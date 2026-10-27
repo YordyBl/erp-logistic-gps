@@ -25,6 +25,12 @@ neither. The organization and actor are taken from the verified token.
 route belonging to its organization. Foreign and unknown route IDs return
 the same 404.
 
+`PATCH /api/v1/delivery-routes/{routeId}` requires ADMIN or DISPATCHER and a
+strict body carrying `driverId`, `vehicleId` or both. Reassigning resources
+never changes stops, links, order statuses or audit history. The new resource
+must be active, in the caller's organization and not already assigned to
+another active route.
+
 | Status | Meaning |
 |---|---|
 | 400 | Invalid path/body, duplicate order IDs or stop sequences |
@@ -33,5 +39,8 @@ the same 404.
 | 404 | Unknown or foreign driver, vehicle, order or route |
 | 409 | Duplicate active assignment, used route code, inactive resource or non-created order |
 
-No route-list, editing, reassignment, redespacho, execution or tracking endpoint
-is claimed by this planning slice. OpenAPI remains the machine-readable source.
+For `PATCH`, 409 also covers a driver or vehicle already active on another
+route; reassignment is allowed only while the route is `planned`.
+
+No route-list, editing of stops, redespacho, execution or tracking endpoint
+is claimed by the planning slice. OpenAPI remains the machine-readable source.

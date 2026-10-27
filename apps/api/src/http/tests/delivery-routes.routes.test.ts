@@ -26,8 +26,15 @@ async function seededRouteApp() {
       phone: '+51 911 222 333', licenseNumber: 'Q-987654' });
   const vehicle = await request(testApp.app).post('/api/v1/vehicles').set(bearer(token))
     .send({ plate: 'ABC-123', type: 'van', capacityKg: 800 });
+  const secondDriver = await request(testApp.app).post('/api/v1/drivers').set(bearer(token))
+    .send({ fullName: 'Rosa Medina', documentNumber: 'DNI-87654321',
+      phone: '+51 911 222 334', licenseNumber: 'Q-876543' });
+  const secondVehicle = await request(testApp.app).post('/api/v1/vehicles').set(bearer(token))
+    .send({ plate: 'DEF-456', type: 'van', capacityKg: 700 });
   expect(driver.status).toBe(201);
   expect(vehicle.status).toBe(201);
+  expect(secondDriver.status).toBe(201);
+  expect(secondVehicle.status).toBe(201);
   const createOrder = async (publicCode: string) => {
     const result = await request(testApp.app).post(ORDERS).set(bearer(token))
       .send(validOrderBody({ publicCode }));
@@ -35,7 +42,10 @@ async function seededRouteApp() {
     return result.body.data.id as string;
   };
   return { testApp, token, otherToken, driverId: driver.body.data.id as string,
-    vehicleId: vehicle.body.data.id as string, createOrder };
+    vehicleId: vehicle.body.data.id as string,
+    secondDriverId: secondDriver.body.data.id as string,
+    secondVehicleId: secondVehicle.body.data.id as string,
+    createOrder };
 }
 
 describe('POST /api/v1/delivery-routes', () => {
@@ -161,5 +171,101 @@ describe('POST /api/v1/delivery-routes', () => {
       .toEqual(before.body);
     expect((await request(testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(token))).body)
       .toEqual(beforeHistory.body);
+  });
+});
+
+describe('PATCH /api/v1/delivery-routes/:routeId', () => {
+  async function planRoute(
+    ctx: Awaited<ReturnType<typeof seededRouteApp>>,
+    publicCode: string, orderIds: string[],
+    resources: { driverId: string; vehicleId: string } = {
+      driverId: ctx.driverId, vehicleId: ctx.vehicleId },
+  ) {
+    const result = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
+      publicCode, plannedDate: '2026-10-27', ...resources,
+      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds }],
+    });
+    expect(result.status).toBe(201);
+    return result.body.data as { id: string; driverId: string; vehicleId: string; stops: unknown };
+  }
+
+  it('reassigns driver and vehicle without changing assigned orders or their history', async () => {
+    const ctx = await seededRouteApp();
+    const first = await ctx.createOrder('REASSIGN-001');
+    const second = await ctx.createOrder('REASSIGN-002');
+    const route = await planRoute(ctx, 'REASSIGN-ROUTE', [first, second]);
+    const orderSnapshots = await Promise.all([first, second].map(async (id) => ({
+      order: (await request(ctx.testApp.app).get(`${ORDERS}/${id}`).set(bearer(ctx.token))).body,
+      history: (await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token))).body,
+    })));
+    const changed = await request(ctx.testApp.app).patch(`${ROUTES}/${route.id}`)
+      .set(bearer(ctx.token)).send({ driverId: ctx.secondDriverId, vehicleId: ctx.secondVehicleId });
+    expect(changed.status).toBe(200);
+    expect(changed.body.data).toMatchObject({ id: route.id, driverId: ctx.secondDriverId,
+      vehicleId: ctx.secondVehicleId, status: 'planned', stops: route.stops });
+    const read = await request(ctx.testApp.app).get(`${ROUTES}/${route.id}`).set(bearer(ctx.token));
+    expect(read.body).toEqual(changed.body);
+    for (const [index, id] of [first, second].entries()) {
+      const order = await request(ctx.testApp.app).get(`${ORDERS}/${id}`).set(bearer(ctx.token));
+      const history = await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token));
+      expect(order.body).toEqual(orderSnapshots[index]?.order);
+      expect(history.body).toEqual(orderSnapshots[index]?.history);
+      expect(order.body.data.status).toBe('assigned');
+    }
+  });
+
+  it('reassigns only the supplied resource and keeps the other one', async () => {
+    const ctx = await seededRouteApp();
+    const id = await ctx.createOrder('REASSIGN-PARTIAL');
+    const route = await planRoute(ctx, 'REASSIGN-PARTIAL', [id]);
+    const changed = await request(ctx.testApp.app).patch(`${ROUTES}/${route.id}`)
+      .set(bearer(ctx.token)).send({ driverId: ctx.secondDriverId });
+    expect(changed.status).toBe(200);
+    expect(changed.body.data).toMatchObject({ id: route.id, driverId: ctx.secondDriverId,
+      vehicleId: ctx.vehicleId });
+  });
+
+  it('rejects invalid, foreign or busy resources without changing the route', async () => {
+    const ctx = await seededRouteApp();
+    const first = await ctx.createOrder('REASSIGN-GUARD-1');
+    const second = await ctx.createOrder('REASSIGN-GUARD-2');
+    const route = await planRoute(ctx, 'REASSIGN-GUARD-1', [first]);
+    const otherRoute = await planRoute(ctx, 'REASSIGN-GUARD-2', [second], {
+      driverId: ctx.secondDriverId, vehicleId: ctx.secondVehicleId,
+    });
+    const before = await request(ctx.testApp.app).get(`${ROUTES}/${route.id}`).set(bearer(ctx.token));
+    const path = `${ROUTES}/${route.id}`;
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.token)).send({})).status).toBe(400);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.token))
+      .send({ unknown: 'x' })).status).toBe(400);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.otherToken))
+      .send({ driverId: ctx.secondDriverId })).status).toBe(404);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.token))
+      .send({ driverId: ctx.secondDriverId })).status).toBe(409);
+    const foreignDriver = await request(ctx.testApp.app).post('/api/v1/drivers')
+      .set(bearer(ctx.otherToken)).send({ fullName: 'Foreign Driver', documentNumber: 'DNI-11112222',
+        phone: '+51 911 222 333', licenseNumber: 'Q-111222' });
+    expect(foreignDriver.status).toBe(201);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.token))
+      .send({ driverId: foreignDriver.body.data.id as string })).status).toBe(404);
+    const inactive = await request(ctx.testApp.app).post('/api/v1/drivers')
+      .set(bearer(ctx.token)).send({ fullName: 'Inactive Driver', documentNumber: 'DNI-33334444',
+        phone: '+51 911 222 333', licenseNumber: 'Q-333444' });
+    expect(inactive.status).toBe(201);
+    const deactivated = await request(ctx.testApp.app)
+      .patch(`/api/v1/drivers/${inactive.body.data.id as string}`).set(bearer(ctx.token))
+      .send({ status: 'inactive' });
+    expect(deactivated.status).toBe(200);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(ctx.token))
+      .send({ driverId: inactive.body.data.id as string })).status).toBe(409);
+    const driverUser = await ctx.testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const driverToken = await ctx.testApp.signIn(driverUser);
+    expect((await request(ctx.testApp.app).patch(path).set(bearer(driverToken))
+      .send({ driverId: ctx.secondDriverId })).status).toBe(403);
+    expect((await request(ctx.testApp.app).patch(path)
+      .send({ driverId: ctx.secondDriverId })).status).toBe(401);
+    expect((await request(ctx.testApp.app).get(path).set(bearer(ctx.token))).body).toEqual(before.body);
+    expect((await request(ctx.testApp.app).get(`${ROUTES}/${otherRoute.id}`).set(bearer(ctx.token))).body.data.driverId)
+      .toBe(ctx.secondDriverId);
   });
 });

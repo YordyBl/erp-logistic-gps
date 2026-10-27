@@ -372,6 +372,51 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags: [delivery-routes]
+      operationId: reassignDeliveryRoute
+      summary: Replace the driver or vehicle of a planned route (ADMIN or DISPATCHER)
+      description: |
+        Reassigns one or both resources of a route while it is planned.
+        Stops, links, order statuses and their audit history are untouched:
+        orders remain assigned and no new history rows are written. The new
+        driver or vehicle must be active, owned by the caller's organization
+        and free of other active routes.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: routeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReassignDeliveryRouteRequest'
+      responses:
+        '200':
+          description: Route with its updated driver or vehicle.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryRouteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/delivery-orders:
     post:
       tags: [delivery-orders]
@@ -1439,6 +1484,17 @@ components:
                   message: An unexpected error occurred while processing the request
                   correlationId: c0ffee00-0000-4000-8000-000000000000
   schemas:
+    ReassignDeliveryRouteRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
     PlanDeliveryRouteRequest:
       type: object
       additionalProperties: false

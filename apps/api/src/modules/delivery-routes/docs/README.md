@@ -8,10 +8,12 @@ orders from `created` through `planned` to `assigned` with audit history. The
 ## Current scope
 
 - ADMIN and DISPATCHER can plan routes; authenticated roles can read a route
-  within their organization.
+  within their organization. ADMIN and DISPATCHER can reassign the driver and
+  vehicle of a planned route.
 - A stop can contain multiple orders, but an order cannot belong to two active
-  routes. Driver and vehicle active assignments are exclusive.
-- Reassignment, redespacho, route progress, delivery execution and tracking are
+  routes. Driver and vehicle active assignments are exclusive, including after
+  reassignment.
+- Redespacho, route progress, delivery execution and tracking are
   not part of the planning slice. The route lifecycle depends on the later
   dispatch work units; no `returned`-order redespacho policy is assumed.
 

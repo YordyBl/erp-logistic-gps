@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DataSource } from 'typeorm';
+import type { DataSource, EntityManager } from 'typeorm';
 
 import type { PlannedRoute, RoutePlanningStore } from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
@@ -126,17 +126,28 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
   }
 
   async findById(organizationId: string, routeId: string): Promise<PlannedRoute | null> {
-    const route = await this.dataSource.getRepository(DeliveryRouteEntity).findOne({
+    return this.readPlannedRoute(this.dataSource.manager, organizationId, routeId);
+  }
+
+  /**
+   * Reads one planned route through the given manager. Transactional writers
+   * must pass their transaction manager: a separate pooled connection cannot
+   * observe the transaction's uncommitted writes.
+   */
+  private async readPlannedRoute(
+    manager: EntityManager, organizationId: string, routeId: string,
+  ): Promise<PlannedRoute | null> {
+    const route = await manager.findOne(DeliveryRouteEntity, {
       where: { id: routeId, organizationId },
     });
     if (route === null) return null;
     if (route.status !== 'planned') {
       throw new DeliveryRouteConflictError('Persisted route status is not supported by this planner');
     }
-    const stops = await this.dataSource.getRepository(DeliveryStopEntity).find({
+    const stops = await manager.find(DeliveryStopEntity, {
       where: { organizationId, routeId }, order: { sequence: 'ASC' },
     });
-    const links = await this.dataSource.getRepository(DeliveryStopOrderEntity).find({
+    const links = await manager.find(DeliveryStopOrderEntity, {
       where: { organizationId, routeId }, order: { position: 'ASC' },
     });
     return {
@@ -151,6 +162,50 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         orderIds: links.filter((link) => link.stopId === stop.id).map((link) => link.orderId),
       })),
     };
+  }
+
+  async reassign(organizationId: string, routeId: string, changes: {
+    readonly driverId?: string;
+    readonly vehicleId?: string;
+  }): Promise<PlannedRoute> {
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        const route = await manager.findOne(DeliveryRouteEntity, {
+          where: { id: routeId, organizationId }, lock: { mode: 'pessimistic_write' },
+        });
+        if (route === null) throw new DeliveryRouteNotFoundError();
+        if (route.status !== 'planned') {
+          throw new DeliveryRouteConflictError('Only planned routes accept reassignment');
+        }
+        const driverId = changes.driverId ?? route.driverId;
+        const vehicleId = changes.vehicleId ?? route.vehicleId;
+        if (changes.driverId !== undefined && changes.driverId !== route.driverId) {
+          const driver = await manager.findOne(DriverEntity, {
+            where: { id: changes.driverId, organizationId }, lock: { mode: 'pessimistic_read' },
+          });
+          if (driver === null) throw new DeliveryRouteNotFoundError();
+          if (driver.status !== 'active') throw new DeliveryRouteConflictError('Driver must be active');
+        }
+        if (changes.vehicleId !== undefined && changes.vehicleId !== route.vehicleId) {
+          const vehicle = await manager.findOne(VehicleEntity, {
+            where: { id: changes.vehicleId, organizationId }, lock: { mode: 'pessimistic_read' },
+          });
+          if (vehicle === null) throw new DeliveryRouteNotFoundError();
+          if (vehicle.status !== 'active') throw new DeliveryRouteConflictError('Vehicle must be active');
+        }
+        await manager.update(DeliveryRouteEntity, { id: routeId, organizationId }, {
+          driverId, vehicleId,
+        });
+        const updated = await this.readPlannedRoute(manager, organizationId, routeId);
+        if (updated === null) throw new DeliveryRouteNotFoundError();
+        return updated;
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new DeliveryRouteConflictError('Driver or vehicle already has an active assignment');
+      }
+      throw error;
+    }
   }
 }
 

@@ -24,4 +24,9 @@ export interface PlannedRoute {
 export interface RoutePlanningStore {
   plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute>;
   findById(organizationId: string, routeId: string): Promise<PlannedRoute | null>;
+  /** Replace resources without touching stops, orders or their history. */
+  reassign(organizationId: string, routeId: string, changes: {
+    readonly driverId?: string;
+    readonly vehicleId?: string;
+  }): Promise<PlannedRoute>;
 }

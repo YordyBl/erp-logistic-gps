@@ -137,6 +137,7 @@ is a defect.
 | `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
 | `POST` | `/api/v1/delivery-routes` | Plan sequenced stops and assign orders with an active driver and vehicle (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
+| `PATCH` | `/api/v1/delivery-routes/:routeId` | Reassign the driver or vehicle of a planned route without touching orders (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |

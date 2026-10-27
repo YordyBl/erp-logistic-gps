@@ -2,9 +2,10 @@ import { SystemClock, type Clock } from '../../../shared/clock.js';
 import type { GetDriverUseCase } from '../../drivers/application/use-cases/get-driver/GetDriverUseCase.js';
 import type { GetVehicleUseCase } from '../../vehicles/application/use-cases/get-vehicle/GetVehicleUseCase.js';
 import type { InMemoryDeliveryOrderRepository } from '../../delivery-orders/composition/composition-root.js';
-import { DeliveryRouteConflictError } from '../domain/errors/DeliveryRouteError.js';
+import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../domain/errors/DeliveryRouteError.js';
 import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteUseCase.js';
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
+import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
 import type { PlannedRoute, RoutePlanningStore } from '../application/ports/RoutePlanningStore.js';
 
 /** In-memory adapter for tests and demo; production uses the database transaction adapter. */
@@ -33,6 +34,28 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore {
     const route = this.routes.get(routeId);
     return route?.organizationId === organizationId ? route : null;
   }
+
+  async reassign(organizationId: string, routeId: string, changes: {
+    readonly driverId?: string;
+    readonly vehicleId?: string;
+  }): Promise<PlannedRoute> {
+    const route = this.routes.get(routeId);
+    if (route === undefined || route.organizationId !== organizationId) {
+      throw new DeliveryRouteNotFoundError();
+    }
+    const driverId = changes.driverId ?? route.driverId;
+    const vehicleId = changes.vehicleId ?? route.vehicleId;
+    for (const current of this.routes.values()) {
+      if (current.id === routeId) continue;
+      if (current.organizationId === organizationId &&
+          (current.driverId === driverId || current.vehicleId === vehicleId)) {
+        throw new DeliveryRouteConflictError('Driver or vehicle already has an active assignment');
+      }
+    }
+    const updated = { ...route, driverId, vehicleId };
+    this.routes.set(routeId, updated);
+    return updated;
+  }
 }
 
 export function createDeliveryRoutesModule(options: {
@@ -45,6 +68,7 @@ export function createDeliveryRoutesModule(options: {
     planRoute: new PlanRouteUseCase(options.store, options.getDriver,
       options.getVehicle, options.clock ?? new SystemClock()),
     getRoute: new GetRouteUseCase(options.store),
+    reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),
   };
 }
 
