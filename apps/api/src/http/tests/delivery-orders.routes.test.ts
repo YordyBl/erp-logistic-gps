@@ -2,6 +2,8 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
+import type { DeliveryOrderRepository } from '../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
+import { DeliveryOrderInvariantError } from '../../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
 import {
   buildTestApp,
   createFailingRepository,
@@ -156,6 +158,50 @@ describe('POST /api/v1/delivery-orders', () => {
       field: 'publicCode',
       publicCode: 'ORD-2026-0001',
     });
+  });
+
+  it('returns 409 when the adapter reports a duplicate public code during save', async () => {
+    // The pre-check finds nothing, so the create reaches save. This simulates a
+    // concurrent duplicate where the PostgreSQL constraint is the final guard;
+    // the adapter translates 23505 into the same typed invariant error.
+    let saveCalls = 0;
+    const repository: DeliveryOrderRepository = {
+      async save() {
+        saveCalls += 1;
+        throw new DeliveryOrderInvariantError(
+          `Public code ORD-2026-0001 is already used in organization ${ORGANIZATION_ID}`,
+          {
+            field: 'publicCode',
+            publicCode: 'ORD-2026-0001',
+          },
+        );
+      },
+      async findById() {
+        return null;
+      },
+      async findByPublicCode() {
+        return null;
+      },
+    };
+
+    const { app } = buildTestApp({ repository });
+
+    const response = await request(app)
+      .post('/api/v1/delivery-orders')
+      .set(ORGANIZATION_HEADER, ORGANIZATION_ID)
+      .send(validOrderBody());
+
+    expect(saveCalls).toBe(1);
+    expect(response.status).toBe(409);
+    expect(response.body.error).toMatchObject({
+      code: 'DELIVERY_ORDER_INVARIANT_VIOLATION',
+      message: `Public code ORD-2026-0001 is already used in organization ${ORGANIZATION_ID}`,
+      details: {
+        field: 'publicCode',
+        publicCode: 'ORD-2026-0001',
+      },
+    });
+    expect(response.body.error.correlationId).toBe(response.headers['x-request-id']);
   });
 
   it('returns a generic 500 when the repository fails', async () => {

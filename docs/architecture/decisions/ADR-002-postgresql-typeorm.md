@@ -84,17 +84,18 @@ the decision is ratified.
 | Architecture | Modular monolith, hexagonal, vertical slices | Confirmed (see ADR-001) |
 | ORM | TypeORM, Data Mapper | Confirmed |
 | Database | PostgreSQL | Confirmed |
-| Containers | Docker + Docker Compose, multi-stage builds | Planned; not scaffolded yet (deployment milestone) |
+| Containers | Docker + Docker Compose, multi-stage builds | Implemented (dev + demo stacks; see ADR-006) |
 | Spatial data | PostGIS | Recommended, pending |
-| Runtime validation | Zod | Confirmed for application/HTTP boundary validation; OpenAPI tooling pending |
-| Testing | Vitest (wired at the root); Supertest and Testcontainers pending | Vitest confirmed; the rest pending |
-| API | Versioned REST + OpenAPI 3.1 | Recommended, pending |
+| Runtime validation | Zod at the HTTP boundary | Implemented; OpenAPI 3.1 is a hand-written contract (ADR-004) |
+| Testing | Vitest + Supertest, PostgreSQL integration tests; Testcontainers not adopted | Implemented: Compose/CI service container |
+| API | Versioned REST + OpenAPI 3.1 | Implemented at `/api/v1` (ADR-004) |
 | Timezone | America/Lima across database, API, UI, logs and audit | Confirmed |
 
-Vitest is already the repository test runner. HTTP contract tooling (OpenAPI),
-Supertest/Testcontainers integration testing and the spatial stack are decided in their
-own milestones; this ADR does not pre-empt them. Docker Compose remains planned until the
-deployment milestone adds the local stack.
+Vitest and Supertest are the active test stack; HTTP tests run against an in-memory
+composition, and integration tests run against a real PostgreSQL when `DATABASE_URL` is
+available. The HTTP contract is hand-written OpenAPI 3.1 (ADR-004), and Docker Compose is
+implemented for development and demo (ADR-006). Testcontainers and the spatial stack remain
+future decisions; this ADR does not pre-empt them.
 
 ### 7. Data conventions
 
@@ -136,8 +137,8 @@ deployment milestone adds the local stack.
 
 **Follow-ups**
 
-- Ratify PostGIS, runtime validation (Zod), OpenAPI tooling and Testcontainers
-  (architecture plan section 11.8-11.13).
-- Add the migrations job to Docker Compose and CI once the API skeleton exists.
-- Add integration tests against a real PostgreSQL instance for every repository
+- Ratify PostGIS (architecture plan section 11.10) and decide whether to adopt
+  Testcontainers instead of the Compose/CI service-container strategy.
+- Keep the Compose migrations job and the CI integration job in sync with schema changes.
+- Require integration tests against a real PostgreSQL instance for every new repository
   adapter.

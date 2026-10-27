@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: everything that runs without a database. The integration
+  # tests skip themselves when DATABASE_URL is absent, so this job exercises the
+  # unit and HTTP suites only.
+  verify:
+    name: Lint, typecheck and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type-check
+        run: npm run typecheck
+      - name: Unit and HTTP tests
+        run: npm test
+
+  # PostgreSQL-backed adapter tests. A service container is reachable on
+  # 127.0.0.1 through the published port; the data source pins every session to
+  # America/Lima, so the container image default timezone does not matter.
+  integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: erp_logistic
+          POSTGRES_USER: erp_logistic
+          POSTGRES_PASSWORD: ci-local-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp_logistic -d erp_logistic"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://erp_logistic:ci-local-only@127.0.0.1:5432/erp_logistic
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run migrations
+        run: npm run migration:run -w apps/api
+      - name: Tests with PostgreSQL
+        run: npm test
+
+  # Builds every image in the Compose project. The `migrations` service reuses
+  # the API Dockerfile but Compose gives it its own image tag, so building only
+  # `api` would leave a stale migrations image. `docker compose build` builds all
+  # services, including `web`.
+  images:
+    name: Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build Compose images
+        run: docker compose build
