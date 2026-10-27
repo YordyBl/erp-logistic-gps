@@ -1,0 +1,3 @@
+# React client placeholder.
+# The dispatcher console, driver view and public tracking pages arrive in later
+# milestones (Vite + Tailwind + shadcn/ui per the architecture plan).

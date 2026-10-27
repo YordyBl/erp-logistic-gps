@@ -4,3 +4,11 @@ coverage/
 .env
 *.log
 .DS_Store
+
+# Local environment variants (the documented example stays tracked)
+.env.*
+!.env.example
+
+# TypeScript and test caches
+*.tsbuildinfo
+.vitest/
