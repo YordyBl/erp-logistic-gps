@@ -12,3 +12,6 @@ coverage/
 # TypeScript and test caches
 *.tsbuildinfo
 .vitest/
+
+# Gentle AI skill-registry cache (auto-generated)
+.atl/
