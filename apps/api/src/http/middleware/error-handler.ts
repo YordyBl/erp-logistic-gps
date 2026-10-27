@@ -9,6 +9,17 @@ import {
   DeliveryOrderNotFoundError,
   DeliveryOrderValidationError,
 } from '../../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
+import {
+  EmailAlreadyInUseError,
+  ForbiddenRoleError,
+  IdentityValidationError,
+  InvalidCredentialsError,
+  InvalidTokenError,
+  RefreshNotFoundError,
+  RefreshReuseDetectedError,
+  UserNotFoundError,
+  WeakPasswordError,
+} from '../../modules/identity-and-access/domain/errors/IdentityError.js';
 import type { ErrorDetails } from '../../shared/errors/DomainError.js';
 import { HttpError, toErrorBody } from '../errors.js';
 import { getCorrelationId } from '../request-context.js';
@@ -113,6 +124,94 @@ function mapError(error: unknown): MappedError {
       code: error.code,
       message: error.message,
       details: error.details,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (error instanceof IdentityValidationError) {
+    return {
+      statusCode: 400,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (error instanceof WeakPasswordError) {
+    return {
+      statusCode: 400,
+      code: error.code,
+      message: error.message,
+      details: { reasons: [...error.reasons] },
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (error instanceof EmailAlreadyInUseError) {
+    return {
+      statusCode: 409,
+      code: error.code,
+      message: error.message,
+      details: undefined,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (error instanceof InvalidCredentialsError) {
+    return {
+      statusCode: 401,
+      code: error.code,
+      message: error.message,
+      details: undefined,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (
+    error instanceof InvalidTokenError ||
+    error instanceof RefreshNotFoundError ||
+    error instanceof RefreshReuseDetectedError
+  ) {
+    // Reuse is a stolen-credential signal worth a warn line; the response stays
+    // a plain 401 so a client cannot distinguish it from an expired token.
+    const isReuse = error instanceof RefreshReuseDetectedError;
+
+    return {
+      statusCode: 401,
+      code: error.code,
+      message: error.message,
+      details: undefined,
+      logLevel: isReuse ? 'warn' : undefined,
+      logMessage: isReuse ? 'refresh token reuse detected; session family revoked' : undefined,
+    };
+  }
+
+  if (error instanceof UserNotFoundError) {
+    return {
+      statusCode: 404,
+      code: error.code,
+      message: error.message,
+      details: undefined,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (error instanceof ForbiddenRoleError) {
+    return {
+      statusCode: 403,
+      code: error.code,
+      message: error.message,
+      details: {
+        requiredRoles: [error.requiredRole],
+        actualRole: error.actualRole,
+      },
       logLevel: undefined,
       logMessage: undefined,
     };

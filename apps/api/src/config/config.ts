@@ -173,8 +173,8 @@ const DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS = 900;
  *
  * `COOKIE_SECURE` defaults to `true`; local development over plain HTTP must opt
  * out explicitly and never ships that value to a deployed environment.
- * Rate-limit values are consumed by the HTTP layer (T2); this milestone only
- * defines and validates the placeholders.
+ * Rate-limit values are enforced by the HTTP login route; the in-memory limiter
+ * is an MVP assumption (S9).
  */
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
   return {

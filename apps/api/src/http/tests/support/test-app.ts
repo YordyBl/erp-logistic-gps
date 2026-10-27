@@ -44,7 +44,7 @@ export const OTHER_ADMIN_EMAIL = 'admin@callao.test';
 export const TEST_PASSWORD = 'correct-horse-1';
 
 /** Random per run: a committed test secret would be a real credential. */
-const TEST_JWT_SECRET = randomBytes(32).toString('hex');
+export const TEST_JWT_SECRET = randomBytes(32).toString('hex');
 export const TEST_JWT_ISSUER = 'erp-logistic-api-test';
 export const TEST_JWT_AUDIENCE = 'erp-logistic-web-test';
 

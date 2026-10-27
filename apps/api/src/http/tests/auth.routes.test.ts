@@ -4,7 +4,7 @@ import { SignJWT } from 'jose';
 import request, { type Response as SupertestResponse } from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from '../../cookies.js';
+import { REFRESH_COOKIE_NAME, REFRESH_COOKIE_PATH } from '../cookies.js';
 import {
   ADMIN_EMAIL,
   ADMIN_ID,
