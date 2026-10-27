@@ -252,6 +252,8 @@ export function createFailingRepository(
     save: fail,
     findById: fail,
     findByPublicCode: fail,
+    cancel: fail,
+    findStatusHistory: fail,
   };
 }
 

@@ -7,6 +7,8 @@ import { DeliveryOrderInvariantError } from '../../modules/delivery-orders/domai
 import {
   ADMIN_EMAIL,
   ADMIN_ID,
+  DRIVER_ID,
+  DRIVER_EMAIL,
   bearer,
   buildTestApp,
   createFailingRepository,
@@ -219,6 +221,12 @@ describe('POST /api/v1/delivery-orders', () => {
       async findByPublicCode() {
         return null;
       },
+      async cancel() {
+        throw new Error('Unexpected cancellation');
+      },
+      async findStatusHistory() {
+        return [];
+      },
     };
 
     const { app, token } = await buildSeededApp({ repository });
@@ -257,6 +265,126 @@ describe('POST /api/v1/delivery-orders', () => {
       'An unexpected error occurred while processing the request',
     );
     expect(JSON.stringify(response.body)).not.toContain('database connection lost');
+  });
+});
+
+describe('POST /api/v1/delivery-orders/:orderId/cancel', () => {
+  it('keeps the order and exposes its tenant-scoped cancellation history', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
+    // Regression probe from independent verification: both existing reads must
+    // still return the same DTO before any new status command runs.
+    const byIdBefore = await request(app)
+      .get(`/api/v1/delivery-orders/${orderId}`).set(bearer(token));
+    const byCodeBefore = await request(app)
+      .get('/api/v1/delivery-orders')
+      .query({ publicCode: 'ord-2026-0001' }).set(bearer(token));
+    expect(byIdBefore.status).toBe(200);
+    expect(byCodeBefore.status).toBe(200);
+    expect(byCodeBefore.body).toEqual(byIdBefore.body);
+
+    const cancelled = await request(app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(token));
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.data).toMatchObject({ id: orderId, status: 'cancelled' });
+    expect(cancelled.body.data.updatedAt).toBe(CREATED_AT);
+
+    const order = await request(app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(token));
+    expect(order.status).toBe(200);
+    expect(order.body.data).toEqual(cancelled.body.data);
+
+    const history = await request(app)
+      .get(`/api/v1/delivery-orders/${orderId}/history`)
+      .set(bearer(token));
+    expect(history.status).toBe(200);
+    expect(history.body.data).toEqual([
+      { fromStatus: 'created', toStatus: 'cancelled', actorUserId: ADMIN_ID, occurredAt: CREATED_AT },
+    ]);
+
+    const foreignHistory = await request(app)
+      .get(`/api/v1/delivery-orders/${orderId}/history`)
+      .set(bearer(otherToken));
+    expect(foreignHistory.status).toBe(404);
+    expect(foreignHistory.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
+  });
+
+  it('rejects a foreign or repeated cancellation without changing order or history', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
+
+    const foreign = await request(app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(otherToken));
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
+
+    const before = await request(app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(token));
+    expect(before.body.data.status).toBe('created');
+    const beforeHistory = await request(app)
+      .get(`/api/v1/delivery-orders/${orderId}/history`)
+      .set(bearer(token));
+    expect(beforeHistory.body.data).toEqual([]);
+
+    const first = await request(app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(token));
+    expect(first.status).toBe(200);
+    const repeated = await request(app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(token));
+    expect(repeated.status).toBe(409);
+    expect(repeated.body.error.code).toBe('DELIVERY_ORDER_INVARIANT_VIOLATION');
+    const after = await request(app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(token));
+    expect(after.body.data).toEqual(first.body.data);
+    const history = await request(app)
+      .get(`/api/v1/delivery-orders/${orderId}/history`)
+      .set(bearer(token));
+    expect(history.body.data).toHaveLength(1);
+  });
+
+  it('requires authentication and a valid order id', async () => {
+    const { app, token } = await buildSeededApp();
+    const missingToken = await request(app).post(`/api/v1/delivery-orders/${UNKNOWN_ORDER_ID}/cancel`);
+    expect(missingToken.status).toBe(401);
+    expect(missingToken.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    const malformed = await request(app)
+      .post('/api/v1/delivery-orders/not-an-id/cancel')
+      .set(bearer(token));
+    expect(malformed.status).toBe(400);
+    expect(malformed.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+  });
+
+  it('rejects a spoofed tenant body and forbids a DRIVER without changing status or audit', async () => {
+    const testApp = buildTestApp();
+    await testApp.seedOrganization();
+    const admin = await testApp.seedUser();
+    const driver = await testApp.seedUser({
+      id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER',
+    });
+    const adminToken = await testApp.signIn(admin);
+    const driverToken = await testApp.signIn(driver);
+    const orderId = await createOrder(testApp.app, adminToken);
+
+    const spoofed = await request(testApp.app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(adminToken))
+      .send({ organizationId: OTHER_ORGANIZATION_ID });
+    expect(spoofed.status).toBe(400);
+    expect(spoofed.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+
+    const forbidden = await request(testApp.app)
+      .post(`/api/v1/delivery-orders/${orderId}/cancel`)
+      .set(bearer(driverToken));
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error.code).toBe('AUTH_FORBIDDEN');
+
+    const order = await request(testApp.app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(adminToken));
+    expect(order.body.data.status).toBe('created');
+    const history = await request(testApp.app)
+      .get(`/api/v1/delivery-orders/${orderId}/history`)
+      .set(bearer(adminToken));
+    expect(history.body.data).toEqual([]);
   });
 });
 

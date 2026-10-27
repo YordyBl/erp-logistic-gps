@@ -17,6 +17,7 @@ import { Package } from '../../domain/value-objects/Package.js';
 import { Recipient } from '../../domain/value-objects/Recipient.js';
 import { DeliveryOrderTypeOrmRepository } from './DeliveryOrderTypeOrmRepository.js';
 import { DeliveryOrderEntity } from './entities/DeliveryOrderEntity.js';
+import { DeliveryOrderStatusHistoryEntity } from './entities/DeliveryOrderStatusHistoryEntity.js';
 import { probeIntegrationDatabase } from './test-database.js';
 import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
 import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
@@ -58,6 +59,9 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     }
 
     if (organizationIds.length > 0) {
+      await dataSource.getRepository(DeliveryOrderStatusHistoryEntity).delete({
+        organizationId: In(organizationIds),
+      });
       // The package rows cascade with their order, so one tenant-scoped delete
       // is enough and no test row leaks into a later run. Organizations are
       // removed last because the order FK is RESTRICT.
@@ -171,6 +175,52 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
       [order.id],
     );
     expect(packages[0]?.count).toBe(2);
+  });
+
+  it('atomically persists cancellation with one readable audit record and leaves earlier data intact', async () => {
+    const organizationId = await newOrganizationId();
+    const order = buildOrder(organizationId, 'AUDIT-100');
+    const actorUserId = randomUUID();
+    const cancelledAt = '2026-10-26T15:01:00.000Z';
+    await repositoryOrThrow().save(order);
+
+    const cancelled = await repositoryOrThrow().cancel(organizationId, order.id, actorUserId, cancelledAt);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.createdAt).toBe(CREATED_AT);
+    expect(cancelled.updatedAt).toBe(cancelledAt);
+    expect(toDeliveryOrderDto(await repositoryOrThrow().findById(order.id) as DeliveryOrder))
+      .toEqual(toDeliveryOrderDto(cancelled));
+    expect((await repositoryOrThrow().findById(order.id))?.packages.map((item) => item.code))
+      .toEqual(['PKG-001', 'PKG-002']);
+    await expect(repositoryOrThrow().findStatusHistory(organizationId, order.id)).resolves.toEqual([
+      { fromStatus: 'created', toStatus: 'cancelled', actorUserId, occurredAt: cancelledAt },
+    ]);
+
+    await expect(repositoryOrThrow().save(order)).rejects.toBeInstanceOf(DeliveryOrderInvariantError);
+    await expect(repositoryOrThrow().cancel(organizationId, order.id, actorUserId, cancelledAt))
+      .rejects.toBeInstanceOf(DeliveryOrderInvariantError);
+    await expect(repositoryOrThrow().findStatusHistory(organizationId, order.id))
+      .resolves.toHaveLength(1);
+  });
+
+  it('rolls back status if audit insertion fails, and rejects cross-tenant access without a write', async () => {
+    const organizationId = await newOrganizationId();
+    const otherOrganizationId = await newOrganizationId();
+    const order = buildOrder(organizationId, 'AUDIT-200');
+    await repositoryOrThrow().save(order);
+    const actorUserId = randomUUID();
+    await expect(repositoryOrThrow().cancel(otherOrganizationId, order.id, actorUserId, CREATED_AT))
+      .rejects.toBeInstanceOf(DeliveryOrderForbiddenError);
+    await expect(repositoryOrThrow().findStatusHistory(otherOrganizationId, order.id))
+      .rejects.toBeInstanceOf(DeliveryOrderNotFoundError);
+
+    // The direct adapter call bypasses the use-case UUID check so PostgreSQL
+    // rejects the audit row after the status UPDATE, exercising rollback.
+    await expect(repositoryOrThrow().cancel(organizationId, order.id, 'invalid-uuid', CREATED_AT))
+      .rejects.toThrow();
+    expect(toDeliveryOrderDto(await repositoryOrThrow().findById(order.id) as DeliveryOrder))
+      .toEqual(toDeliveryOrderDto(order));
+    await expect(repositoryOrThrow().findStatusHistory(organizationId, order.id)).resolves.toEqual([]);
   });
 
   it('returns null for an unknown order id', async () => {

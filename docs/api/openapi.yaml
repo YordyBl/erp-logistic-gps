@@ -468,6 +468,94 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-orders/{orderId}/cancel:
+    post:
+      tags: [delivery-orders]
+      operationId: cancelDeliveryOrder
+      summary: Cancel an order without deleting it (ADMIN or DISPATCHER)
+      description: |
+        Cancels an order in created, planned or assigned status. The authenticated
+        user's id, previous status and cancellation instant are committed with the
+        order in an append-only audit row. In-transit and terminal orders cannot
+        be cancelled. The resource and all prior package/recipient data remain.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Cancelled order with unchanged id and createdAt.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryOrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-orders/{orderId}/history:
+    get:
+      tags: [delivery-orders]
+      operationId: getDeliveryOrderStatusHistory
+      summary: Read an order's audited status changes
+      description: Only the order's organization may read its status history. Unknown and foreign order ids return the same 404 response.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Chronological status changes (empty for a newly created order).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [fromStatus, toStatus, actorUserId, occurredAt]
+                      properties:
+                        fromStatus:
+                          type: string
+                        toStatus:
+                          type: string
+                        actorUserId:
+                          type: string
+                          format: uuid
+                        occurredAt:
+                          type: string
+                          format: date-time
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/customers:
     post:
       tags: [customers]

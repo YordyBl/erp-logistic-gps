@@ -5,10 +5,13 @@ import { generateUuidV4 } from '../../../shared/ids.js';
 import type { DeliveryOrder } from '../domain/entities/DeliveryOrder.js';
 import type { DomainEvent } from '../domain/events/DomainEvent.js';
 import type { DeliveryOrderRepository } from '../application/ports/DeliveryOrderRepository.js';
+import type { DeliveryOrderStatusHistory } from '../application/ports/DeliveryOrderStatusHistory.js';
 import type { EventPublisher } from '../application/ports/EventPublisher.js';
 import type { IdGenerator } from '../application/ports/IdGenerator.js';
 import { CreateDeliveryOrderUseCase } from '../application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { GetDeliveryOrderUseCase } from '../application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
+import { CancelDeliveryOrderUseCase } from '../application/use-cases/cancel-delivery-order/CancelDeliveryOrderUseCase.js';
+import { DeliveryOrderForbiddenError, DeliveryOrderInvariantError, DeliveryOrderNotFoundError } from '../domain/errors/DeliveryOrderError.js';
 
 /**
  * In-memory repository for tests and the demo composition.
@@ -19,8 +22,13 @@ import { GetDeliveryOrderUseCase } from '../application/use-cases/get-delivery-o
  */
 export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository {
   private readonly orders = new Map<string, DeliveryOrder>();
+  private readonly statusHistory = new Map<string, DeliveryOrderStatusHistory[]>();
 
   async save(order: DeliveryOrder): Promise<void> {
+    const existing = this.orders.get(order.id);
+    if (order.status !== 'created' || (existing !== undefined && existing.status !== 'created')) {
+      throw new DeliveryOrderInvariantError('Status changes require an audited transition');
+    }
     this.orders.set(order.id, order);
   }
 
@@ -39,6 +47,28 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     }
 
     return null;
+  }
+
+  async cancel(organizationId: string, orderId: string, actorUserId: string, occurredAt: string): Promise<DeliveryOrder> {
+    const order = this.orders.get(orderId);
+    if (order === undefined) throw new DeliveryOrderNotFoundError(orderId);
+    if (order.organizationId !== organizationId) {
+      throw new DeliveryOrderForbiddenError(orderId, organizationId);
+    }
+    const cancelled = order.cancel(occurredAt);
+    const prior = this.statusHistory.get(orderId) ?? [];
+    this.statusHistory.set(orderId, [...prior, {
+      fromStatus: order.status, toStatus: cancelled.status, actorUserId, occurredAt,
+    }]);
+    this.orders.set(orderId, cancelled);
+    return cancelled;
+  }
+
+  async findStatusHistory(organizationId: string, orderId: string): Promise<readonly DeliveryOrderStatusHistory[]> {
+    const order = this.orders.get(orderId);
+    if (order === undefined) throw new DeliveryOrderNotFoundError(orderId);
+    if (order.organizationId !== organizationId) throw new DeliveryOrderForbiddenError(orderId, organizationId);
+    return this.statusHistory.get(orderId) ?? [];
   }
 }
 
@@ -76,6 +106,7 @@ export interface DeliveryOrdersModuleOptions {
 export interface DeliveryOrdersModule {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
+  readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
   readonly eventPublisher: InMemoryEventPublisher;
 }
@@ -104,6 +135,7 @@ export function createDeliveryOrdersModule(
       eventPublisher,
     }),
     getDeliveryOrder: new GetDeliveryOrderUseCase({ repository }),
+    cancelDeliveryOrder: new CancelDeliveryOrderUseCase(repository, clock),
     repository,
     eventPublisher,
   };

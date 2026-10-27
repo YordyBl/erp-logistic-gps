@@ -32,9 +32,11 @@ warehouse.
 
 The policy is declared in
 [policies/DeliveryOrderStatusPolicy.ts](../domain/policies/DeliveryOrderStatusPolicy.ts).
-This pilot does not implement a status-transition use case. `DeliveryOrder.status` is
-read-only and always starts at `created`, so no caller can change it outside an explicit
-use-case decision. `confirm-delivery` and `report-delivery-incident` belong to the future
+Phase 2 implements cancellation through an explicit use case. An order starts in
+`created`; cancellation is allowed only from `created`, `planned` or `assigned`.
+The persisted update and append-only status history commit together. A rejected
+transition leaves both unchanged; a stale save cannot restore a cancelled order.
+`confirm-delivery` and `report-delivery-incident` still belong to the future
 `delivery-execution` module.
 
 ## Ratified incident rule
@@ -61,7 +63,7 @@ Consequences for this module:
 | Package codes are unique inside one order | `DeliveryOrder.create` | Invariant |
 | `publicCode` is unique per organization | Create use case lookup plus future database constraint | Invariant |
 | Internal ids are UUIDs; public codes are separate and readable | `DeliveryOrder.create` and `IdGenerator` | Validation |
-| Status only changes through an explicit use case | Read-only status field; no transition method in this pilot | Compile-time |
+| Status only changes through an explicit use case | Aggregate policy, cancellation use case and atomic audit write | Invariant |
 | Timestamps are ISO-8601 instants | `Clock` contract plus aggregate validation | Validation |
 | Personal data is not copied into domain events | `DeliveryOrderCreated` payload | Review |
 

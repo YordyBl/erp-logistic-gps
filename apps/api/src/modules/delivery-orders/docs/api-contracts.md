@@ -12,7 +12,9 @@
 2. `POST /api/v1/delivery-orders` → `201` with the created resource and a `Location` header.
 3. Read it back with `GET /api/v1/delivery-orders/{orderId}` or
    `GET /api/v1/delivery-orders?publicCode=...`.
-4. Read failures from the single error envelope; a cross-organization read is an
+4. Cancel a not-yet-in-transit order with `POST /api/v1/delivery-orders/{orderId}/cancel`.
+   Read its retained status history with `GET /api/v1/delivery-orders/{orderId}/history`.
+5. Read failures from the single error envelope; a cross-organization read is an
    indistinguishable `404`.
 
 ## Conventions
@@ -116,6 +118,24 @@ Reads one order inside the caller's organization.
 | `500` | Unexpected failure |
 
 Response `200 OK` uses the same `data` object as the create response.
+
+### `POST /api/v1/delivery-orders/{orderId}/cancel`
+
+Only an authenticated ADMIN or DISPATCHER may cancel an order in `created`,
+`planned` or `assigned`. No request body is accepted. The response is `200`
+with the order DTO, `status: cancelled`, and an updated `updatedAt`; the order,
+recipient, address, packages and `createdAt` remain stored. Each successful
+change records `fromStatus`, `toStatus`, `actorUserId` and `occurredAt` in the
+same transaction. An unknown or foreign order returns the same `404`, an invalid
+id `400`, a missing token `401`, a DRIVER `403`, and a repeated/invalid transition
+`409`. No status or history changes on rejection.
+
+### `GET /api/v1/delivery-orders/{orderId}/history`
+
+Any authenticated role in the order's organization may read chronological
+status transitions as `{ "data": [{ "fromStatus": "created", "toStatus":
+"cancelled", "actorUserId": "<uuid>", "occurredAt": "<ISO-8601>" }] }`.
+A new order returns `data: []`; foreign or unknown ids return `404`.
 
 ### `GET /api/v1/delivery-orders?publicCode=...`
 

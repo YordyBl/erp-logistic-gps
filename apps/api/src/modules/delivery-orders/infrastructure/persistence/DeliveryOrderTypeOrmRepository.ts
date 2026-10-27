@@ -1,10 +1,18 @@
 import type { DataSource } from 'typeorm';
+import { randomUUID } from 'node:crypto';
 
 import type { DeliveryOrderRepository } from '../../application/ports/DeliveryOrderRepository.js';
+import type { DeliveryOrderStatusHistory } from '../../application/ports/DeliveryOrderStatusHistory.js';
 import { DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
-import { DeliveryOrderInvariantError } from '../../domain/errors/DeliveryOrderError.js';
+import {
+  DeliveryOrderForbiddenError,
+  DeliveryOrderInvariantError,
+  DeliveryOrderNotFoundError,
+} from '../../domain/errors/DeliveryOrderError.js';
+import { isDeliveryOrderStatus } from '../../domain/policies/DeliveryOrderStatusPolicy.js';
 import { DeliveryOrderEntity } from './entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from './entities/DeliveryOrderPackageEntity.js';
+import { DeliveryOrderStatusHistoryEntity } from './entities/DeliveryOrderStatusHistoryEntity.js';
 import {
   toDomain,
   toOrderEntity,
@@ -36,6 +44,14 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
 
     try {
       await this.dataSource.transaction(async (manager) => {
+        const existing = await manager.findOne(DeliveryOrderEntity, {
+          where: { id: order.id }, lock: { mode: 'pessimistic_write' },
+        });
+        // Pilot save is for initial orders only: never resurrect a cancelled
+        // order from a stale aggregate after its audited transition commits.
+        if (order.status !== 'created' || (existing !== null && existing.status !== 'created')) {
+          throw new DeliveryOrderInvariantError('Status changes require an audited transition');
+        }
         await manager.save(orderEntity);
         await manager.delete(DeliveryOrderPackageEntity, {
           deliveryOrderId: order.id,
@@ -77,6 +93,57 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     }
 
     return toDomain(orderEntity, orderEntity.packages);
+  }
+
+  async cancel(
+    organizationId: string, orderId: string, actorUserId: string, occurredAt: string,
+  ): Promise<DeliveryOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const entity = await manager.findOne(DeliveryOrderEntity, {
+        where: { id: orderId }, lock: { mode: 'pessimistic_write' },
+      });
+      if (entity === null) throw new DeliveryOrderNotFoundError(orderId);
+      if (entity.organizationId !== organizationId) {
+        throw new DeliveryOrderForbiddenError(orderId, organizationId);
+      }
+      const packages = await manager.find(DeliveryOrderPackageEntity, {
+        where: { deliveryOrderId: orderId },
+      });
+      const original = toDomain(entity, packages);
+      const cancelled = original.cancel(occurredAt);
+      await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
+        status: cancelled.status, updatedAt: new Date(cancelled.updatedAt),
+      });
+      const history = new DeliveryOrderStatusHistoryEntity();
+      history.id = randomUUID();
+      history.orderId = orderId;
+      history.organizationId = organizationId;
+      history.fromStatus = original.status;
+      history.toStatus = cancelled.status;
+      history.actorUserId = actorUserId;
+      history.occurredAt = new Date(cancelled.updatedAt);
+      await manager.save(history);
+      return cancelled;
+    });
+  }
+
+  async findStatusHistory(organizationId: string, orderId: string): Promise<readonly DeliveryOrderStatusHistory[]> {
+    const order = await this.dataSource.getRepository(DeliveryOrderEntity).findOne({
+      where: { id: orderId, organizationId },
+    });
+    if (order === null) throw new DeliveryOrderNotFoundError(orderId);
+    const events = await this.dataSource.getRepository(DeliveryOrderStatusHistoryEntity).find({
+      where: { orderId, organizationId }, order: { occurredAt: 'ASC', id: 'ASC' },
+    });
+    return events.map((event) => {
+      if (!isDeliveryOrderStatus(event.fromStatus) || !isDeliveryOrderStatus(event.toStatus)) {
+        throw new DeliveryOrderInvariantError('Persisted delivery order history status is invalid');
+      }
+      return {
+        fromStatus: event.fromStatus, toStatus: event.toStatus,
+        actorUserId: event.actorUserId, occurredAt: event.occurredAt.toISOString(),
+      };
+    });
   }
 }
 

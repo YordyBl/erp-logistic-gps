@@ -1,4 +1,5 @@
 import type { DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
+import type { DeliveryOrderStatusHistory } from './DeliveryOrderStatusHistory.js';
 
 /**
  * Persistence contract for the {@link DeliveryOrder} aggregate.
@@ -19,4 +20,12 @@ export interface DeliveryOrderRepository {
     organizationId: string,
     publicCode: string,
   ): Promise<DeliveryOrder | null>;
+  /** Atomically change status and append its audit row, or change neither. */
+  cancel(
+    organizationId: string,
+    orderId: string,
+    actorUserId: string,
+    occurredAt: string,
+  ): Promise<DeliveryOrder>;
+  findStatusHistory(organizationId: string, orderId: string): Promise<readonly DeliveryOrderStatusHistory[]>;
 }

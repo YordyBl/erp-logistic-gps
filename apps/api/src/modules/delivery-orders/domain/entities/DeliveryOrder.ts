@@ -5,6 +5,8 @@ import {
 } from '../errors/DeliveryOrderError.js';
 import {
   INITIAL_DELIVERY_ORDER_STATUS,
+  canTransitionDeliveryOrderStatus,
+  isDeliveryOrderStatus,
   type DeliveryOrderStatus,
 } from '../policies/DeliveryOrderStatusPolicy.js';
 import type { DeliveryAddress } from '../value-objects/DeliveryAddress.js';
@@ -33,11 +35,8 @@ export interface DeliveryOrderCreateProps {
  * and separate), tenant (`organizationId`), recipient, address, packages,
  * lifecycle status and timestamps.
  *
- * Status can only change through explicit use-case decisions. This pilot has no
- * transition use case yet, so the entity has no mutator and always starts in
- * `created`; `confirm-delivery` and `report-delivery-incident` belong to the
- * future `delivery-execution` module. Keeping the field read-only means no
- * accidental status change can bypass a use case.
+ * Status changes use the canonical transition policy; persistence records the
+ * transition and its audit row atomically. Delivery execution remains separate.
  */
 export class DeliveryOrder {
   readonly id: string;
@@ -59,6 +58,8 @@ export class DeliveryOrder {
     deliveryAddress: DeliveryAddress,
     packages: readonly Package[],
     createdAt: string,
+    status: DeliveryOrderStatus = INITIAL_DELIVERY_ORDER_STATUS,
+    updatedAt: string = createdAt,
   ) {
     this.id = id;
     this.organizationId = organizationId;
@@ -66,9 +67,9 @@ export class DeliveryOrder {
     this.recipient = recipient;
     this.deliveryAddress = deliveryAddress;
     this.packageItems = packages;
-    this.status = INITIAL_DELIVERY_ORDER_STATUS;
+    this.status = status;
     this.createdAt = createdAt;
-    this.updatedAt = createdAt;
+    this.updatedAt = updatedAt;
   }
 
   static create(props: DeliveryOrderCreateProps): DeliveryOrder {
@@ -113,6 +114,41 @@ export class DeliveryOrder {
 
   get packages(): readonly Package[] {
     return this.packageItems;
+  }
+
+  /** Rebuild a persisted order without resetting its status or update instant. */
+  static restore(props: DeliveryOrderCreateProps & {
+    readonly status: string;
+    readonly updatedAt: string;
+  }): DeliveryOrder {
+    const initial = DeliveryOrder.create(props);
+    if (!isDeliveryOrderStatus(props.status)) {
+      throw new DeliveryOrderInvariantError('Persisted delivery order status is invalid');
+    }
+    const updatedAt = requireIsoTimestamp(props.updatedAt, 'updatedAt');
+    if (Date.parse(updatedAt) < Date.parse(initial.createdAt)) {
+      throw new DeliveryOrderInvariantError('updatedAt cannot precede createdAt');
+    }
+    return new DeliveryOrder(
+      initial.id, initial.organizationId, initial.publicCode,
+      initial.recipient, initial.deliveryAddress, initial.packages,
+      initial.createdAt, props.status, updatedAt,
+    );
+  }
+
+  cancel(occurredAt: string): DeliveryOrder {
+    if (!canTransitionDeliveryOrderStatus(this.status, 'cancelled')) {
+      throw new DeliveryOrderInvariantError(
+        `Delivery order cannot be cancelled from status ${this.status}`,
+        { status: this.status },
+      );
+    }
+    return DeliveryOrder.restore({
+      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      recipient: this.recipient, deliveryAddress: this.deliveryAddress,
+      packages: this.packages, createdAt: this.createdAt,
+      status: 'cancelled', updatedAt: occurredAt,
+    });
   }
 }
 

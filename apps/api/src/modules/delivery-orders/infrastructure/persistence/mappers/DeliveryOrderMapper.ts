@@ -1,7 +1,6 @@
 import { generateUuidV4 } from '../../../../../shared/ids.js';
 import { DeliveryOrder } from '../../../domain/entities/DeliveryOrder.js';
 import { DeliveryOrderInvariantError } from '../../../domain/errors/DeliveryOrderError.js';
-import { INITIAL_DELIVERY_ORDER_STATUS } from '../../../domain/policies/DeliveryOrderStatusPolicy.js';
 import { DeliveryAddress } from '../../../domain/value-objects/DeliveryAddress.js';
 import { Package } from '../../../domain/value-objects/Package.js';
 import { Recipient } from '../../../domain/value-objects/Recipient.js';
@@ -53,14 +52,6 @@ export function toDomain(
   orderEntity: DeliveryOrderEntity,
   packageEntities: readonly DeliveryOrderPackageEntity[],
 ): DeliveryOrder {
-  if (orderEntity.status !== INITIAL_DELIVERY_ORDER_STATUS) {
-    throw new Error(
-      `Persisted delivery order ${orderEntity.id} has status "${orderEntity.status}", ` +
-        'but the pilot domain only models the initial "created" status. ' +
-        'Reintroduce the status transition use case before reading such a row.',
-    );
-  }
-
   const packages = [...packageEntities]
     .sort((left, right) => left.position - right.position)
     .map((item) =>
@@ -71,7 +62,7 @@ export function toDomain(
       }),
     );
 
-  return DeliveryOrder.create({
+  return DeliveryOrder.restore({
     id: orderEntity.id,
     organizationId: orderEntity.organizationId,
     publicCode: orderEntity.publicCode,
@@ -87,6 +78,8 @@ export function toDomain(
     }),
     packages,
     createdAt: orderEntity.createdAt.toISOString(),
+    updatedAt: orderEntity.updatedAt.toISOString(),
+    status: orderEntity.status,
   });
 }
 

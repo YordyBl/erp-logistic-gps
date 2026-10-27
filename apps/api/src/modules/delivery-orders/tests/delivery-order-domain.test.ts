@@ -71,6 +71,27 @@ describe('DeliveryOrder aggregate', () => {
 
     expect(Object.isFrozen(order.packages)).toBe(true);
   });
+
+  it('cancels only from allowed states without losing recipient, packages or timestamps', () => {
+    const created = DeliveryOrder.create(orderProps());
+    const at = '2026-10-26T15:01:00.000Z';
+    const cancelled = created.cancel(at);
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled.createdAt).toBe(CREATED_AT);
+    expect(cancelled.updatedAt).toBe(at);
+    expect(cancelled.recipient).toEqual(created.recipient);
+    expect(cancelled.packages).toEqual(created.packages);
+    expect(created.status).toBe('created');
+    expect(() => cancelled.cancel(at)).toThrow(DeliveryOrderInvariantError);
+    for (const status of ['planned', 'assigned'] as const) {
+      expect(DeliveryOrder.restore({ ...orderProps(), status, updatedAt: at }).cancel(at).status)
+        .toBe('cancelled');
+    }
+    for (const status of ['in_transit', 'delivered', 'returned'] as const) {
+      expect(() => DeliveryOrder.restore({ ...orderProps(), status, updatedAt: at }).cancel(at))
+        .toThrow(DeliveryOrderInvariantError);
+    }
+  });
 });
 
 describe('Value objects', () => {

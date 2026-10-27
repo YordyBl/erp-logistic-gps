@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 
 import type { DeliveryOrderRepository } from '../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
+import type { CancelDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/cancel-delivery-order/CancelDeliveryOrderUseCase.js';
 import { createDeliveryOrderCommandSchema } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderCommand.js';
 import type { CreateDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderQuery.js';
@@ -10,6 +11,9 @@ import type { GetDeliveryOrderUseCase } from '../../modules/delivery-orders/appl
 import { PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 import { HttpError } from '../errors.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
+import { requireRole } from '../middleware/require-role.js';
+import { AUTH_TOKEN_MISSING_MESSAGE } from '../middleware/authenticate.js';
+import { getAuthenticatedUser } from '../request-context.js';
 import { parseOrThrow } from '../validation.js';
 
 /**
@@ -23,6 +27,7 @@ import { parseOrThrow } from '../validation.js';
 export interface DeliveryOrdersHttpPorts {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
+  readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
 }
 
@@ -120,6 +125,29 @@ export function createDeliveryOrdersRouter(
     const result = await ports.getDeliveryOrder.execute(query);
 
     response.status(200).json({ data: result.order });
+  });
+
+  router.post('/:orderId/cancel', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
+    parseOrThrow(z.strictObject({}), request.body ?? {}, 'Cancel delivery order request body is invalid');
+    const user = getAuthenticatedUser(response);
+    if (user === undefined) throw new HttpError(401, 'AUTH_TOKEN_MISSING', AUTH_TOKEN_MISSING_MESSAGE);
+    const result = await ports.cancelDeliveryOrder.execute({
+      organizationId: requireOrganizationId(response),
+      orderId: request.params.orderId,
+      actorUserId: user.id,
+    });
+    response.status(200).json({ data: result.order });
+  });
+
+  router.get('/:orderId/history', async (request, response) => {
+    const query = parseOrThrow(
+      getDeliveryOrderQuerySchema,
+      { organizationId: requireOrganizationId(response), orderId: request.params.orderId },
+      'Get delivery order history query is invalid',
+    );
+    await ports.getDeliveryOrder.execute(query);
+    const history = await ports.repository.findStatusHistory(query.organizationId, query.orderId);
+    response.status(200).json({ data: history });
   });
 
   return router;
