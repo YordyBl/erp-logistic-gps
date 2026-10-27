@@ -129,8 +129,12 @@ is a defect.
 | `GET` | `/api/v1/auth/me` | Return the authenticated caller |
 | `POST` | `/api/v1/users` | Create a user in the caller organization (ADMIN only) |
 | `POST` | `/api/v1/delivery-orders` | Create an order; returns `201` and a `Location` header |
+| `GET` | `/api/v1/delivery-orders` | List orders in the caller's organization |
 | `GET` | `/api/v1/delivery-orders?publicCode=...` | Read one order by its per-organization public code |
 | `GET` | `/api/v1/delivery-orders/:orderId` | Read one order by internal UUID |
+| `PATCH` | `/api/v1/delivery-orders/:orderId` | Edit recipient, address or packages only in `created` (ADMIN or DISPATCHER) |
+| `POST` | `/api/v1/delivery-orders/:orderId/cancel` | Cancel before transit while preserving the audited status history (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
@@ -213,12 +217,13 @@ API code (`docker compose build`).
   ADMIN creating users through `POST /api/v1/users`; there is no invitation email flow yet.
 - Login rate limiting is process-local and resets on restart; a shared store is a later
   deployment change.
-- No CORS/security headers or audit trail yet.
+- No CORS/security headers or general audit trail yet; order status transitions have an audit history.
 - The web client is a placeholder; the React application is not implemented.
 - The API runs through `tsx` instead of a compiled production build.
 - No backups, TLS/reverse proxy or observability backend.
 - Delivery execution (photo evidence, incidents), routes, dispatch and tracking are later
   phases.
 
-Next milestone: Phase 2 — routes, dispatch, delivery execution and tracking — together with
-the React client that consumes this API.
+The architecture plan assigns orders to Phase 2, routes and dispatch to Phase 3,
+delivery execution to Phase 4, and GPS tracking to Phase 5. The React client
+remains a placeholder and does not yet consume this API.

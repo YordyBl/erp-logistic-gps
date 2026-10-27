@@ -53,6 +53,9 @@ milestones.
 | A dispatcher creates an order with two parcels | `CreateDeliveryOrderUseCase` | Order stored in `created` status and `DeliveryOrderCreated` published |
 | The same organization repeats a public code | `CreateDeliveryOrderUseCase` | Invariant error; nothing stored or published |
 | A dispatcher reads an order from their organization | `GetDeliveryOrderUseCase` | Order DTO returned |
+| An authenticated caller lists orders from their organization | `ListDeliveryOrdersUseCase` | Tenant-scoped order DTOs returned |
+| A dispatcher edits recipient, address or packages before planning | `EditDeliveryOrderUseCase` | Order details updated without changing its status history |
+| A dispatcher cancels an order before transit | `CancelDeliveryOrderUseCase` | Order retained with an audited status transition |
 | A user from another organization guesses an order id | `GetDeliveryOrderUseCase` | Forbidden error, no order data returned |
 | An order id does not exist | `GetDeliveryOrderUseCase` | Not-found error |
 
@@ -71,10 +74,13 @@ delivery-orders/
 │   ├── ports/{DeliveryOrderRepository,IdGenerator,Clock,EventPublisher}.ts
 │   └── use-cases/
 │       ├── create-delivery-order/{CreateDeliveryOrderCommand,CreateDeliveryOrderUseCase,CreateDeliveryOrderResult}.ts
-│       └── get-delivery-order/{GetDeliveryOrderQuery,GetDeliveryOrderUseCase,GetDeliveryOrderResult}.ts
+│       ├── get-delivery-order/{GetDeliveryOrderQuery,GetDeliveryOrderUseCase,GetDeliveryOrderResult}.ts
+│       ├── list-delivery-orders/ListDeliveryOrdersUseCase.ts
+│       ├── edit-delivery-order/EditDeliveryOrderUseCase.ts
+│       └── cancel-delivery-order/CancelDeliveryOrderUseCase.ts
 ├── composition/composition-root.ts
 ├── infrastructure/persistence/
-│   ├── entities/{DeliveryOrderEntity,DeliveryOrderPackageEntity}.ts
+│   ├── entities/{DeliveryOrderEntity,DeliveryOrderPackageEntity,DeliveryOrderStatusHistoryEntity}.ts
 │   ├── mappers/DeliveryOrderMapper.ts
 │   └── DeliveryOrderTypeOrmRepository.ts
 ├── tests/
@@ -91,9 +97,9 @@ Migrations live in `apps/api/migrations`. HTTP adapters live in `apps/api/src/ht
       `x-organization-id` header is removed and spoofed values are ignored.
 - [ ] Publish `DeliveryOrderCreated` through the ratified event transport/outbox.
 - [x] Authorization tests: every delivery-orders route requires a valid bearer
-      token (missing/invalid → `401`); role-level RBAC is enforced where roles
-      gate routes (users, catalogs) and delivery-orders accepts every
-      authenticated role. OpenAPI stays in sync with the routes.
+      token (missing/invalid → `401`); editing and cancellation require ADMIN
+      or DISPATCHER, while reads accept every authenticated role. OpenAPI stays
+      in sync with the routes.
 
 ## Documentation
 
