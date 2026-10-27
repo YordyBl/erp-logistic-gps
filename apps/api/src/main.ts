@@ -2,11 +2,11 @@ import 'reflect-metadata';
 
 import { createServer } from 'node:http';
 
-import { applyRuntimeTimezone, loadConfig } from './config/config.js';
+import { applyRuntimeTimezone, loadAuthConfig, loadConfig } from './config/config.js';
 import { buildApp } from './http/app.js';
 import { createLogger } from './http/logger.js';
 import { createDataSource } from './infrastructure/database/data-source.js';
-import { createDeliveryOrdersModuleFromDataSource } from './modules/delivery-orders/composition/composition-root.js';
+import { composeApiModules } from './infrastructure/composition/composition-root.js';
 
 /**
  * API composition root and process entry point.
@@ -19,6 +19,10 @@ import { createDeliveryOrdersModuleFromDataSource } from './modules/delivery-ord
 
 const config = loadConfig();
 applyRuntimeTimezone(config);
+
+// Authentication secrets are validated at boot: JWT_SECRET has no default and
+// the process must not start without it.
+const authConfig = loadAuthConfig();
 
 const logger = createLogger(config.logLevel);
 
@@ -56,8 +60,8 @@ async function readiness(): Promise<void> {
   await dataSource.query('SELECT 1');
 }
 
-const deliveryOrders = await createDeliveryOrdersModuleFromDataSource(dataSource);
-const app = buildApp({ deliveryOrders, readiness, logger });
+const { dependencies } = await composeApiModules(dataSource, authConfig);
+const app = buildApp({ ...dependencies, readiness, logger });
 const server = createServer(app);
 
 server.listen(config.port, '0.0.0.0', () => {

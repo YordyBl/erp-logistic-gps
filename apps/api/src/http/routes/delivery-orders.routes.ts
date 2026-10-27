@@ -1,3 +1,4 @@
+import type { RequestHandler } from 'express';
 import { Router } from 'express';
 import { z } from 'zod';
 
@@ -8,20 +9,16 @@ import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/appli
 import type { GetDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
 import { PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 import { HttpError } from '../errors.js';
-import {
-  organizationResolver,
-  requireOrganizationId,
-} from '../middleware/organization-resolver.js';
+import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { parseOrThrow } from '../validation.js';
 
 /**
  * HTTP adapters for the `delivery-orders` module.
  *
- * The organization always comes from the request context (the temporary header
- * middleware today, verified JWT claims in Fase 1) and is never read from the
- * body, path or query. The body is parsed with the application command schema;
- * the `organizationId` field is removed from the accepted body shape so a caller
- * cannot inject a tenant.
+ * The organization always comes from the verified JWT claims in the request
+ * context and is never read from the header, body, path or query. The body is
+ * parsed with the application command schema; the `organizationId` field is
+ * removed from the accepted body shape so a caller cannot inject a tenant.
  */
 export interface DeliveryOrdersHttpPorts {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
@@ -50,10 +47,13 @@ const publicCodeQuerySchema = z.strictObject({
     ),
 });
 
-export function createDeliveryOrdersRouter(ports: DeliveryOrdersHttpPorts): Router {
+export function createDeliveryOrdersRouter(
+  ports: DeliveryOrdersHttpPorts,
+  authenticate: RequestHandler,
+): Router {
   const router = Router();
 
-  router.use(organizationResolver);
+  router.use(authenticate);
 
   router.post('/', async (request, response) => {
     const body = parseOrThrow(
