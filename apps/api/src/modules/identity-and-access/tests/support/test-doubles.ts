@@ -47,11 +47,13 @@ export class SequentialIdGenerator implements IdGenerator {
  * Reversible password hasher for unit tests.
  *
  * It is deliberately not a hash: tests assert that the plaintext never leaves
- * the application layer and that `verify` is consulted, not that Argon2 works.
- * The real Argon2id adapter has its own tests.
+ * the application layer, that `verify` is consulted, and — for the constant-time
+ * login path — *which* hash was verified. The real Argon2id adapter has its own
+ * tests.
  */
 export class FakePasswordHasher implements PasswordHasher {
   private readonly plaintexts: string[] = [];
+  private readonly verified: { passwordHash: string; password: string }[] = [];
 
   async hash(password: string): Promise<string> {
     this.plaintexts.push(password);
@@ -59,11 +61,17 @@ export class FakePasswordHasher implements PasswordHasher {
   }
 
   async verify(passwordHash: string, password: string): Promise<boolean> {
+    this.verified.push({ passwordHash, password });
     return passwordHash === `hashed:${password}`;
   }
 
   get received(): readonly string[] {
     return this.plaintexts;
+  }
+
+  /** Every `verify` call, in order; used to prove the dummy path runs. */
+  get verifications(): readonly { passwordHash: string; password: string }[] {
+    return this.verified;
   }
 }
 
