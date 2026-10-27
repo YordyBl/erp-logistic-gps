@@ -4,10 +4,11 @@ Monorepo for a multi-tenant last-mile delivery ERP covering Lima Metropolitana a
 Dispatchers plan routes with multiple stops and orders, drivers confirm deliveries with
 photo evidence, and recipients follow a single order through a limited public link.
 
-**Status (2026-10-27):** Fase 1 is in progress. The `identity-and-access` module (users,
-organizations, Argon2id passwords, rotating refresh tokens) and the HTTP JWT surface
-(login, refresh, logout, `me`, ADMIN-only user creation) are implemented. Catalog modules,
-the demo seed and the web client are still pending, and the demo starts with empty tables.
+**Status (2026-10-27):** Phase 1 is implemented. The `identity-and-access` module (users,
+organizations, Argon2id passwords, rotating refresh tokens), the HTTP JWT surface (login,
+refresh, logout, `me`, ADMIN-only user creation), the customer/driver/vehicle catalogs, the
+demo seed and the OpenAPI 3.1 contract are in place. The web client is still a placeholder,
+so `apps/web` keeps serving the static page.
 
 ## Quick path
 
@@ -33,6 +34,31 @@ Migrations are a one-shot job, not part of API boot. The API does not wait for t
 the sequence above makes the schema deterministic before the API starts. `docker compose up`
 alone runs the same job, but a request can arrive first.
 
+### Demo data
+
+`apps/api/src/scripts/seed-demo.ts` creates one demo organization and its three users. It
+uses the same environment as the API (`DATABASE_URL` and `JWT_SECRET`), is never mounted on
+an HTTP route, and is idempotent: a second run reuses the existing organization and leaves
+existing users untouched.
+
+```bash
+export DATABASE_URL=postgres://<user>:<password>@localhost:5432/erp_logistic
+export JWT_SECRET="$(openssl rand -hex 32)"   # any valid secret; the seed issues no tokens
+npm run seed:demo -w apps/api
+```
+
+| Role | Email | Password |
+|---|---|---|
+| ADMIN | `admin@demo.lima` | `Admin-demo-1` |
+| DISPATCHER | `dispatcher@demo.lima` | `Dispatcher-demo-1` |
+| DRIVER | `driver@demo.lima` | `Driver-demo-1` |
+
+These credentials are **documented demo values, not production credentials**: they are
+published on purpose so anyone can sign in to a local demo. The script refuses to run when
+`NODE_ENV=production`, and its output also prints the demo `organizationId`, which
+`POST /api/v1/auth/login` requires. Never reuse this seed or these passwords in a deployed
+environment.
+
 ### Demo stack
 
 ```bash
@@ -40,7 +66,8 @@ docker compose -f docker-compose.demo.yml up --build
 ```
 
 The demo includes the development file, adds restart policies and resource limits, and uses
-its own project name. It starts with empty tables: the Lima seed dataset is a follow-up.
+its own project name. It starts with empty tables: apply migrations and run the demo seed
+(above) once to get the demo organization and users.
 
 ### Local API without Docker
 
@@ -51,6 +78,7 @@ npm ci
 export DATABASE_URL=postgres://<user>:<password>@localhost:5432/erp_logistic
 export JWT_SECRET="$(openssl rand -hex 32)"
 npm run migration:run -w apps/api
+npm run seed:demo -w apps/api     # optional: demo organization and users
 npx tsx apps/api/src/main.ts
 ```
 
@@ -79,8 +107,11 @@ is a defect.
 
 | Path | Purpose |
 |---|---|
-| `apps/api` | Express 5 API: HTTP layer, configuration, TypeORM data source, migrations, delivery-orders module. |
+| `apps/api` | Express 5 API: HTTP layer, configuration, TypeORM data source, migrations, middleware and routers. |
+| `apps/api/src/modules/identity-and-access` | Users, organizations, Argon2id hashing, JWT/refresh sessions, RBAC context, tests and docs. |
 | `apps/api/src/modules/delivery-orders` | Pilot module: domain, use cases, ports, persistence adapter, HTTP adapter, tests and docs. |
+| `apps/api/src/modules/customers`, `drivers`, `vehicles` | Org-scoped catalogs: domain, use cases, TypeORM persistence, HTTP routes and module docs. |
+| `apps/api/src/scripts/seed-demo.ts` | Demo seed: demo organization plus ADMIN/DISPATCHER/DRIVER users with documented demo credentials. |
 | `apps/web` | Static placeholder served by nginx; the React client arrives in a later phase. |
 | `packages/api-contracts` | Shared HTTP contracts between API and web client (reserved). |
 | `docs/api/openapi.yaml` | OpenAPI 3.1 contract for the current HTTP surface. |
@@ -100,6 +131,14 @@ is a defect.
 | `POST` | `/api/v1/delivery-orders` | Create an order; returns `201` and a `Location` header |
 | `GET` | `/api/v1/delivery-orders?publicCode=...` | Read one order by its per-organization public code |
 | `GET` | `/api/v1/delivery-orders/:orderId` | Read one order by internal UUID |
+| `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
+| `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | List or read the driver catalog (any authenticated role) |
+| `PATCH` | `/api/v1/drivers/:driverId` | Update the mutable driver fields (ADMIN or DISPATCHER) |
+| `POST` | `/api/v1/vehicles` | Create a vehicle (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/vehicles`, `/api/v1/vehicles/:vehicleId` | List or read the fleet catalog (any authenticated role) |
+| `PATCH` | `/api/v1/vehicles/:vehicleId` | Update the mutable vehicle fields (ADMIN or DISPATCHER) |
 | `GET` | `/healthz` | Liveness; never touches PostgreSQL |
 | `GET` | `/readyz` | Readiness; `503` while PostgreSQL is unavailable |
 
@@ -107,8 +146,9 @@ All `/api/v1` business routes require `Authorization: Bearer <access token>`. Th
 middleware verifies issuer, audience, expiry, not-before, subject, JTI and the pinned HS256
 algorithm, then reloads the user from storage, so a deleted, disabled or demoted account
 takes effect immediately. The organization comes only from the verified token; the old
-`x-organization-id` header is gone. Every response carries `x-request-id`; non-2xx API
-responses use one error envelope with a `correlationId`.
+`x-organization-id` header is gone. Catalog reads are open to every authenticated role;
+catalog writes require ADMIN or DISPATCHER; user provisioning requires ADMIN. Every response
+carries `x-request-id`; non-2xx API responses use one error envelope with a `correlationId`.
 
 ## Database and migrations
 
@@ -146,9 +186,10 @@ API code (`docker compose build`).
 | [ADR-005](docs/architecture/decisions/ADR-005-observability.md) | pino JSON logs, correlation ids, redaction, America/Lima timestamps. |
 | [ADR-006](docs/architecture/decisions/ADR-006-docker-and-environments.md) | Multi-stage non-root images, dev/demo Compose layout, migrations job, MinIO image decision. |
 | [ADR-007](docs/architecture/decisions/ADR-007-identifiers-and-time.md) | UUIDv4 now with UUIDv7 as future upgrade, public codes, `timestamptz` and Lima time. |
+| [ADR-008](docs/architecture/decisions/ADR-008-auth-implementation.md) | Auth implementation: HS256/jose, Argon2id parameters, refresh families, cookie flags, login rate limiting. |
 | [OpenAPI 3.1](docs/api/openapi.yaml) | HTTP source of truth for the current endpoints and errors. |
 | [Conceptual data model](docs/architecture/data-model.md) | Entities, Mermaid ER diagram, invariants, tenant and timezone conventions. |
-| [`delivery-orders` docs](apps/api/src/modules/delivery-orders/docs/README.md) | Module business rules, architecture, data model and local decisions (the status line predates the HTTP/persistence wiring). |
+| [`delivery-orders` docs](apps/api/src/modules/delivery-orders/docs/README.md) | Module business rules, architecture, data model and local decisions. |
 | [Architecture plan](ERP_LOGISTICO_LIMA_PLAN_ARQUITECTURA_v0.2.md) | Source of truth (Spanish): stack, rules, business model, security, phases. |
 
 ## Conventions
@@ -168,8 +209,8 @@ API code (`docker compose build`).
 
 ## Current limitations
 
-- No demo seed data yet: organizations and users must be provisioned in the database
-  (the seed script is the next Fase 1 task).
+- The demo seed and its credentials are demo-only. Production onboarding still relies on an
+  ADMIN creating users through `POST /api/v1/users`; there is no invitation email flow yet.
 - Login rate limiting is process-local and resets on restart; a shared store is a later
   deployment change.
 - No CORS/security headers or audit trail yet.
@@ -179,4 +220,5 @@ API code (`docker compose build`).
 - Delivery execution (photo evidence, incidents), routes, dispatch and tracking are later
   phases.
 
-Next milestone: finish Fase 1 — catalogs (customers, drivers, vehicles), demo seed and docs.
+Next milestone: Phase 2 — routes, dispatch, delivery execution and tracking — together with
+the React client that consumes this API.

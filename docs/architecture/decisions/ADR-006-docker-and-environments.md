@@ -10,7 +10,7 @@
 The architecture plan requires Docker Compose for development and demo (section 2),
 multi-stage images running as non-root, healthchecks with readiness-aware `depends_on`,
 persistent PostgreSQL volumes, migrations as a separate job and secrets outside the
-repository (section 9). Fase 0 must deliver a stack an operator can start with one command
+repository (section 9). Phase 0 must deliver a stack an operator can start with one command
 and a demo variant that cannot drift from it by copy-paste.
 
 The demo also needs S3-compatible object storage for future delivery evidence. The
@@ -76,11 +76,12 @@ development file, then changes only demo concerns: its own project name
 services, resource limits for PostgreSQL, MinIO and the API, and `restart: "no"` retained
 for migrations. Editing one file therefore cannot silently diverge from the other.
 
-The demo starts with **empty tables**. The Lima seed dataset is not implemented yet; adding
-a one-shot `seed` service after `migrations` is a documented follow-up, not a hidden
-behavior.
+The demo starts with **empty tables**. The demo dataset is created by the seed script
+(`npm run seed:demo -w apps/api`, documented in the README) after `migrations`; a one-shot
+Compose `seed` service that runs it automatically is still a documented follow-up, not a
+hidden behavior.
 
-The plan mentions `development`, `test` and `demo` profiles. Fase 0 implements this as the
+The plan mentions `development`, `test` and `demo` profiles. Phase 0 implements this as the
 default development project plus a demo overlay file. There is no dedicated test Compose
 file: integration tests run against the development PostgreSQL (or the CI service
 container) when `DATABASE_URL` is set and skip cleanly otherwise. That is the honest state
@@ -138,7 +139,8 @@ changes; application code depends on the S3 contract, not on the image.
 - Registry publishing and image signing.
 - A compiled API runtime (the `tsx` bridge is temporary).
 - TLS, reverse proxy and HTTPS termination for local/demo.
-- Demo seeds, reproducible reset and fictional-data policy.
+- Compose demo seeding (the script exists; the one-shot job does not), reproducible reset
+  and a fictional-data policy.
 - Backups and restore drills before real customer data.
 - PostGIS, Redis, `gps-simulator` and a dedicated test Compose profile.
 - Resource limits in the development stack (they exist only in the demo overlay).
@@ -167,7 +169,7 @@ changes; application code depends on the S3 contract, not on the image.
 **Follow-ups**
 
 - Replace the `tsx` runtime with a compiled, production-only dependency image.
-- Add the demo seed job and a reproducible reset procedure.
+- Add the one-shot Compose seed job and a reproducible reset procedure.
 - Publish images to a registry with digest pinning and vulnerability scanning.
 - Decide the production object-storage provider and MinIO long-term replacement.
 - Add backup/restore automation before operating with real customer data.

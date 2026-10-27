@@ -7,12 +7,12 @@
 
 ## Context
 
-Fase 0 needs a real HTTP boundary for the pilot `delivery-orders` module. The ratified
+Phase 0 needs a real HTTP boundary for the pilot `delivery-orders` module. The ratified
 stack (architecture plan section 2) fixes Node.js + Express + strict TypeScript, and the
 architecture rules (ADR-001 rule 9) require typed errors and one central error middleware
 with consistent status codes. The plan also recommends REST versioning and OpenAPI 3.1 as
-the HTTP source of truth (sections 2 and 11.8). Authentication is a Fase 1 concern
-(ADR-003); Fase 0 must therefore expose the module without pretending the temporary tenant
+the HTTP source of truth (sections 2 and 11.8). Authentication is a Phase 1 concern
+(ADR-003); Phase 0 must therefore expose the module without pretending the temporary tenant
 header is authorization.
 
 The HTTP layer receives composed use cases rather than constructing them. That keeps the
@@ -49,23 +49,25 @@ Every business endpoint lives under `/api/v1`. The pilot exposes:
 | `GET` | `/api/v1/delivery-orders/:orderId` | `200` with the tenant's order |
 
 The tenant always comes from request context:
-`apps/api/src/http/middleware/organization-resolver.ts` reads a UUID from the development
+`apps/api/src/http/middleware/organization-resolver.ts` read a UUID from the development
 header `x-organization-id`. The header is explicitly temporary and is not an authorization
-mechanism: any caller can claim any organization until Fase 1 replaces it with verified JWT
-claims (ADR-003). Routes never read an organization from the body, path or query, and the
-accepted create body omits `organizationId`.
+mechanism: any caller can claim any organization until Phase 1 replaces it with verified JWT
+claims (ADR-003). *Phase 1 update: the JWT middleware now establishes the context and
+`requireOrganizationId` only reads it; the header is gone (ADR-008).* Routes never read an
+organization from the body, path or query, and the accepted create body omits
+`organizationId`.
 
 ### 3. OpenAPI 3.1 is the HTTP source of truth
 
 `docs/api/openapi.yaml` (OpenAPI 3.1.0) documents paths, schemas, headers, examples and
-errors. It is hand-written in Fase 0 because the surface is small, every endpoint is
+errors. It is hand-written in Phase 0 because the surface is small, every endpoint is
 reviewed anyway, and code-first generation would add tooling without removing the review
 step. Zod remains the runtime validator at the boundary; OpenAPI describes the same
 contract for clients and reviewers.
 
-The spec states the Fase 0 limitations in its description: no JWT enforcement yet, the
+The spec states the Phase 0 limitations in its description: no JWT enforcement yet, the
 temporary tenant header, the ISO-8601 timestamp convention and the error envelope. The
-`bearerAuth` scheme documents the intended Fase 1 contract without being enforced.
+`bearerAuth` scheme documents the intended Phase 1 contract without being enforced.
 
 Manual maintenance has a known drift risk. It is contained by HTTP tests that assert
 status codes, bodies and headers, and by keeping schemas small. Follow-ups are contract
@@ -102,7 +104,7 @@ header.
 | Not found | `404` | Module code | Missing resource in the caller's organization |
 | Forbidden (cross-organization resource) | `404` | Not-found code | Enumeration-safe: response is indistinguishable from an unknown id; the real reason is a warning log |
 | Invariant / conflict (for example duplicate public code) | `409` | Module code | Safe details only |
-| Missing/invalid temporary organization header | `401` | `ORGANIZATION_REQUIRED` / `ORGANIZATION_INVALID` | Development adapter only; disappears in Fase 1 |
+| Missing/invalid temporary organization header | `401` | `ORGANIZATION_REQUIRED` / `ORGANIZATION_INVALID` | Development adapter only; disappears in Phase 1 |
 | Unknown route | `404` | `ROUTE_NOT_FOUND` | Same envelope and correlation id |
 | Anything unexpected | `500` | `INTERNAL_ERROR` | Generic message; stack and cause only in the error log |
 
@@ -142,16 +144,16 @@ to gate the API and the migrations job.
   today.
 - Error mapping is a central list that must grow with every new typed error.
 - The temporary organization header is insecure by design and must be removed, not
-  forgotten, in Fase 1.
+  forgotten, in Phase 1.
 - `/api/v1` is fixed now; a breaking contract change needs a new version or an explicit
   compatibility plan.
 
 **Follow-ups**
 
-- Replace `organizationResolver` with JWT authentication and authorization in Fase 1
+- Replace `organizationResolver` with JWT authentication and authorization in Phase 1
   (ADR-003).
 - Add contract tests or a response validator against `docs/api/openapi.yaml`.
-- Add CORS, security headers and rate limiting with the Fase 1 security scope.
+- Add CORS, security headers and rate limiting with the Phase 1 security scope.
 - Define pagination/filtering and the versioning policy before the order list endpoint
   grows.
 - Generate or share client types in `packages/api-contracts` once the web client consumes

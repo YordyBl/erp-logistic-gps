@@ -29,7 +29,7 @@ Why UUIDv4 now:
 
 | Property | Consequence |
 |---|---|
-| No dependency, native in Node 22 | No supply-chain or implementation risk in Fase 0 |
+| No dependency, native in Node 22 | No supply-chain or implementation risk in Phase 0 |
 | 122 random bits | Not guessable, safe as an internal id that may appear in URLs |
 | No time or sequence embedded | No creation-time leak; no cross-node coordination |
 | Fixed size `uuid` column | Same storage and index shape as any other UUID version |
@@ -49,7 +49,7 @@ Internal ids are never exposed as the business key. The pilot uses `public_code`
 - per-organization uniqueness `uq_delivery_orders_organization_public_code`.
 
 Package codes are unique per order (`uq_delivery_order_packages_order_code`), not globally.
-The operator supplies the public code in Fase 0; server-side sequences are a follow-up.
+The operator supplies the public code in Phase 0; server-side sequences are a follow-up.
 Public codes are not secrets and grant no access by themselves.
 
 The use case checks uniqueness before saving, but that check is a fast path, not the
@@ -69,7 +69,7 @@ UUIDv7 is preferred when the cost is justified because it is time-ordered: new r
 at the end of the B-tree instead of scattering across it, and ids sort by creation time
 without a separate sequence. That matters as tables and write volume grow.
 
-It is not adopted in Fase 0 because:
+It is not adopted in Phase 0 because:
 
 - Node 22 has no native UUIDv7 generator; it needs a reviewed dependency or a carefully
   tested monotonic implementation.

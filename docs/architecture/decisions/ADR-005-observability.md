@@ -14,7 +14,7 @@ plan requires structured logs, correlation ids and a consistent error format (se
 11.12), plus America/Lima in logs (section 2). ADR-003 additionally requires that logs
 never expose tokens, credentials or recipient personal data.
 
-Fase 0 has no metrics backend, no tracing collector and no log aggregation service. The
+Phase 0 has no metrics backend, no tracing collector and no log aggregation service. The
 observability baseline must therefore be useful with the tools already present: container
 stdout and a JSON-capable log viewer.
 
@@ -85,8 +85,8 @@ Log time and stored instants remain the same moment; only presentation changes.
 | `fatal` | Reserved; no current call site |
 
 Status-changing business events and security audit records (login, refresh reuse, role
-changes, public tracking access) arrive with Fase 1 and ADR-003. Logs are not yet an audit
-trail and must not be treated as one.
+changes, public tracking access) are later work: Phase 1 shipped authentication and refresh
+handling, but there is no dedicated audit trail yet. Logs must not be treated as one.
 
 ### 6. Deliberately not included yet
 
@@ -118,5 +118,6 @@ humans.
 
 - Add OpenTelemetry tracing/metrics and propagate the correlation id as a trace attribute.
 - Define retention, access control and alerting for production logs.
-- Add security audit events with Fase 1 authentication.
+- Add security audit events; authentication shipped in Phase 1, the audit trail is still
+  pending.
 - Revisit redaction when evidence uploads and public tracking add new sensitive fields.
