@@ -6,9 +6,12 @@ import { DataSource, type DataSourceOptions } from 'typeorm';
 
 import { DeliveryOrderEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderPackageEntity.js';
+import { CustomerEntity } from '../../modules/customers/infrastructure/persistence/entities/CustomerEntity.js';
+import { DriverEntity } from '../../modules/drivers/infrastructure/persistence/entities/DriverEntity.js';
 import { OrganizationEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/OrganizationEntity.js';
 import { RefreshTokenEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/RefreshTokenEntity.js';
 import { UserEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/UserEntity.js';
+import { VehicleEntity } from '../../modules/vehicles/infrastructure/persistence/entities/VehicleEntity.js';
 
 /**
  * Process-wide TypeORM data source.
@@ -61,6 +64,9 @@ function commonOptions() {
       OrganizationEntity,
       UserEntity,
       RefreshTokenEntity,
+      CustomerEntity,
+      DriverEntity,
+      VehicleEntity,
     ],
     migrations: [MIGRATIONS_GLOB],
     migrationsTableName: 'migrations',

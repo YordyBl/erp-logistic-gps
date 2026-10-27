@@ -4,12 +4,21 @@ import type { Express } from 'express';
 import { pino, type Logger } from 'pino';
 
 import type { LoginRateLimitConfig } from '../../../config/config.js';
+import {
+  buildCustomersModule,
+} from '../../../modules/customers/composition/composition-root.js';
 import type { DeliveryOrderRepository } from '../../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
 import {
   createDeliveryOrdersModule,
   InMemoryEventPublisher,
   type DeliveryOrdersModule,
 } from '../../../modules/delivery-orders/composition/composition-root.js';
+import {
+  buildDriversModule,
+} from '../../../modules/drivers/composition/composition-root.js';
+import {
+  buildVehiclesModule,
+} from '../../../modules/vehicles/composition/composition-root.js';
 import {
   FixedClock,
   SequentialIdGenerator,
@@ -159,6 +168,11 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
         maxAgeSeconds: identity.sessionPolicy.refreshTokenTtlSeconds,
       },
       loginRateLimit: options.loginRateLimit ?? DEFAULT_LOGIN_RATE_LIMIT,
+    },
+    catalogs: {
+      customers: buildCustomersModule(),
+      drivers: buildDriversModule(),
+      vehicles: buildVehiclesModule(),
     },
     readiness: options.readiness ?? (async () => undefined),
     logger,

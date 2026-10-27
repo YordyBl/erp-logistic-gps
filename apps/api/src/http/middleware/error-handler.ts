@@ -10,6 +10,16 @@ import {
   DeliveryOrderValidationError,
 } from '../../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
 import {
+  CustomerInvariantError,
+  CustomerNotFoundError,
+  CustomerValidationError,
+} from '../../modules/customers/domain/errors/CustomerError.js';
+import {
+  DriverInvariantError,
+  DriverNotFoundError,
+  DriverValidationError,
+} from '../../modules/drivers/domain/errors/DriverError.js';
+import {
   EmailAlreadyInUseError,
   ForbiddenRoleError,
   IdentityValidationError,
@@ -20,6 +30,11 @@ import {
   UserNotFoundError,
   WeakPasswordError,
 } from '../../modules/identity-and-access/domain/errors/IdentityError.js';
+import {
+  VehicleInvariantError,
+  VehicleNotFoundError,
+  VehicleValidationError,
+} from '../../modules/vehicles/domain/errors/VehicleError.js';
 import type { ErrorDetails } from '../../shared/errors/DomainError.js';
 import { HttpError, toErrorBody } from '../errors.js';
 import { getCorrelationId } from '../request-context.js';
@@ -119,6 +134,53 @@ function mapError(error: unknown): MappedError {
   }
 
   if (error instanceof DeliveryOrderInvariantError) {
+    return {
+      statusCode: 409,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (
+    error instanceof CustomerValidationError ||
+    error instanceof DriverValidationError ||
+    error instanceof VehicleValidationError
+  ) {
+    return {
+      statusCode: 400,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (
+    error instanceof CustomerNotFoundError ||
+    error instanceof DriverNotFoundError ||
+    error instanceof VehicleNotFoundError
+  ) {
+    // Catalog reads are tenant-scoped, so another organization's row already
+    // arrives here as not-found; no extra enumeration branch is needed.
+    return {
+      statusCode: 404,
+      code: error.code,
+      message: error.message,
+      details: undefined,
+      logLevel: undefined,
+      logMessage: undefined,
+    };
+  }
+
+  if (
+    error instanceof CustomerInvariantError ||
+    error instanceof DriverInvariantError ||
+    error instanceof VehicleInvariantError
+  ) {
     return {
       statusCode: 409,
       code: error.code,

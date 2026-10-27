@@ -16,14 +16,26 @@ import { notFoundHandler } from './middleware/not-found.js';
 import { createRequestLogger } from './middleware/request-logger.js';
 import { createAuthRouter } from './routes/auth.routes.js';
 import {
+  createCustomersRouter,
+  type CustomersHttpPorts,
+} from './routes/customers.routes.js';
+import {
   createDeliveryOrdersRouter,
   type DeliveryOrdersHttpPorts,
 } from './routes/delivery-orders.routes.js';
+import {
+  createDriversRouter,
+  type DriversHttpPorts,
+} from './routes/drivers.routes.js';
 import {
   createHealthRouter,
   type ReadinessCheck,
 } from './routes/health.routes.js';
 import { createUsersRouter } from './routes/users.routes.js';
+import {
+  createVehiclesRouter,
+  type VehiclesHttpPorts,
+} from './routes/vehicles.routes.js';
 
 /** Request bodies are small JSON documents; cap them before zod sees them. */
 const JSON_BODY_LIMIT = '100kb';
@@ -48,11 +60,26 @@ export interface AuthHttpDependencies {
   readonly loginRateLimit: LoginRateLimitConfig;
 }
 
+/**
+ * Catalog use cases, already composed.
+ *
+ * The three catalogs are independent modules; they share only the HTTP
+ * convention (JWT tenant context, role gate, typed validation errors) and never
+ * import each other.
+ */
+export interface CatalogsHttpDependencies {
+  readonly customers: CustomersHttpPorts;
+  readonly drivers: DriversHttpPorts;
+  readonly vehicles: VehiclesHttpPorts;
+}
+
 export interface AppDependencies {
   /** Use cases and repository of the delivery-orders module, already composed. */
   readonly deliveryOrders: DeliveryOrdersHttpPorts;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
+  /** Customer, driver and vehicle catalogs. */
+  readonly catalogs: CatalogsHttpDependencies;
   /** Readiness probe; rejects when a required dependency is unavailable. */
   readonly readiness: ReadinessCheck;
   readonly logger: Logger;
@@ -74,6 +101,7 @@ export interface AppDependencies {
 export function buildApp({
   deliveryOrders,
   auth,
+  catalogs,
   readiness,
   logger,
 }: AppDependencies): Express {
@@ -105,6 +133,15 @@ export function buildApp({
   app.use(
     '/api/v1/delivery-orders',
     createDeliveryOrdersRouter(deliveryOrders, authenticate),
+  );
+  app.use(
+    '/api/v1/customers',
+    createCustomersRouter(catalogs.customers, authenticate),
+  );
+  app.use('/api/v1/drivers', createDriversRouter(catalogs.drivers, authenticate));
+  app.use(
+    '/api/v1/vehicles',
+    createVehiclesRouter(catalogs.vehicles, authenticate),
   );
   app.use(notFoundHandler);
   app.use(createErrorHandler(logger));

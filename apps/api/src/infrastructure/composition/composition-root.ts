@@ -3,18 +3,36 @@ import type { DataSource } from 'typeorm';
 import type { AuthConfig } from '../../config/config.js';
 import type { AppDependencies } from '../../http/app.js';
 import {
+  createCustomersModuleFromDataSource,
+  type CustomersModule,
+} from '../../modules/customers/composition/composition-root.js';
+import {
   createDeliveryOrdersModuleFromDataSource,
   type DeliveryOrdersModule,
 } from '../../modules/delivery-orders/composition/composition-root.js';
 import {
+  createDriversModuleFromDataSource,
+  type DriversModule,
+} from '../../modules/drivers/composition/composition-root.js';
+import {
   createIdentityModuleFromDataSource,
   type IdentityModule,
 } from '../../modules/identity-and-access/composition/composition-root.js';
+import {
+  createVehiclesModuleFromDataSource,
+  type VehiclesModule,
+} from '../../modules/vehicles/composition/composition-root.js';
 
 export interface ComposedApiModules {
   readonly deliveryOrders: DeliveryOrdersModule;
   readonly identity: IdentityModule;
-  readonly dependencies: Pick<AppDependencies, 'deliveryOrders' | 'auth'>;
+  readonly customers: CustomersModule;
+  readonly drivers: DriversModule;
+  readonly vehicles: VehiclesModule;
+  readonly dependencies: Pick<
+    AppDependencies,
+    'deliveryOrders' | 'auth' | 'catalogs'
+  >;
 }
 
 /**
@@ -34,12 +52,19 @@ export async function composeApiModules(
   dataSource: DataSource,
   authConfig: AuthConfig,
 ): Promise<ComposedApiModules> {
-  const [deliveryOrders, identity] = await Promise.all([
-    createDeliveryOrdersModuleFromDataSource(dataSource),
-    createIdentityModuleFromDataSource(dataSource, authConfig),
-  ]);
+  const [deliveryOrders, identity, customers, drivers, vehicles] =
+    await Promise.all([
+      createDeliveryOrdersModuleFromDataSource(dataSource),
+      createIdentityModuleFromDataSource(dataSource, authConfig),
+      createCustomersModuleFromDataSource(dataSource),
+      createDriversModuleFromDataSource(dataSource),
+      createVehiclesModuleFromDataSource(dataSource),
+    ]);
 
-  const dependencies: Pick<AppDependencies, 'deliveryOrders' | 'auth'> = {
+  const dependencies: Pick<
+    AppDependencies,
+    'deliveryOrders' | 'auth' | 'catalogs'
+  > = {
     deliveryOrders,
     auth: {
       login: identity.login,
@@ -54,7 +79,8 @@ export async function composeApiModules(
       },
       loginRateLimit: authConfig.loginRateLimit,
     },
+    catalogs: { customers, drivers, vehicles },
   };
 
-  return { deliveryOrders, identity, dependencies };
+  return { deliveryOrders, identity, customers, drivers, vehicles, dependencies };
 }

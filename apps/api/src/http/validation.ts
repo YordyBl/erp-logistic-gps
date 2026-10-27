@@ -1,7 +1,10 @@
 import type { ZodError, ZodType } from 'zod';
 
+import { CustomerValidationError } from '../modules/customers/domain/errors/CustomerError.js';
 import { DeliveryOrderValidationError } from '../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
+import { DriverValidationError } from '../modules/drivers/domain/errors/DriverError.js';
 import { IdentityValidationError } from '../modules/identity-and-access/domain/errors/IdentityError.js';
+import { VehicleValidationError } from '../modules/vehicles/domain/errors/VehicleError.js';
 
 /**
  * Parses untrusted HTTP input with the application's own schema.
@@ -41,6 +44,51 @@ export function parseIdentityOrThrow<T>(
 
   if (!result.success) {
     throw toIdentityValidationError(message, result.error);
+  }
+
+  return result.data;
+}
+
+/** Customer catalog commands and queries (`CUSTOMER_INVALID_INPUT`). */
+export function parseCustomerOrThrow<T>(
+  schema: ZodType<T>,
+  input: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(input);
+
+  if (!result.success) {
+    throw new CustomerValidationError(message, { issues: toIssues(result.error) });
+  }
+
+  return result.data;
+}
+
+/** Driver catalog commands and queries (`DRIVER_INVALID_INPUT`). */
+export function parseDriverOrThrow<T>(
+  schema: ZodType<T>,
+  input: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(input);
+
+  if (!result.success) {
+    throw new DriverValidationError(message, { issues: toIssues(result.error) });
+  }
+
+  return result.data;
+}
+
+/** Vehicle catalog commands and queries (`VEHICLE_INVALID_INPUT`). */
+export function parseVehicleOrThrow<T>(
+  schema: ZodType<T>,
+  input: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(input);
+
+  if (!result.success) {
+    throw new VehicleValidationError(message, { issues: toIssues(result.error) });
   }
 
   return result.data;
