@@ -10,6 +10,7 @@ import type { EventPublisher } from '../application/ports/EventPublisher.js';
 import type { IdGenerator } from '../application/ports/IdGenerator.js';
 import { CreateDeliveryOrderUseCase } from '../application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { GetDeliveryOrderUseCase } from '../application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
+import { ListDeliveryOrdersUseCase } from '../application/use-cases/list-delivery-orders/ListDeliveryOrdersUseCase.js';
 import { CancelDeliveryOrderUseCase } from '../application/use-cases/cancel-delivery-order/CancelDeliveryOrderUseCase.js';
 import { DeliveryOrderForbiddenError, DeliveryOrderInvariantError, DeliveryOrderNotFoundError } from '../domain/errors/DeliveryOrderError.js';
 
@@ -47,6 +48,12 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     }
 
     return null;
+  }
+
+  async list(organizationId: string): Promise<readonly DeliveryOrder[]> {
+    return [...this.orders.values()]
+      .filter((order) => order.organizationId === organizationId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
   }
 
   async cancel(organizationId: string, orderId: string, actorUserId: string, occurredAt: string): Promise<DeliveryOrder> {
@@ -106,6 +113,7 @@ export interface DeliveryOrdersModuleOptions {
 export interface DeliveryOrdersModule {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
+  readonly listDeliveryOrders: ListDeliveryOrdersUseCase;
   readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
   readonly eventPublisher: InMemoryEventPublisher;
@@ -135,6 +143,7 @@ export function createDeliveryOrdersModule(
       eventPublisher,
     }),
     getDeliveryOrder: new GetDeliveryOrderUseCase({ repository }),
+    listDeliveryOrders: new ListDeliveryOrdersUseCase(repository),
     cancelDeliveryOrder: new CancelDeliveryOrderUseCase(repository, clock),
     repository,
     eventPublisher,

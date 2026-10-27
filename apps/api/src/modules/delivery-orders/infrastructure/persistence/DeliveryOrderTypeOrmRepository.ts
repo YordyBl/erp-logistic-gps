@@ -95,6 +95,15 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     return toDomain(orderEntity, orderEntity.packages);
   }
 
+  async list(organizationId: string): Promise<readonly DeliveryOrder[]> {
+    const entities = await this.dataSource.getRepository(DeliveryOrderEntity).find({
+      where: { organizationId },
+      relations: { packages: true },
+      order: { createdAt: 'ASC', id: 'ASC' },
+    });
+    return entities.map((entity) => toDomain(entity, entity.packages));
+  }
+
   async cancel(
     organizationId: string, orderId: string, actorUserId: string, occurredAt: string,
   ): Promise<DeliveryOrder> {

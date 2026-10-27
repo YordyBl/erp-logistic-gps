@@ -8,6 +8,7 @@ import { createDeliveryOrderCommandSchema } from '../../modules/delivery-orders/
 import type { CreateDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderQuery.js';
 import type { GetDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
+import type { ListDeliveryOrdersUseCase } from '../../modules/delivery-orders/application/use-cases/list-delivery-orders/ListDeliveryOrdersUseCase.js';
 import { PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 import { HttpError } from '../errors.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
@@ -27,6 +28,7 @@ import { parseOrThrow } from '../validation.js';
 export interface DeliveryOrdersHttpPorts {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
+  readonly listDeliveryOrders: ListDeliveryOrdersUseCase;
   readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
 }
@@ -80,12 +82,17 @@ export function createDeliveryOrdersRouter(
   });
 
   router.get('/', async (request, response) => {
+    const organizationId = requireOrganizationId(response);
+    if (Object.keys(request.query).length === 0) {
+      const result = await ports.listDeliveryOrders.execute({ organizationId });
+      response.status(200).json({ data: result.orders });
+      return;
+    }
     const query = parseOrThrow(
       publicCodeQuerySchema,
       request.query,
       'List delivery orders query is invalid',
     );
-    const organizationId = requireOrganizationId(response);
 
     // Public codes are unique per organization, so the tenant-scoped repository
     // lookup resolves the internal id. The read use case then applies the

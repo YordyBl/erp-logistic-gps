@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Express } from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
@@ -220,6 +222,9 @@ describe('POST /api/v1/delivery-orders', () => {
       },
       async findByPublicCode() {
         return null;
+      },
+      async list() {
+        return [];
       },
       async cancel() {
         throw new Error('Unexpected cancellation');
@@ -498,17 +503,59 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     expect(response.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
   });
 
-  it('returns 400 when publicCode is missing', async () => {
+  it('lists only the caller organization orders with the existing order DTO shape', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const firstId = await createOrder(app, token);
+    const secondId = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0002' }));
+    await createOrder(app, otherToken, validOrderBody({ publicCode: 'ord-2026-0001' }));
+
+    const response = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(response.status).toBe(200);
+    const first = await request(app).get(`/api/v1/delivery-orders/${firstId}`).set(bearer(token));
+    const second = await request(app).get(`/api/v1/delivery-orders/${secondId}`).set(bearer(token));
+    expect(response.body).toEqual({ data: [first.body.data, second.body.data] });
+    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual([firstId, secondId]);
+
+    const foreignList = await request(app).get('/api/v1/delivery-orders').set(bearer(otherToken));
+    expect(foreignList.status).toBe(200);
+    expect(foreignList.body.data).toHaveLength(1);
+    expect(foreignList.body.data[0].organizationId).toBe(OTHER_ORGANIZATION_ID);
+  });
+
+  it('returns an empty list for a new organization and rejects unrecognized filters', async () => {
     const { app, token } = await buildSeededApp();
+    const empty = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual({ data: [] });
 
-    const response = await request(app)
-      .get('/api/v1/delivery-orders')
-      .set(bearer(token));
+    const invalid = await request(app)
+      .get('/api/v1/delivery-orders').query({ unknown: 'value' }).set(bearer(token));
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+    const missingToken = await request(app).get('/api/v1/delivery-orders');
+    expect(missingToken.status).toBe(401);
+    expect(missingToken.body.error.code).toBe('AUTH_TOKEN_MISSING');
+  });
 
-    expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
-    expect(response.body.error.details.issues).toContainEqual(
-      expect.objectContaining({ path: 'publicCode' }),
-    );
+  it('leaves the order and history unchanged after rejected filters and foreign reads', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const orderId = await createOrder(app, token);
+    const snapshot = async () => {
+      const order = await request(app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(token));
+      const history = await request(app).get(`/api/v1/delivery-orders/${orderId}/history`).set(bearer(token));
+      expect(order.status).toBe(200);
+      expect(history.status).toBe(200);
+      return createHash('sha256').update(JSON.stringify({ order: order.body, history: history.body })).digest('hex');
+    };
+    const before = await snapshot();
+
+    const invalid = await request(app)
+      .get('/api/v1/delivery-orders').query({ unknown: 'value' }).set(bearer(token));
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.message).toBe('List delivery orders query is invalid');
+    const foreign = await request(app).get(`/api/v1/delivery-orders/${orderId}`).set(bearer(otherToken));
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
+    expect(await snapshot()).toBe(before);
   });
 });

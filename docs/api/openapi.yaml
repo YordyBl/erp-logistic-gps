@@ -388,24 +388,26 @@ paths:
           $ref: '#/components/responses/InternalServerError'
     get:
       tags: [delivery-orders]
+      # Preserve the generated-client operation name for existing code lookups.
       operationId: getDeliveryOrderByPublicCode
-      summary: Read a delivery order by public code
+      summary: List tenant orders or read one by public code
       description: |
-        Looks up one order by its readable public code inside the caller's
-        organization and returns the same resource shape as the other read
-        endpoint. Unknown codes and codes owned by another organization are both
-        404 (enumeration safety).
+        Without query parameters, lists the caller's organization orders in
+        ascending creation time then id, including cancelled orders. An empty
+        organization returns `data: []`. With `publicCode`, looks up exactly one
+        order and preserves the existing single-resource response; unknown codes
+        and codes owned by another organization both return 404.
 
-        Other list filters and pagination are future work; a request without
-        `publicCode` is rejected with 400.
+        Unknown query parameters are rejected with 400. Other filters and
+        pagination remain future work.
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - name: publicCode
           in: query
-          required: true
-          description: Readable order code, case-insensitive (normalized to uppercase).
+          required: false
+          description: Optional readable order code; when absent, return the tenant list.
           schema:
             type: string
             minLength: 3
@@ -414,14 +416,22 @@ paths:
           example: ORD-2026-0001
       responses:
         '200':
-          description: Order found in the caller's organization.
+          description: Tenant order list or one order matching publicCode.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DeliveryOrderResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/DeliveryOrderResponse'
+                  - type: object
+                    required: [data]
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DeliveryOrder'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':

@@ -137,6 +137,14 @@ status transitions as `{ "data": [{ "fromStatus": "created", "toStatus":
 "cancelled", "actorUserId": "<uuid>", "occurredAt": "<ISO-8601>" }] }`.
 A new order returns `data: []`; foreign or unknown ids return `404`.
 
+### `GET /api/v1/delivery-orders`
+
+Lists only orders owned by the authenticated organization, sorted by `createdAt`
+then `id` (ascending). Returns `200` with `{ "data": [<order DTO>, ...] }`, or
+`{ "data": [] }` when empty. Cancelled orders remain visible. A missing/invalid
+token returns `401`; unknown query parameters return `400`. Other filters and
+pagination remain future work.
+
 ### `GET /api/v1/delivery-orders?publicCode=...`
 
 Reads one order by its readable code. The code is normalized to uppercase and
@@ -155,8 +163,8 @@ Example: `GET /api/v1/delivery-orders?publicCode=ord-2026-0001`
 
 ### List filters and pagination (future)
 
-Only `publicCode` lookup is implemented. `status`, date ranges, cursor pagination
-and `limit` remain future work; today a request without `publicCode` is `400`.
+The tenant list and `publicCode` lookup are implemented. `status`, date ranges,
+cursor pagination and `limit` remain future work.
 
 ## Error model
 

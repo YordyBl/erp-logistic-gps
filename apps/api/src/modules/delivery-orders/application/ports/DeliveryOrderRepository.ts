@@ -20,6 +20,8 @@ export interface DeliveryOrderRepository {
     organizationId: string,
     publicCode: string,
   ): Promise<DeliveryOrder | null>;
+  /** Stable order for tenant-scoped listing; never returns another tenant's orders. */
+  list(organizationId: string): Promise<readonly DeliveryOrder[]>;
   /** Atomically change status and append its audit row, or change neither. */
   cancel(
     organizationId: string,

@@ -227,6 +227,27 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     await expect(repositoryOrThrow().findById(randomUUID())).resolves.toBeNull();
   });
 
+  it('lists tenant orders in stable order, retaining cancelled status and package order', async () => {
+    const ownerId = await newOrganizationId();
+    const foreignId = await newOrganizationId();
+    const first = buildOrder(ownerId, 'LIST-001');
+    const second = buildOrder(ownerId, 'LIST-002');
+    const foreign = buildOrder(foreignId, 'LIST-003');
+    await repositoryOrThrow().save(second);
+    await repositoryOrThrow().save(first);
+    await repositoryOrThrow().save(foreign);
+    await repositoryOrThrow().cancel(ownerId, first.id, randomUUID(), CREATED_AT);
+
+    const listed = await repositoryOrThrow().list(ownerId);
+    expect(listed.map((order) => order.id)).toEqual([first.id, second.id].sort());
+    expect(listed.find((order) => order.id === first.id)?.status).toBe('cancelled');
+    expect(listed.find((order) => order.id === first.id)?.packages.map((item) => item.code))
+      .toEqual(['PKG-001', 'PKG-002']);
+    const foreignList = await repositoryOrThrow().list(foreignId);
+    expect(foreignList.map((order) => order.id)).toEqual([foreign.id]);
+    await expect(repositoryOrThrow().list(await newOrganizationId())).resolves.toEqual([]);
+  });
+
   it('enforces public-code uniqueness per organization and scopes the lookup by organization', async () => {
     const firstOrganizationId = await newOrganizationId();
     const secondOrganizationId = await newOrganizationId();
