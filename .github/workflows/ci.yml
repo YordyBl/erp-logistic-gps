@@ -50,6 +50,8 @@ jobs:
         env:
           POSTGRES_DB: erp_logistic
           POSTGRES_USER: erp_logistic
+          # Non-secret ephemeral password for the throwaway CI container only;
+          # it never touches a shared or deployed database (Fase 0 review note).
           POSTGRES_PASSWORD: ci-local-only
         ports:
           - 5432:5432

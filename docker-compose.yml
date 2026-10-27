@@ -64,9 +64,11 @@ services:
 
   # S3-compatible object storage for delivery evidence in the demo stack.
   # `minio/minio` is no longer published on Docker Hub, so this pins the
-  # community MinIO build ratified for the demo stack.
+  # community MinIO build ratified for the demo stack by multi-arch index
+  # digest (Fase 0 review follow-up: a digest pin prevents supply-chain drift
+  # under a mutable tag).
   minio:
-    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    image: pgsty/minio@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
