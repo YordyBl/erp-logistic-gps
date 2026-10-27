@@ -4,8 +4,8 @@ info:
   version: 0.2.0
   summary: Last-mile delivery ERP for Lima Metropolitana and Callao
   description: |
-    Fase 1 HTTP contract: JWT authentication plus the pilot `delivery-orders`
-    module.
+    Fase 1 HTTP contract: JWT authentication, the pilot `delivery-orders`
+    module, and the org-scoped customer, driver and vehicle catalogs.
 
     **Authentication.** Every `/api/v1` business route requires
     `Authorization: Bearer <access JWT>`. The token is HS256-only and carries
@@ -44,6 +44,12 @@ tags:
     description: ADMIN-only user provisioning
   - name: delivery-orders
     description: Create and read delivery orders inside one organization
+  - name: customers
+    description: Customer catalog inside one organization
+  - name: drivers
+    description: Driver catalog inside one organization
+  - name: vehicles
+    description: Fleet catalog inside one organization
   - name: health
     description: Liveness and readiness probes
 paths:
@@ -457,6 +463,459 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/customers:
+    post:
+      tags: [customers]
+      operationId: createCustomer
+      summary: Create a customer (ADMIN or DISPATCHER)
+      description: |
+        Creates a customer in the caller's organization. `organizationId` is not
+        part of the body: it comes from the verified JWT, and a body field with
+        that name is rejected as an unknown property. `publicCode` is trimmed,
+        uppercased and unique per organization (409 on duplicates).
+
+        The customer catalog has no update or delete route in this milestone.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+            examples:
+              distributor:
+                summary: Corporate customer with a contact person
+                value:
+                  publicCode: CUS-2026-0001
+                  name: Distribuidora Lima SAC
+                  contactName: Ana Torres
+                  contactEmail: contacto@distribuidora.pe
+                  contactPhone: '+51 987 654 321'
+      responses:
+        '201':
+          description: Customer created.
+          headers:
+            Location:
+              description: Relative URL of the created customer.
+              schema:
+                type: string
+              example: /api/v1/customers/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/CatalogConflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [customers]
+      operationId: listCustomers
+      summary: List customers of the caller organization
+      description: |
+        Returns the caller organization customers, oldest first. Every
+        authenticated role may read the catalog; filters and pagination are
+        future work.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Customers of the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/customers/{customerId}:
+    get:
+      tags: [customers]
+      operationId: getCustomer
+      summary: Read a customer by id
+      description: |
+        Returns one customer owned by the caller organization. An unknown id and
+        an id from another organization both return `404 CUSTOMER_NOT_FOUND`
+        (enumeration safety).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: customerId
+          in: path
+          required: true
+          description: Internal customer UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Customer found in the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/CatalogNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/drivers:
+    post:
+      tags: [drivers]
+      operationId: createDriver
+      summary: Create a driver (ADMIN or DISPATCHER)
+      description: |
+        Creates a driver in the caller's organization. `organizationId` is not
+        part of the body and is rejected if sent. `documentNumber` and
+        `licenseNumber` are trimmed and uppercased; the document number is unique
+        per organization (409 on duplicates) and immutable afterwards.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDriverRequest'
+            examples:
+              driver:
+                summary: Driver with a national identity document
+                value:
+                  fullName: Luis Quispe
+                  documentNumber: DNI-12345678
+                  phone: '+51 911 222 333'
+                  licenseNumber: Q-987654
+      responses:
+        '201':
+          description: Driver created.
+          headers:
+            Location:
+              description: Relative URL of the created driver.
+              schema:
+                type: string
+              example: /api/v1/drivers/cccccccc-cccc-4ccc-8ccc-cccccccccccc
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/CatalogConflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [drivers]
+      operationId: listDrivers
+      summary: List drivers of the caller organization
+      description: |
+        Returns the caller organization drivers, oldest first. Every
+        authenticated role may read the catalog.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Drivers of the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/drivers/{driverId}:
+    get:
+      tags: [drivers]
+      operationId: getDriver
+      summary: Read a driver by id
+      description: |
+        Returns one driver owned by the caller organization. Another
+        organization's id is indistinguishable from an unknown one:
+        `404 DRIVER_NOT_FOUND`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: driverId
+          in: path
+          required: true
+          description: Internal driver UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Driver found in the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/CatalogNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags: [drivers]
+      operationId: updateDriver
+      summary: Update a driver (ADMIN or DISPATCHER)
+      description: |
+        Partial update of the mutable driver fields. At least one field is
+        required. The document number, tenant, id and creation time are immutable;
+        `updatedAt` is stamped by the server. Omitted fields keep their value.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: driverId
+          in: path
+          required: true
+          description: Internal driver UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateDriverRequest'
+            examples:
+              deactivate:
+                summary: Rename and deactivate a driver
+                value:
+                  fullName: Luis Quispe Rojas
+                  status: inactive
+      responses:
+        '200':
+          description: Driver updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/CatalogNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/vehicles:
+    post:
+      tags: [vehicles]
+      operationId: createVehicle
+      summary: Create a vehicle (ADMIN or DISPATCHER)
+      description: |
+        Creates a vehicle in the caller's organization. The plate is trimmed,
+        uppercased and unique per organization (409 on duplicates). `capacityKg`
+        is optional and nullable; `type` is free text in this milestone.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVehicleRequest'
+            examples:
+              van:
+                summary: Van with an 800 kg payload
+                value:
+                  plate: ABC-123
+                  type: van
+                  capacityKg: 800
+      responses:
+        '201':
+          description: Vehicle created.
+          headers:
+            Location:
+              description: Relative URL of the created vehicle.
+              schema:
+                type: string
+              example: /api/v1/vehicles/dddddddd-dddd-4ddd-8ddd-dddddddddddd
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/CatalogConflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    get:
+      tags: [vehicles]
+      operationId: listVehicles
+      summary: List vehicles of the caller organization
+      description: |
+        Returns the caller organization vehicles, oldest first. Every
+        authenticated role may read the catalog.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Vehicles of the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/vehicles/{vehicleId}:
+    get:
+      tags: [vehicles]
+      operationId: getVehicle
+      summary: Read a vehicle by id
+      description: |
+        Returns one vehicle owned by the caller organization. Another
+        organization's id is indistinguishable from an unknown one:
+        `404 VEHICLE_NOT_FOUND`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: vehicleId
+          in: path
+          required: true
+          description: Internal vehicle UUID.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Vehicle found in the caller organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/CatalogNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+    patch:
+      tags: [vehicles]
+      operationId: updateVehicle
+      summary: Update a vehicle (ADMIN or DISPATCHER)
+      description: |
+        Partial update of the mutable vehicle fields. At least one field is
+        required. The plate, tenant, id and creation time are immutable;
+        `updatedAt` is stamped by the server. Omitting `capacityKg` keeps the
+        stored value; sending `null` clears it.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: vehicleId
+          in: path
+          required: true
+          description: Internal vehicle UUID.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateVehicleRequest'
+            examples:
+              clearCapacity:
+                summary: Deactivate and clear the payload
+                value:
+                  capacityKg: null
+                  status: inactive
+      responses:
+        '200':
+          description: Vehicle updated.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/CatalogNotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 components:
   securitySchemes:
     bearerAuth:
@@ -504,10 +963,11 @@ components:
   responses:
     BadRequest:
       description: |
-        Invalid input: Zod validation issues (`IDENTITY_INVALID_INPUT` or
-        `DELIVERY_ORDER_INVALID_INPUT` with `details.issues`), a weak password
-        (`IDENTITY_WEAK_PASSWORD` with `details.reasons`), a malformed UUID or
-        malformed JSON (`INVALID_JSON`).
+        Invalid input: Zod validation issues (`IDENTITY_INVALID_INPUT`,
+        `DELIVERY_ORDER_INVALID_INPUT`, `CUSTOMER_INVALID_INPUT`,
+        `DRIVER_INVALID_INPUT` or `VEHICLE_INVALID_INPUT` with `details.issues`),
+        a weak password (`IDENTITY_WEAK_PASSWORD` with `details.reasons`), a
+        malformed UUID or malformed JSON (`INVALID_JSON`).
       content:
         application/json:
           schema:
@@ -608,6 +1068,82 @@ components:
                 error:
                   code: DELIVERY_ORDER_NOT_FOUND
                   message: Delivery order 99999999-9999-4999-8999-999999999999 was not found
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    CatalogNotFound:
+      description: |
+        The customer, driver or vehicle does not exist in the caller
+        organization. Another tenant's id returns the same body and code as an
+        unknown id (`CUSTOMER_NOT_FOUND`, `DRIVER_NOT_FOUND` or
+        `VEHICLE_NOT_FOUND`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            unknownCustomer:
+              summary: Unknown customer id or another tenant's customer
+              value:
+                error:
+                  code: CUSTOMER_NOT_FOUND
+                  message: Customer bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb was not found
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+            unknownDriver:
+              summary: Unknown driver id or another tenant's driver
+              value:
+                error:
+                  code: DRIVER_NOT_FOUND
+                  message: Driver cccccccc-cccc-4ccc-8ccc-cccccccccccc was not found
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+            unknownVehicle:
+              summary: Unknown vehicle id or another tenant's vehicle
+              value:
+                error:
+                  code: VEHICLE_NOT_FOUND
+                  message: Vehicle dddddddd-dddd-4ddd-8ddd-dddddddddddd was not found
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+    CatalogConflict:
+      description: |
+        A catalog identifier is already used in this organization:
+        `CUSTOMER_INVARIANT_VIOLATION` (`publicCode`),
+        `DRIVER_INVARIANT_VIOLATION` (`documentNumber`) or
+        `VEHICLE_INVARIANT_VIOLATION` (`plate`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          examples:
+            duplicateCustomerCode:
+              summary: Public code already used in the organization
+              value:
+                error:
+                  code: CUSTOMER_INVARIANT_VIOLATION
+                  message: Customer code CUS-2026-0001 is already used in organization 11111111-1111-4111-8111-111111111111
+                  details:
+                    field: publicCode
+                    publicCode: CUS-2026-0001
+                    organizationId: 11111111-1111-4111-8111-111111111111
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+            duplicateDocument:
+              summary: Document number already used in the organization
+              value:
+                error:
+                  code: DRIVER_INVARIANT_VIOLATION
+                  message: Driver document DNI-12345678 is already used in organization 11111111-1111-4111-8111-111111111111
+                  details:
+                    field: documentNumber
+                    documentNumber: DNI-12345678
+                    organizationId: 11111111-1111-4111-8111-111111111111
+                  correlationId: c0ffee00-0000-4000-8000-000000000000
+            duplicatePlate:
+              summary: Plate already used in the organization
+              value:
+                error:
+                  code: VEHICLE_INVARIANT_VIOLATION
+                  message: Vehicle plate ABC-123 is already used in organization 11111111-1111-4111-8111-111111111111
+                  details:
+                    field: plate
+                    plate: ABC-123
+                    organizationId: 11111111-1111-4111-8111-111111111111
                   correlationId: c0ffee00-0000-4000-8000-000000000000
     Conflict:
       description: |
@@ -956,6 +1492,277 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/DeliveryOrder'
+    CatalogStatus:
+      type: string
+      enum: [active, inactive]
+    Customer:
+      type: object
+      additionalProperties: false
+      required:
+        [id, organizationId, publicCode, name, contactName, contactEmail, contactPhone, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        publicCode:
+          type: string
+          minLength: 3
+          maxLength: 32
+          pattern: '^[A-Z0-9]+(?:-[A-Z0-9]+)*$'
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        contactName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        contactEmail:
+          type: string
+          format: email
+          maxLength: 254
+        contactPhone:
+          type: string
+          minLength: 6
+          maxLength: 32
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        createdAt:
+          type: string
+          format: date-time
+    CreateCustomerRequest:
+      type: object
+      additionalProperties: false
+      required: [publicCode, name, contactName, contactEmail, contactPhone]
+      properties:
+        publicCode:
+          type: string
+          minLength: 3
+          maxLength: 32
+          description: Trimmed and uppercased; unique per organization.
+        name:
+          type: string
+          minLength: 2
+          maxLength: 120
+        contactName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        contactEmail:
+          type: string
+          format: email
+          maxLength: 254
+          description: Trimmed and lowercased.
+        contactPhone:
+          type: string
+          minLength: 6
+          maxLength: 32
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+          default: active
+    CustomerResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Customer'
+    CustomerListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Customer'
+    Driver:
+      type: object
+      additionalProperties: false
+      required:
+        [id, organizationId, fullName, documentNumber, phone, licenseNumber, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        documentNumber:
+          type: string
+          minLength: 6
+          maxLength: 20
+          description: Immutable after creation.
+        phone:
+          type: string
+          minLength: 6
+          maxLength: 32
+        licenseNumber:
+          type: string
+          minLength: 4
+          maxLength: 40
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateDriverRequest:
+      type: object
+      additionalProperties: false
+      required: [fullName, documentNumber, phone, licenseNumber]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        documentNumber:
+          type: string
+          minLength: 6
+          maxLength: 20
+          description: Trimmed and uppercased; unique per organization.
+        phone:
+          type: string
+          minLength: 6
+          maxLength: 32
+        licenseNumber:
+          type: string
+          minLength: 4
+          maxLength: 40
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+          default: active
+    UpdateDriverRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        At least one mutable field. `documentNumber` and the tenant are not
+        editable; `updatedAt` is stamped by the server.
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        phone:
+          type: string
+          minLength: 6
+          maxLength: 32
+        licenseNumber:
+          type: string
+          minLength: 4
+          maxLength: 40
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+    DriverResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Driver'
+    DriverListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Driver'
+    Vehicle:
+      type: object
+      additionalProperties: false
+      required:
+        [id, organizationId, plate, type, capacityKg, status, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        organizationId:
+          type: string
+          format: uuid
+        plate:
+          type: string
+          minLength: 3
+          maxLength: 16
+          pattern: '^[A-Z0-9]+(?:-[A-Z0-9]+)*$'
+          description: Immutable after creation.
+        type:
+          type: string
+          minLength: 2
+          maxLength: 40
+          description: Free text in this milestone.
+        capacityKg:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+          maximum: 100000
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateVehicleRequest:
+      type: object
+      additionalProperties: false
+      required: [plate, type]
+      properties:
+        plate:
+          type: string
+          minLength: 3
+          maxLength: 16
+          description: Trimmed and uppercased; unique per organization.
+        type:
+          type: string
+          minLength: 2
+          maxLength: 40
+        capacityKg:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+          maximum: 100000
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+          default: active
+    UpdateVehicleRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        At least one mutable field. The plate and the tenant are not editable.
+        Omitting `capacityKg` keeps the stored value; `null` clears it.
+      properties:
+        type:
+          type: string
+          minLength: 2
+          maxLength: 40
+        capacityKg:
+          type: [number, 'null']
+          exclusiveMinimum: 0
+          maximum: 100000
+        status:
+          $ref: '#/components/schemas/CatalogStatus'
+    VehicleResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/Vehicle'
+    VehicleListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Vehicle'
     ValidationIssue:
       type: object
       required: [path, message]
