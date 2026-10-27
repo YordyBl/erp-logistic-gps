@@ -9,6 +9,7 @@ import type { CreateDeliveryOrderUseCase } from '../../modules/delivery-orders/a
 import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderQuery.js';
 import type { GetDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
 import type { ListDeliveryOrdersUseCase } from '../../modules/delivery-orders/application/use-cases/list-delivery-orders/ListDeliveryOrdersUseCase.js';
+import { editOrderBodySchema, type EditDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/edit-delivery-order/EditDeliveryOrderUseCase.js';
 import { PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 import { HttpError } from '../errors.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
@@ -29,6 +30,7 @@ export interface DeliveryOrdersHttpPorts {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
   readonly listDeliveryOrders: ListDeliveryOrdersUseCase;
+  readonly editDeliveryOrder: EditDeliveryOrderUseCase;
   readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
 }
@@ -131,6 +133,17 @@ export function createDeliveryOrdersRouter(
 
     const result = await ports.getDeliveryOrder.execute(query);
 
+    response.status(200).json({ data: result.order });
+  });
+
+  router.patch('/:orderId', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
+    const changes = parseOrThrow(editOrderBodySchema, request.body,
+      'Edit delivery order request body is invalid');
+    const result = await ports.editDeliveryOrder.execute({
+      organizationId: requireOrganizationId(response),
+      orderId: request.params.orderId,
+      changes,
+    });
     response.status(200).json({ data: result.order });
   });
 

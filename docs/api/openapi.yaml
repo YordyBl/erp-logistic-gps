@@ -441,6 +441,50 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/delivery-orders/{orderId}:
+    patch:
+      tags: [delivery-orders]
+      operationId: editDeliveryOrder
+      summary: Edit order-owned details before planning (ADMIN or DISPATCHER)
+      description: |
+        Replaces each supplied recipient, deliveryAddress or ordered packages
+        value while the order is created. Omitted values stay unchanged.
+        Immutable identity, publicCode, status and createdAt are preserved.
+        A non-created order rejects edits with 409, without changing history.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditDeliveryOrderRequest'
+      responses:
+        '200':
+          description: Updated order; status and createdAt unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryOrderResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
     get:
       tags: [delivery-orders]
       operationId: getDeliveryOrder
@@ -1579,6 +1623,21 @@ components:
           pattern: '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$'
           description: Normalized to uppercase and unique per organization.
           example: ORD-2026-0001
+        recipient:
+          $ref: '#/components/schemas/Recipient'
+        deliveryAddress:
+          $ref: '#/components/schemas/DeliveryAddress'
+        packages:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CreatePackage'
+    EditDeliveryOrderRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
         recipient:
           $ref: '#/components/schemas/Recipient'
         deliveryAddress:

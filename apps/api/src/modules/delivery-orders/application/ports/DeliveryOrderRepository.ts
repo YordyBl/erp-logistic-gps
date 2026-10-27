@@ -1,4 +1,7 @@
 import type { DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
+import type { DeliveryAddress } from '../../domain/value-objects/DeliveryAddress.js';
+import type { Package } from '../../domain/value-objects/Package.js';
+import type { Recipient } from '../../domain/value-objects/Recipient.js';
 import type { DeliveryOrderStatusHistory } from './DeliveryOrderStatusHistory.js';
 
 /**
@@ -22,6 +25,12 @@ export interface DeliveryOrderRepository {
   ): Promise<DeliveryOrder | null>;
   /** Stable order for tenant-scoped listing; never returns another tenant's orders. */
   list(organizationId: string): Promise<readonly DeliveryOrder[]>;
+  /** Lock and recheck tenant/status before changing order-owned details. */
+  editDetails(organizationId: string, orderId: string, changes: {
+    readonly recipient?: Recipient;
+    readonly deliveryAddress?: DeliveryAddress;
+    readonly packages?: readonly Package[];
+  }, occurredAt: string): Promise<DeliveryOrder>;
   /** Atomically change status and append its audit row, or change neither. */
   cancel(
     organizationId: string,

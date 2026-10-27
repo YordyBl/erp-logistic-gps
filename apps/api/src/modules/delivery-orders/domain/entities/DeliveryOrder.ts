@@ -150,6 +150,27 @@ export class DeliveryOrder {
       status: 'cancelled', updatedAt: occurredAt,
     });
   }
+
+  /** Details may change only before the order is planned into a route. */
+  editDetails(changes: {
+    readonly recipient?: Recipient;
+    readonly deliveryAddress?: DeliveryAddress;
+    readonly packages?: readonly Package[];
+  }, occurredAt: string): DeliveryOrder {
+    if (this.status !== 'created') {
+      throw new DeliveryOrderInvariantError(
+        `Delivery order cannot be edited from status ${this.status}`,
+        { status: this.status },
+      );
+    }
+    return DeliveryOrder.restore({
+      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      recipient: changes.recipient ?? this.recipient,
+      deliveryAddress: changes.deliveryAddress ?? this.deliveryAddress,
+      packages: changes.packages ?? this.packages,
+      createdAt: this.createdAt, updatedAt: occurredAt, status: this.status,
+    });
+  }
 }
 
 function normalizePublicCode(value: unknown): string {

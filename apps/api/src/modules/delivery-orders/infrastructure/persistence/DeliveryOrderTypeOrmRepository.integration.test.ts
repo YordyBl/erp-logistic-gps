@@ -161,6 +161,37 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     expect(loaded?.packages.map((item) => item.code)).toEqual(['PKG-001', 'PKG-002']);
   });
 
+  it('atomically edits created order details without crossing tenants or changing status history', async () => {
+    const organizationId = await newOrganizationId();
+    const otherOrganizationId = await newOrganizationId();
+    const order = buildOrder(organizationId, 'EDIT-001');
+    const changedAt = '2026-10-26T15:01:00.000Z';
+    const changes = {
+      recipient: Recipient.create({ name: 'New Recipient', phone: '+51 999 888 777' }),
+      deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 900', district: 'Lince' }),
+      packages: [Package.create({ code: 'NEW-001', description: 'Parcel' })],
+    };
+    await repositoryOrThrow().save(order);
+    await expect(repositoryOrThrow().editDetails(otherOrganizationId, order.id, changes, changedAt))
+      .rejects.toBeInstanceOf(DeliveryOrderForbiddenError);
+    expect(toDeliveryOrderDto(await repositoryOrThrow().findById(order.id) as DeliveryOrder))
+      .toEqual(toDeliveryOrderDto(order));
+    const edited = await repositoryOrThrow().editDetails(organizationId, order.id, changes, changedAt);
+    expect(edited.recipient.name).toBe(changes.recipient.name);
+    expect(edited.deliveryAddress.latitude).toBeUndefined();
+    expect(edited.packages.map((item) => item.code)).toEqual(['NEW-001']);
+    expect(edited.createdAt).toBe(CREATED_AT);
+    expect(edited.updatedAt).toBe(changedAt);
+    expect(toDeliveryOrderDto(await repositoryOrThrow().findById(order.id) as DeliveryOrder))
+      .toEqual(toDeliveryOrderDto(edited));
+    await expect(repositoryOrThrow().findStatusHistory(organizationId, order.id)).resolves.toEqual([]);
+    await repositoryOrThrow().cancel(organizationId, order.id, randomUUID(), changedAt);
+    await expect(repositoryOrThrow().editDetails(organizationId, order.id, changes, changedAt))
+      .rejects.toBeInstanceOf(DeliveryOrderInvariantError);
+    expect((await repositoryOrThrow().findById(order.id))?.recipient.name).toBe('New Recipient');
+    await expect(repositoryOrThrow().findStatusHistory(organizationId, order.id)).resolves.toHaveLength(1);
+  });
+
   it('replaces the package rows when an existing aggregate is saved again', async () => {
     const order = buildOrder(await newOrganizationId(), 'SAN-MIGUEL-9');
 

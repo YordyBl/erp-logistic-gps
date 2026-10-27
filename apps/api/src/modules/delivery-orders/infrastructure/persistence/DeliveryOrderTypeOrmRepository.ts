@@ -104,6 +104,31 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     return entities.map((entity) => toDomain(entity, entity.packages));
   }
 
+  async editDetails(organizationId: string, orderId: string, changes: Parameters<DeliveryOrderRepository['editDetails']>[2], occurredAt: string): Promise<DeliveryOrder> {
+    return this.dataSource.transaction(async (manager) => {
+      const entity = await manager.findOne(DeliveryOrderEntity, {
+        where: { id: orderId }, lock: { mode: 'pessimistic_write' },
+      });
+      if (entity === null) throw new DeliveryOrderNotFoundError(orderId);
+      if (entity.organizationId !== organizationId) throw new DeliveryOrderForbiddenError(orderId, organizationId);
+      const packages = await manager.find(DeliveryOrderPackageEntity, {
+        where: { deliveryOrderId: orderId },
+      });
+      const edited = toDomain(entity, packages).editDetails(changes, occurredAt);
+      const mapped = toOrderEntity(edited);
+      await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
+        recipientName: mapped.recipientName, recipientPhone: mapped.recipientPhone,
+        deliveryAddressLine: mapped.deliveryAddressLine, deliveryDistrict: mapped.deliveryDistrict,
+        latitude: mapped.latitude, longitude: mapped.longitude, updatedAt: mapped.updatedAt,
+      });
+      if (changes.packages !== undefined) {
+        await manager.delete(DeliveryOrderPackageEntity, { deliveryOrderId: orderId });
+        await manager.save(toPackageEntities(edited));
+      }
+      return edited;
+    });
+  }
+
   async cancel(
     organizationId: string, orderId: string, actorUserId: string, occurredAt: string,
   ): Promise<DeliveryOrder> {

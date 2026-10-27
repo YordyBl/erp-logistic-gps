@@ -92,6 +92,28 @@ describe('DeliveryOrder aggregate', () => {
         .toThrow(DeliveryOrderInvariantError);
     }
   });
+
+  it('edits details only in created, preserving identity and rejecting every later status', () => {
+    const original = DeliveryOrder.create(orderProps());
+    const at = '2026-10-26T15:01:00.000Z';
+    const edited = original.editDetails({ recipient: Recipient.create({
+      name: 'New Recipient', phone: '+51 988 777 666',
+    }) }, at);
+    expect(edited.recipient.name).toBe('New Recipient');
+    expect(edited.id).toBe(original.id);
+    expect(edited.organizationId).toBe(original.organizationId);
+    expect(edited.publicCode).toBe(original.publicCode);
+    expect(edited.status).toBe('created');
+    expect(edited.createdAt).toBe(original.createdAt);
+    expect(edited.updatedAt).toBe(at);
+    expect(original.recipient.name).toBe('Rosa Medina');
+    for (const status of ['planned', 'assigned', 'in_transit', 'delivered', 'returned', 'cancelled'] as const) {
+      const later = DeliveryOrder.restore({ ...orderProps(), status, updatedAt: at });
+      expect(() => later.editDetails({ recipient }, at)).toThrow(DeliveryOrderInvariantError);
+      expect(later.recipient.name).toBe('Rosa Medina');
+    }
+    expect(() => original.editDetails({ packages: [] }, at)).toThrow(DeliveryOrderInvariantError);
+  });
 });
 
 describe('Value objects', () => {

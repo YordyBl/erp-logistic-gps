@@ -119,6 +119,19 @@ Reads one order inside the caller's organization.
 
 Response `200 OK` uses the same `data` object as the create response.
 
+### `PATCH /api/v1/delivery-orders/{orderId}`
+
+An authenticated ADMIN or DISPATCHER may change one or more whole order-owned
+`recipient`, `deliveryAddress`, or `packages` values only while status is
+`created`. Omitted values remain unchanged; at least one value is required.
+Each supplied value uses the same shape and validation as creation (packages
+replace the whole ordered array). `id`, `organizationId`, `publicCode`, status,
+and `createdAt` cannot be changed. Returns `200` with the updated order DTO;
+`updatedAt` reflects the edit. Unknown/foreign ids return `404`; a non-created
+order returns `409`. Invalid/unknown body fields return `400`, an absent token
+`401`, and a DRIVER `403`. Rejected edits change neither the order nor its
+status history. Editing details does not create a status-transition event.
+
 ### `POST /api/v1/delivery-orders/{orderId}/cancel`
 
 Only an authenticated ADMIN or DISPATCHER may cancel an order in `created`,

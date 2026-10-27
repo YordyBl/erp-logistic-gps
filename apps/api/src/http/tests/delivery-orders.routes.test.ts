@@ -226,6 +226,9 @@ describe('POST /api/v1/delivery-orders', () => {
       async list() {
         return [];
       },
+      async editDetails() {
+        throw new Error('Unexpected edit');
+      },
       async cancel() {
         throw new Error('Unexpected cancellation');
       },
@@ -513,8 +516,11 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     expect(response.status).toBe(200);
     const first = await request(app).get(`/api/v1/delivery-orders/${firstId}`).set(bearer(token));
     const second = await request(app).get(`/api/v1/delivery-orders/${secondId}`).set(bearer(token));
-    expect(response.body).toEqual({ data: [first.body.data, second.body.data] });
-    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual([firstId, secondId]);
+    const sorted = [first.body.data, second.body.data].sort(
+      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+    );
+    expect(response.body).toEqual({ data: sorted });
+    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual(sorted.map((order) => order.id));
 
     const foreignList = await request(app).get('/api/v1/delivery-orders').set(bearer(otherToken));
     expect(foreignList.status).toBe(200);
@@ -557,5 +563,118 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     expect(foreign.status).toBe(404);
     expect(foreign.body.error.code).toBe('DELIVERY_ORDER_NOT_FOUND');
     expect(await snapshot()).toBe(before);
+  });
+});
+
+describe('PATCH /api/v1/delivery-orders/:orderId', () => {
+  it('rejects DRIVER edits without changing the order or history', async () => {
+    const testApp = buildTestApp();
+    await testApp.seedOrganization();
+    const admin = await testApp.seedUser();
+    const driver = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const adminToken = await testApp.signIn(admin);
+    const driverToken = await testApp.signIn(driver);
+    const id = await createOrder(testApp.app, adminToken);
+    const path = `/api/v1/delivery-orders/${id}`;
+    const before = await request(testApp.app).get(path).set(bearer(adminToken));
+    const history = await request(testApp.app).get(`${path}/history`).set(bearer(adminToken));
+    const denied = await request(testApp.app).patch(path).set(bearer(driverToken))
+      .send({ recipient: { name: 'No', phone: '+51 999 888 777' } });
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe('AUTH_FORBIDDEN');
+    expect((await request(testApp.app).get(path).set(bearer(adminToken))).body).toEqual(before.body);
+    expect((await request(testApp.app).get(`${path}/history`).set(bearer(adminToken))).body)
+      .toEqual(history.body);
+  });
+
+  it('rejects immutable fields and duplicate packages without writes', async () => {
+    const { app, token } = await buildSeededApp();
+    const id = await createOrder(app, token);
+    const path = `/api/v1/delivery-orders/${id}`;
+    const before = await request(app).get(path).set(bearer(token));
+    const history = await request(app).get(`${path}/history`).set(bearer(token));
+    for (const immutable of [
+      { id: UNKNOWN_ORDER_ID },
+      { organizationId: OTHER_ORGANIZATION_ID },
+      { publicCode: 'OTHER-001' },
+      { status: 'planned' },
+      { createdAt: '2026-10-27T00:00:00.000Z' },
+    ]) {
+      const rejected = await request(app).patch(path).set(bearer(token))
+        .send({ recipient: { name: 'No', phone: '+51 999 888 777' }, ...immutable });
+      expect(rejected.status).toBe(400);
+      expect(rejected.body.error.message).toBe('Edit delivery order request body is invalid');
+    }
+    const duplicate = await request(app).patch(path).set(bearer(token)).send({
+      packages: [
+        { code: 'DUP-1', description: 'One' },
+        { code: 'DUP-1', description: 'Two' },
+      ],
+    });
+    expect(duplicate.status).toBe(409);
+    expect((await request(app).get(path).set(bearer(token))).body).toEqual(before.body);
+    expect((await request(app).get(`${path}/history`).set(bearer(token))).body)
+      .toEqual(history.body);
+  });
+
+  it('edits order-owned details only while created and keeps identity, status and history', async () => {
+    const { app, token } = await buildSeededApp();
+    const id = await createOrder(app, token);
+    const original = await request(app).get(`/api/v1/delivery-orders/${id}`).set(bearer(token));
+    const changes = {
+      recipient: { name: 'New Recipient', phone: '+51 999 888 777' },
+      deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince' },
+      packages: [{ code: 'NEW-001', description: 'Replacement parcel' }],
+    };
+    const changed = await request(app).patch(`/api/v1/delivery-orders/${id}`)
+      .set(bearer(token)).send(changes);
+    expect(changed.status).toBe(200);
+    expect(changed.body.data).toMatchObject({
+      id, organizationId: ORGANIZATION_ID, publicCode: original.body.data.publicCode,
+      status: 'created', recipient: changes.recipient,
+      deliveryAddress: { ...changes.deliveryAddress, latitude: null, longitude: null },
+      packages: [{ ...changes.packages[0], weightKg: null }],
+      createdAt: original.body.data.createdAt,
+    });
+    expect(Date.parse(changed.body.data.updatedAt)).toBeGreaterThanOrEqual(Date.parse(original.body.data.updatedAt));
+    const read = await request(app).get(`/api/v1/delivery-orders/${id}`).set(bearer(token));
+    expect(read.body).toEqual(changed.body);
+    const recipientOnly = await request(app).patch(`/api/v1/delivery-orders/${id}`)
+      .set(bearer(token)).send({ recipient: { name: 'Final Recipient', phone: '+51 999 888 777' } });
+    expect(recipientOnly.status).toBe(200);
+    expect(recipientOnly.body.data).toEqual({ ...changed.body.data,
+      recipient: { name: 'Final Recipient', phone: '+51 999 888 777' },
+    });
+    const history = await request(app).get(`/api/v1/delivery-orders/${id}/history`).set(bearer(token));
+    expect(history.status).toBe(200);
+    expect(history.body).toEqual({ data: [] });
+  });
+
+  it('rejects edits after cancellation, foreign edits and invalid fields without changing the order', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const id = await createOrder(app, token);
+    const route = `/api/v1/delivery-orders/${id}`;
+    const original = await request(app).get(route).set(bearer(token));
+    const foreign = await request(app).patch(route).set(bearer(otherToken))
+      .send({ recipient: { name: 'Wrong Tenant', phone: '+51 987 654 321' } });
+    expect(foreign.status).toBe(404);
+    const invalid = await request(app).patch(route).set(bearer(token))
+      .send({ publicCode: 'CHANGED' });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+    const empty = await request(app).patch(route).set(bearer(token)).send({});
+    expect(empty.status).toBe(400);
+    const missingToken = await request(app).patch(route).send({ recipient: { name: 'No Token', phone: '+51 987 654 321' } });
+    expect(missingToken.status).toBe(401);
+    const after = await request(app).get(route).set(bearer(token));
+    expect(after.body).toEqual(original.body);
+
+    const cancelled = await request(app).post(`${route}/cancel`).set(bearer(token)).send({});
+    expect(cancelled.status).toBe(200);
+    const rejected = await request(app).patch(route).set(bearer(token))
+      .send({ recipient: { name: 'Too Late', phone: '+51 987 654 321' } });
+    expect(rejected.status).toBe(409);
+    const afterCancel = await request(app).get(route).set(bearer(token));
+    expect(afterCancel.body).toEqual(cancelled.body);
   });
 });
