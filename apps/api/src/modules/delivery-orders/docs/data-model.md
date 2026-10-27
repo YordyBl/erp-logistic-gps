@@ -1,8 +1,17 @@
 # Data model — `delivery-orders`
 
 The aggregate is small on purpose: one root, three value objects, one status enum and one
-domain event. Persistence is not implemented yet, so this document separates the current
-domain contract from the intended PostgreSQL schema.
+domain event. Persistence is implemented with TypeORM in Data Mapper mode: the domain stays
+framework-free and the PostgreSQL mapping lives entirely under `infrastructure/persistence`.
+
+## Quick path
+
+1. `docker compose up -d postgres`
+2. `DATABASE_URL=postgres://erp_logistic:change-me-local-only@localhost:5432/erp_logistic npm run migration:run -w apps/api`
+3. `DATABASE_URL=postgres://erp_logistic:change-me-local-only@localhost:5432/erp_logistic npm test`
+
+Without `DATABASE_URL` (or when PostgreSQL is unreachable) the integration tests skip with a
+logged reason; the unit suite still runs.
 
 ## Aggregate
 
@@ -46,8 +55,8 @@ classDiagram
 
 `DeliveryOrder` is the only aggregate root. Packages are value objects in this pilot: they
 are created with the order, cannot move between orders and are replaced only by a future
-explicit use case. Their database rows still receive UUIDs when the persistence adapter is
-built, but that identity is not part of the current domain contract.
+explicit use case. Their database rows receive UUIDs and a `position` column so a round trip
+returns the same sequence, but that identity is not part of the domain contract.
 
 ## Domain entities and value objects
 
@@ -124,62 +133,99 @@ ratified incident rule and [decisions.md](decisions.md) for the rationale.
 Optional domain values become explicit `null` in the DTO so clients do not have to
 distinguish “absent key” from “unknown value”.
 
-## Intended persistence schema (not implemented)
+## Persistence schema
 
-No migration exists in this milestone and no TypeORM entity has been written. The following
-is the target shape for the persistence phase, following ADR-002 conventions.
+Implemented by migration `apps/api/migrations/1793073274116-InitialDeliveryOrders.ts` and mapped
+by the TypeORM entities under `infrastructure/persistence/entities`. `synchronize` is `false`
+in every environment (ADR-002 §3): the migration, not the entity metadata, creates the schema.
 
-### `delivery_order`
+The package rows cascade with their parent order, so deleting an order also deletes its
+packages. The order row and its package rows are written in one transaction by the repository
+adapter, so there is never a partially written aggregate.
+
+### `delivery_orders`
 
 | Column | PostgreSQL type | Null | Constraint |
 |---|---|---|---|
 | `id` | `uuid` | No | Primary key |
-| `organization_id` | `uuid` | No | FK `organization(id)`; indexed |
-| `customer_account_id` | `uuid` | No | FK `customer_account(id)`; deferred until the customers module exists |
-| `public_code` | `varchar(32)` | No | Unique `(organization_id, public_code)` |
-| `status` | `text` | No | Check in canonical status values; default `created` |
+| `organization_id` | `uuid` | No | Indexed; tenant filter. FK `organization(id)` deferred until the organizations table exists |
+| `public_code` | `varchar(32)` | No | Unique `(organization_id, public_code)`; check matches the module format |
 | `recipient_name` | `varchar(120)` | No | |
 | `recipient_phone` | `varchar(20)` | No | |
 | `delivery_address_line` | `varchar(200)` | No | |
-| `delivery_district` | `varchar(80)` | No | |
-| `latitude` | `numeric(9,6)` | Yes | Check −90..90 |
-| `longitude` | `numeric(9,6)` | Yes | Check −180..180 |
-| `created_at` | `timestamptz` | No | |
-| `updated_at` | `timestamptz` | No | |
+| `delivery_district` | `varchar(80)` | No | Free text until a Lima catalogue exists |
+| `latitude` | `numeric(9,6)` | Yes | Check −90..90; paired with `longitude` |
+| `longitude` | `numeric(9,6)` | Yes | Check −180..180; paired with `latitude` |
+| `status` | `varchar(20)` | No | Default `created`; check against the canonical status list |
+| `created_at` | `timestamptz` | No | Absolute instant |
+| `updated_at` | `timestamptz` | No | Absolute instant; equals `created_at` until a transition use case exists |
 
-Checks: `latitude` and `longitude` are both null or both present; `public_code` matches the
-module format; `status` is one of the canonical values. Future columns (`active_route_id`,
-`time_window`, `notes`) arrive with their own modules and migrations.
+Checks: `latitude` and `longitude` are both null or both present; each coordinate is inside
+its valid range; `public_code` matches `^[A-Z0-9]+(-[A-Z0-9]+)*$`; `status` is one of the
+canonical values. Future columns (`customer_account_id`, `active_route_id`, `time_window`,
+`notes`) arrive with their own modules and migrations.
 
-### `delivery_order_package`
+### `delivery_order_packages`
 
 | Column | PostgreSQL type | Null | Constraint |
 |---|---|---|---|
-| `id` | `uuid` | No | Primary key (new UUID, not exposed by the aggregate) |
-| `organization_id` | `uuid` | No | FK `organization(id)`; indexed |
-| `delivery_order_id` | `uuid` | No | FK `delivery_order(id)` `ON DELETE RESTRICT` |
+| `id` | `uuid` | No | Primary key (generated on save, not exposed by the aggregate) |
+| `delivery_order_id` | `uuid` | No | FK `delivery_orders(id)` `ON DELETE CASCADE` |
+| `position` | `integer` | No | Check `>= 0`; preserves aggregate order |
 | `code` | `varchar(40)` | No | Unique `(delivery_order_id, code)` |
 | `description` | `varchar(200)` | No | |
-| `weight_kg` | `numeric(10,3)` | Yes | Check `weight_kg > 0` |
-| `created_at` | `timestamptz` | No | |
+| `weight_kg` | `numeric(10,3)` | Yes | Check `> 0` and `<= 1000` |
 
-### Indexes
+The foreign key is also the child lookup path: the unique constraint on
+`(delivery_order_id, code)` starts with the FK column, so PostgreSQL can use it for
+"packages of this order" reads.
 
-| Index | Reason |
-|---|---|
-| `delivery_order(organization_id, public_code)` unique | Per-tenant readable-code lookup and duplicate protection |
-| `delivery_order(organization_id, status)` | Future operating lists by status |
-| `delivery_order_package(delivery_order_id, code)` unique | Package code uniqueness inside the order |
+### Indexes and constraints
+
+| Name | Kind | Columns | Reason |
+|---|---|---|---|
+| `uq_delivery_orders_organization_public_code` | unique constraint | `(organization_id, public_code)` | Per-tenant readable-code lookup and duplicate protection |
+| `idx_delivery_orders_organization_id` | index | `(organization_id)` | Tenant-scoped reads and future operating lists |
+| `uq_delivery_order_packages_order_code` | unique constraint | `(delivery_order_id, code)` | Package code uniqueness inside the order |
+| `chk_delivery_orders_*` | check constraints | see table | Status, public-code format, coordinate ranges and coordinate pairing |
+| `chk_delivery_order_packages_*` | check constraints | see table | Positive weight and non-negative position |
+
+## Timezone convention
+
+`created_at` and `updated_at` are `timestamptz`: PostgreSQL stores absolute instants and
+renders them in the session timezone. The data source pins every connection to
+`America/Lima` (`extra.options = '-c timezone=America/Lima'`) and the compose PostgreSQL
+service sets `timezone=America/Lima` at the server level. Concretely,
+`2026-10-26T15:00:00.000Z` is stored as that instant and renders as `10:00:00-05:00`; the
+stored value never shifts. API/UI rendering in Lima time is an HTTP-layer responsibility.
 
 ## Mapping notes
 
 - Value objects map to flattened columns; there are no JSON blobs for recipient or address.
-- `weightKg` is a JavaScript number in the domain and `numeric(10,3)` in PostgreSQL. Money
-  and measurement values are never stored as floating point (data-model convention).
-- `timestamptz` stores the instant. Database sessions and API serialization will present
-  America/Lima (`-05:00`), per the ratified timezone decision; application timestamps are
-  ISO-8601 UTC strings from `Clock`.
-- Aggregates are loaded and saved whole. The package collection is replaced on save rather
-  than mutated row by row; the adapter owns that mapping (ADR-002 §2).
+- `weightKg`, `latitude` and `longitude` are JavaScript numbers in the domain and `numeric`
+  in PostgreSQL. `pg` returns numeric values as strings, so the mapper converts them
+  explicitly; measurements are never stored as floating point.
+- Aggregates are saved whole: the adapter upserts the order row, replaces its package rows
+  and commits both in one transaction. Package rows are regenerated on each save and sorted
+  by `position` on load.
+- The mapper reconstructs the aggregate with `DeliveryOrder.create`, which the current pilot
+  domain only supports for the initial `created` status. A persisted row with another status
+  makes the mapper fail loudly until the status-transition use case is added.
+- `findByPublicCode` always filters by `organization_id`. `findById` intentionally does not,
+  because the read use case must distinguish a missing order from an order owned by another
+  organization and raise the typed forbidden error itself. This matches the repository port
+  contract and keeps the tenant check in the application layer.
+- A concurrent duplicate public code is caught by the unique constraint; the adapter maps
+  PostgreSQL error `23505` on that constraint to `DeliveryOrderInvariantError`, the same
+  typed error the use case raises before saving.
 - No table stores status history yet. Audit events are a cross-cutting requirement
   (invariant 8) and will be written in the same transaction once the audit model exists.
+
+## Known deviations
+
+- Table names are plural (`delivery_orders`, `delivery_order_packages`); ADR-002 §7 says
+  singular table names. The implemented names follow the persistence task; aligning the ADR
+  or renaming the tables is a follow-up for the parent milestone.
+- `organization_id` has no foreign key yet because no `organizations` table exists in this
+  milestone. The column is mandatory and indexed so the constraint can be added later
+  without a data migration.

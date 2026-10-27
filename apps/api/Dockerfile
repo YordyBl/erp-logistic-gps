@@ -42,6 +42,9 @@ COPY package.json package-lock.json tsconfig.base.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/api/tsconfig.json apps/api/tsconfig.json
 COPY apps/api/src apps/api/src
+# Migrations ship with the image because the one-shot compose job runs the
+# TypeORM CLI from this workspace; without them the job would silently no-op.
+COPY apps/api/migrations apps/api/migrations
 COPY packages/api-contracts/package.json packages/api-contracts/package.json
 COPY packages/api-contracts/src packages/api-contracts/src
 

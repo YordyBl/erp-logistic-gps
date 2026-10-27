@@ -5,7 +5,18 @@
   "description": "HTTP API and application layer for the last-mile delivery ERP",
   "type": "module",
   "main": "src/main.ts",
+  "scripts": {
+    "migration:run": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:run",
+    "migration:generate": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:generate",
+    "migration:revert": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:revert"
+  },
   "dependencies": {
+    "pg": "^8.23.1",
+    "typeorm": "^1.1.2",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15"
   }
 }

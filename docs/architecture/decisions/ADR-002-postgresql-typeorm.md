@@ -98,7 +98,10 @@ deployment milestone adds the local stack.
 
 ### 7. Data conventions
 
-- Table and column names in English, `snake_case`, singular table names.
+- Table and column names are lowercase English `snake_case`; table names are plural
+  (`delivery_orders`, `delivery_order_packages`). Indexes and constraints follow
+  `idx_<table>_<columns>`, `uq_<table>_<columns>` and `chk_<table>_<rule>`, with
+  framework-generated primary-key and foreign-key names.
 - Primary keys are internal UUIDs. Readable public codes (order, route, package) are
   separate columns with their own per-organization uniqueness; see
   `docs/architecture/data-model.md`.
