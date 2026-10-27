@@ -3,6 +3,8 @@ import {
   Column,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryColumn,
   Unique,
@@ -52,6 +54,19 @@ export class DeliveryOrderEntity {
   @Column({ name: 'organization_id', type: 'uuid' })
   organizationId!: string;
 
+  /**
+   * Infrastructure-only mirror of the FK created by migration 2.
+   *
+   * The relation uses the entity *name* as a string target on purpose: the
+   * delivery-orders module must not import another module's infrastructure
+   * entity (ADR-001 rule 6), yet TypeORM needs the relation metadata to keep
+   * `migration:generate` aligned with the database FK. The domain aggregate
+   * knows only `organizationId`.
+   */
+  @ManyToOne('OrganizationEntity', { nullable: false, onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'organization_id' })
+  organization!: DeliveryOrderOrganization;
+
   @Column({ name: 'public_code', type: 'varchar', length: 32 })
   publicCode!: string;
 
@@ -99,4 +114,15 @@ export class DeliveryOrderEntity {
     (packageEntity) => packageEntity.deliveryOrder,
   )
   packages!: DeliveryOrderPackageEntity[];
+}
+
+/**
+ * Structural view of the organization row referenced by `organization_id`.
+ *
+ * Declared structurally so this module does not depend on the
+ * `identity-and-access` entity class; TypeORM resolves the relation from the
+ * string target registered in the data source.
+ */
+export interface DeliveryOrderOrganization {
+  readonly id: string;
 }

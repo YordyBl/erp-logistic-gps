@@ -6,6 +6,9 @@ import { DataSource, type DataSourceOptions } from 'typeorm';
 
 import { DeliveryOrderEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderPackageEntity.js';
+import { OrganizationEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/OrganizationEntity.js';
+import { RefreshTokenEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/RefreshTokenEntity.js';
+import { UserEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/UserEntity.js';
 
 /**
  * Process-wide TypeORM data source.
@@ -52,7 +55,13 @@ export function createDataSource(options: DataSourceFactoryOptions = {}): DataSo
 function commonOptions() {
   return {
     type: 'postgres' as const,
-    entities: [DeliveryOrderEntity, DeliveryOrderPackageEntity],
+    entities: [
+      DeliveryOrderEntity,
+      DeliveryOrderPackageEntity,
+      OrganizationEntity,
+      UserEntity,
+      RefreshTokenEntity,
+    ],
     migrations: [MIGRATIONS_GLOB],
     migrationsTableName: 'migrations',
     synchronize: false,

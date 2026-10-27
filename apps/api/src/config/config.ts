@@ -135,3 +135,130 @@ function isEnvironment(value: string): value is AppEnvironment {
 function isLogLevel(value: string): value is LogLevel {
   return (LOG_LEVELS as readonly string[]).includes(value);
 }
+
+/**
+ * Authentication configuration (ADR-003).
+ *
+ * Loaded separately from {@link loadConfig} so the process can boot without
+ * authentication secrets until the HTTP auth layer consumes it. `JWT_SECRET`
+ * has no default: a signing secret in code would be a security defect. The
+ * remaining values have ratified defaults that a deployment may override.
+ */
+export const JWT_MIN_SECRET_LENGTH = 32;
+
+export interface LoginRateLimitConfig {
+  readonly maxAttempts: number;
+  readonly windowSeconds: number;
+}
+
+export interface AuthConfig {
+  readonly jwtSecret: string;
+  readonly jwtIssuer: string;
+  readonly jwtAudience: string;
+  readonly accessTokenTtlMinutes: number;
+  readonly refreshTokenTtlDays: number;
+  readonly cookieSecure: boolean;
+  readonly loginRateLimit: LoginRateLimitConfig;
+}
+
+const DEFAULT_JWT_ISSUER = 'erp-logistic-api';
+const DEFAULT_JWT_AUDIENCE = 'erp-logistic-web';
+const DEFAULT_ACCESS_TOKEN_TTL_MINUTES = 15;
+const DEFAULT_REFRESH_TOKEN_TTL_DAYS = 7;
+const DEFAULT_LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10;
+const DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS = 900;
+
+/**
+ * Reads and validates authentication configuration.
+ *
+ * `COOKIE_SECURE` defaults to `true`; local development over plain HTTP must opt
+ * out explicitly and never ships that value to a deployed environment.
+ * Rate-limit values are consumed by the HTTP layer (T2); this milestone only
+ * defines and validates the placeholders.
+ */
+export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
+  return {
+    jwtSecret: readJwtSecret(env),
+    jwtIssuer: readOptional(env.JWT_ISSUER) ?? DEFAULT_JWT_ISSUER,
+    jwtAudience: readOptional(env.JWT_AUDIENCE) ?? DEFAULT_JWT_AUDIENCE,
+    accessTokenTtlMinutes: readPositiveInteger(
+      env.ACCESS_TOKEN_TTL_MINUTES,
+      'ACCESS_TOKEN_TTL_MINUTES',
+      DEFAULT_ACCESS_TOKEN_TTL_MINUTES,
+    ),
+    refreshTokenTtlDays: readPositiveInteger(
+      env.REFRESH_TOKEN_TTL_DAYS,
+      'REFRESH_TOKEN_TTL_DAYS',
+      DEFAULT_REFRESH_TOKEN_TTL_DAYS,
+    ),
+    cookieSecure: readBoolean(env.COOKIE_SECURE, 'COOKIE_SECURE', true),
+    loginRateLimit: {
+      maxAttempts: readPositiveInteger(
+        env.LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
+        'LOGIN_RATE_LIMIT_MAX_ATTEMPTS',
+        DEFAULT_LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
+      ),
+      windowSeconds: readPositiveInteger(
+        env.LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+        'LOGIN_RATE_LIMIT_WINDOW_SECONDS',
+        DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+      ),
+    },
+  };
+}
+
+function readJwtSecret(env: NodeJS.ProcessEnv): string {
+  const secret = readOptional(env.JWT_SECRET);
+
+  if (secret === undefined) {
+    throw new Error('JWT_SECRET must be set');
+  }
+
+  if (secret.length < JWT_MIN_SECRET_LENGTH) {
+    throw new Error(
+      `JWT_SECRET must be at least ${JWT_MIN_SECRET_LENGTH} characters`,
+    );
+  }
+
+  return secret;
+}
+
+function readPositiveInteger(
+  raw: string | undefined,
+  variable: string,
+  fallback: number,
+): number {
+  const value = readOptional(raw);
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${variable} must be a positive integer, received "${value}"`);
+  }
+
+  return parsed;
+}
+
+function readBoolean(
+  raw: string | undefined,
+  variable: string,
+  fallback: boolean,
+): boolean {
+  const value = readOptional(raw);
+
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.toLowerCase();
+
+  if (normalized !== 'true' && normalized !== 'false') {
+    throw new Error(`${variable} must be "true" or "false", received "${value}"`);
+  }
+
+  return normalized === 'true';
+}
