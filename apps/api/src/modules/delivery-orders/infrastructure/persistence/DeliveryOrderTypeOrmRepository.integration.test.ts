@@ -18,6 +18,9 @@ import { Recipient } from '../../domain/value-objects/Recipient.js';
 import { DeliveryOrderTypeOrmRepository } from './DeliveryOrderTypeOrmRepository.js';
 import { DeliveryOrderEntity } from './entities/DeliveryOrderEntity.js';
 import { probeIntegrationDatabase } from './test-database.js';
+import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
+import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
+import { OrganizationEntity } from '../../../identity-and-access/infrastructure/persistence/entities/OrganizationEntity.js';
 
 const CREATED_AT = '2026-10-26T15:00:00.000Z';
 
@@ -35,6 +38,7 @@ const databaseUrl = database.available ? database.url : null;
 describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQL)', () => {
   let dataSource: DataSource | undefined;
   let repository: DeliveryOrderTypeOrmRepository | undefined;
+  let organizations: OrganizationTypeOrmRepository | undefined;
   const organizationIds: string[] = [];
 
   beforeAll(async () => {
@@ -45,6 +49,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     dataSource = createDataSource({ url: databaseUrl });
     await dataSource.initialize();
     repository = new DeliveryOrderTypeOrmRepository(dataSource);
+    organizations = new OrganizationTypeOrmRepository(dataSource);
   });
 
   afterAll(async () => {
@@ -54,10 +59,14 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
 
     if (organizationIds.length > 0) {
       // The package rows cascade with their order, so one tenant-scoped delete
-      // is enough and no test row leaks into a later run.
+      // is enough and no test row leaks into a later run. Organizations are
+      // removed last because the order FK is RESTRICT.
       await dataSource
         .getRepository(DeliveryOrderEntity)
         .delete({ organizationId: In(organizationIds) });
+      await dataSource
+        .getRepository(OrganizationEntity)
+        .delete({ id: In(organizationIds) });
     }
 
     await dataSource.destroy();
@@ -79,9 +88,31 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     return dataSource;
   }
 
-  function newOrganizationId(): string {
+  function organizationsOrThrow(): OrganizationTypeOrmRepository {
+    if (organizations === undefined) {
+      throw new Error('The organization repository adapter was not initialized');
+    }
+
+    return organizations;
+  }
+
+  /**
+   * Creates the tenant row before any order references it: migration 2 added
+   * `fk_delivery_orders_organization`, so a random id alone is no longer a
+   * valid tenant.
+   */
+  async function newOrganizationId(): Promise<string> {
     const organizationId = randomUUID();
     organizationIds.push(organizationId);
+
+    await organizationsOrThrow().save(
+      Organization.create({
+        id: organizationId,
+        name: 'Delivery Orders Integration',
+        createdAt: CREATED_AT,
+      }),
+    );
+
     return organizationId;
   }
 
@@ -116,7 +147,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   }
 
   it('round-trips an order with its packages and optional values', async () => {
-    const order = buildOrder(newOrganizationId(), 'LIMA-0001');
+    const order = buildOrder(await newOrganizationId(), 'LIMA-0001');
 
     await repositoryOrThrow().save(order);
     const loaded = await repositoryOrThrow().findById(order.id);
@@ -127,7 +158,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   });
 
   it('replaces the package rows when an existing aggregate is saved again', async () => {
-    const order = buildOrder(newOrganizationId(), 'SAN-MIGUEL-9');
+    const order = buildOrder(await newOrganizationId(), 'SAN-MIGUEL-9');
 
     await repositoryOrThrow().save(order);
     await repositoryOrThrow().save(order);
@@ -147,8 +178,8 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   });
 
   it('enforces public-code uniqueness per organization and scopes the lookup by organization', async () => {
-    const firstOrganizationId = newOrganizationId();
-    const secondOrganizationId = newOrganizationId();
+    const firstOrganizationId = await newOrganizationId();
+    const secondOrganizationId = await newOrganizationId();
     const first = buildOrder(firstOrganizationId, 'CALLAO-0042');
     const second = buildOrder(secondOrganizationId, 'CALLAO-0042');
 
@@ -162,12 +193,12 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
       repositoryOrThrow().findByPublicCode(secondOrganizationId, 'CALLAO-0042'),
     ).resolves.toMatchObject({ id: second.id });
     await expect(
-      repositoryOrThrow().findByPublicCode(newOrganizationId(), 'CALLAO-0042'),
+      repositoryOrThrow().findByPublicCode(await newOrganizationId(), 'CALLAO-0042'),
     ).resolves.toBeNull();
   });
 
   it('rejects a duplicate public code in the same organization without changing the stored order', async () => {
-    const organizationId = newOrganizationId();
+    const organizationId = await newOrganizationId();
     const stored = buildOrder(organizationId, 'MIRAFLORES-7');
     const duplicate = buildOrder(organizationId, 'MIRAFLORES-7');
 
@@ -183,8 +214,8 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   });
 
   it('lets the read use case distinguish a foreign order from a missing one', async () => {
-    const ownerOrganizationId = newOrganizationId();
-    const otherOrganizationId = newOrganizationId();
+    const ownerOrganizationId = await newOrganizationId();
+    const otherOrganizationId = await newOrganizationId();
     const order = buildOrder(ownerOrganizationId, 'SURCO-010');
 
     await repositoryOrThrow().save(order);
@@ -202,7 +233,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   });
 
   it('stores instants as timestamptz and runs sessions in America/Lima', async () => {
-    const order = buildOrder(newOrganizationId(), 'LA-VICTORIA-3');
+    const order = buildOrder(await newOrganizationId(), 'LA-VICTORIA-3');
 
     await repositoryOrThrow().save(order);
 
