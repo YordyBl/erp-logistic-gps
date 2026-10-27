@@ -4,10 +4,10 @@ Monorepo for a multi-tenant last-mile delivery ERP covering Lima Metropolitana a
 Dispatchers plan routes with multiple stops and orders, drivers confirm deliveries with
 photo evidence, and recipients follow a single order through a limited public link.
 
-**Status (2026-10-26):** Fase 0 is complete. The pilot `delivery-orders` module runs over
-HTTP and PostgreSQL with migrations, structured logging, healthchecks, Docker Compose and
-CI. Authentication is Fase 1; the web app is still a static placeholder, and the demo starts
-with empty tables (no seed data yet).
+**Status (2026-10-27):** Fase 1 is in progress. The `identity-and-access` module (users,
+organizations, Argon2id passwords, rotating refresh tokens) and the HTTP JWT surface
+(login, refresh, logout, `me`, ADMIN-only user creation) are implemented. Catalog modules,
+the demo seed and the web client are still pending, and the demo starts with empty tables.
 
 ## Quick path
 
@@ -48,7 +48,8 @@ Point the API at a reachable PostgreSQL and run the migrations once:
 
 ```bash
 npm ci
-export DATABASE_URL=postgres://erp_logistic:change-me-local-only@localhost:5432/erp_logistic
+export DATABASE_URL=postgres://<user>:<password>@localhost:5432/erp_logistic
+export JWT_SECRET="$(openssl rand -hex 32)"
 npm run migration:run -w apps/api
 npx tsx apps/api/src/main.ts
 ```
@@ -69,9 +70,10 @@ throwaway `POSTGRES_*` defaults from `.env.example`.
 | `docker compose build` | All images build; build every service because migrations has its own tag |
 
 To run the integration tests, start PostgreSQL (`docker compose up -d postgres`), apply
-migrations, and set `DATABASE_URL` to that database before `npm test`. The suite reports 59
-unit/HTTP tests plus 7 PostgreSQL tests; the 7 skip cleanly without a database and fail if
-the database is reachable but the schema was never migrated.
+migrations, and set `DATABASE_URL` to that database before `npm test`. Without
+`DATABASE_URL`, the PostgreSQL integration tests skip with a logged reason; a reachable
+database without the migrated schema fails instead of skipping, because a missing migration
+is a defect.
 
 ## Repository layout
 
@@ -90,16 +92,23 @@ the database is reachable but the schema was never migrated.
 
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/api/v1/auth/login` | Authenticate and start a session; access token in the body, refresh token in a strict cookie |
+| `POST` | `/api/v1/auth/refresh` | Rotate the refresh cookie and return a new access token |
+| `POST` | `/api/v1/auth/logout` | Revoke the current refresh token and clear the cookie |
+| `GET` | `/api/v1/auth/me` | Return the authenticated caller |
+| `POST` | `/api/v1/users` | Create a user in the caller organization (ADMIN only) |
 | `POST` | `/api/v1/delivery-orders` | Create an order; returns `201` and a `Location` header |
 | `GET` | `/api/v1/delivery-orders?publicCode=...` | Read one order by its per-organization public code |
 | `GET` | `/api/v1/delivery-orders/:orderId` | Read one order by internal UUID |
 | `GET` | `/healthz` | Liveness; never touches PostgreSQL |
 | `GET` | `/readyz` | Readiness; `503` while PostgreSQL is unavailable |
 
-Delivery-order routes require the temporary `x-organization-id` header (a UUID). It is a
-Fase 0 development adapter, **not authentication**: any caller can claim any organization.
-Fase 1 replaces it with verified JWT claims (ADR-003). Every response carries
-`x-request-id`; non-2xx API responses use one error envelope with a `correlationId`.
+All `/api/v1` business routes require `Authorization: Bearer <access token>`. The JWT
+middleware verifies issuer, audience, expiry, not-before, subject, JTI and the pinned HS256
+algorithm, then reloads the user from storage, so a deleted, disabled or demoted account
+takes effect immediately. The organization comes only from the verified token; the old
+`x-organization-id` header is gone. Every response carries `x-request-id`; non-2xx API
+responses use one error envelope with a `correlationId`.
 
 ## Database and migrations
 
@@ -159,12 +168,15 @@ API code (`docker compose build`).
 
 ## Current limitations
 
-- No authentication or authorization: the tenant header is a development adapter.
-- No CORS/security headers, rate limiting or audit trail yet (Fase 1).
+- No demo seed data yet: organizations and users must be provisioned in the database
+  (the seed script is the next Fase 1 task).
+- Login rate limiting is process-local and resets on restart; a shared store is a later
+  deployment change.
+- No CORS/security headers or audit trail yet.
 - The web client is a placeholder; the React application is not implemented.
 - The API runs through `tsx` instead of a compiled production build.
-- No demo seed data, backups, TLS/reverse proxy or observability backend.
+- No backups, TLS/reverse proxy or observability backend.
 - Delivery execution (photo evidence, incidents), routes, dispatch and tracking are later
   phases.
 
-Next milestone: Fase 1 — JWT identity, roles, customer accounts, drivers and vehicles.
+Next milestone: finish Fase 1 — catalogs (customers, drivers, vehicles), demo seed and docs.

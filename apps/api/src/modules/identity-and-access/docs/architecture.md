@@ -1,8 +1,9 @@
 # Architecture — `identity-and-access`
 
 The module is one hexagonal slice inside the modular monolith: pure domain rules, use cases
-that depend on ports, and adapters supplied by composition. It is implemented end to end
-for the application and persistence layers and deliberately has **no HTTP adapter yet**.
+that depend on ports, and adapters supplied by composition. It is implemented end to end for
+the application, persistence, security and HTTP layers; the Express adapter lives in
+`apps/api/src/http` and only translates transport concerns.
 
 ## Layers
 
@@ -171,13 +172,14 @@ than issuing a second live token.
 
 `loadAuthConfig` (`apps/api/src/config/config.ts`) validates `JWT_SECRET` (minimum 32
 characters, no default), issuer, audience, token lifetimes, `COOKIE_SECURE` and the login
-rate-limit placeholders. The process factory receives that validated object and constructs
-`JwtTokenService` plus a `SessionPolicy`; it never reads `process.env` itself.
+rate-limit window. The process factory receives that validated object and constructs
+`JwtTokenService` plus a `SessionPolicy`; it never reads `process.env` itself. The process
+entry point calls `loadConfig` and `loadAuthConfig` together and composes only PostgreSQL
+adapters — there is no in-memory fallback outside tests.
 
 ## Deliberately absent
 
-- HTTP routes, middleware, cookies, CSRF reasoning and rate-limit enforcement (T2).
-- Public OpenAPI contract for auth (T2).
 - Access-token revocation lists, key rotation and JWKS.
 - Cleanup job for expired refresh rows.
 - Password reset/invitation delivery and user disable/enable transitions.
+- Shared rate-limit storage (the MVP limiter is in-process, S9).
