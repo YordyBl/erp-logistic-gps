@@ -1,0 +1,27 @@
+# Docker build context exclusions.
+#
+# Both images build from the repository root so they can see the workspace
+# manifests and shared packages. Everything below is either reinstalled inside
+# the image, a local runtime artifact, or material the images never use.
+
+# Version control and editor state
+.git
+.gitignore
+.vscode
+.idea
+.codegraph
+
+# Installed dependencies and build/test output (installed fresh in the image)
+**/node_modules
+**/dist
+**/coverage
+**/.vitest
+**/*.tsbuildinfo
+
+# Local environment files and logs: never bake secrets or runtime noise
+.env
+.env.*
+*.log
+
+# ODD planning workspace: documentation for humans, not image content
+odd/

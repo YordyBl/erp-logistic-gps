@@ -1,0 +1,122 @@
+# Development stack for the last-mile delivery ERP (plan §9).
+#
+# Every value uses ${VAR:-default} interpolation, so `docker compose config`
+# works without an env file. Copy .env.example to .env to override local ports
+# and credentials. Only throwaway local defaults live here: real secrets stay
+# outside the repository.
+#
+# Usage:
+#   docker compose config --quiet       # validate interpolation
+#   docker compose build api web        # build the images
+#   docker compose up                   # run the development stack
+#
+# The demo variant lives in docker-compose.demo.yml and reuses this file.
+
+name: erp-logistic
+
+x-api-build: &api-build
+  context: .
+  dockerfile: apps/api/Dockerfile
+
+x-api-environment: &api-environment
+  NODE_ENV: ${NODE_ENV:-development}
+  TZ: ${TZ:-America/Lima}
+  API_PORT: "3000"
+  # Derived from the POSTGRES_* values so the connection string cannot drift
+  # from the database credentials. Override DATABASE_URL only for one-off
+  # tooling that needs a different host (for example, a tool on the host).
+  DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-erp_logistic}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-erp_logistic}}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-erp_logistic}
+      POSTGRES_USER: ${POSTGRES_USER:-erp_logistic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      TZ: ${TZ:-America/Lima}
+      PGTZ: ${TZ:-America/Lima}
+    # America/Lima is a system-wide decision (plan §2): set the server timezone
+    # explicitly instead of relying on the image default (UTC).
+    command:
+      - postgres
+      - -c
+      - timezone=America/Lima
+      - -c
+      - log_timezone=America/Lima
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # S3-compatible object storage for delivery evidence in the demo stack.
+  # `minio/minio` is no longer published on Docker Hub, so this pins the
+  # community MinIO build ratified for the demo stack.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-local-only}
+      TZ: ${TZ:-America/Lima}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build: *api-build
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3000}:3000"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      TZ: ${TZ:-America/Lima}
+    depends_on:
+      - api
+    ports:
+      # The container listens on 8080 (non-root nginx); 8080 stays the host port.
+      - "${WEB_PORT:-8080}:8080"
+    restart: unless-stopped
+
+  # One-shot migration job. It reuses the API image, and the image workdir is
+  # the API workspace, so `npm run migration:run` resolves apps/api/package.json.
+  #
+  # The script does not exist yet: the persistence task adds it. Until then this
+  # job exits with "Missing script" on purpose instead of hiding the failure.
+  migrations:
+    build: *api-build
+    command: ["npm", "run", "migration:run"]
+    environment: *api-environment
+    working_dir: /app/apps/api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  postgres-data:
+  minio-data:

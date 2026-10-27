@@ -1,0 +1,53 @@
+# Demo stack for the last-mile delivery ERP (plan §9).
+#
+# This file INCLUDES docker-compose.yml and only overrides what the demo needs,
+# so the development and demo stacks cannot drift. It is a complete project on
+# its own:
+#
+#   docker compose -f docker-compose.demo.yml config --quiet
+#   docker compose -f docker-compose.demo.yml up --build
+#
+# Requires Docker Compose >= 2.20 for the `include` field.
+#
+# Not included yet — the Lima seed dataset. Seeds need the persistence task;
+# once migrations land, add a one-shot `seed` service here that runs after the
+# `migrations` job. Until then the demo starts with empty tables, which is the
+# honest state of the system.
+
+name: erp-logistic-demo
+
+include:
+  - path: docker-compose.yml
+
+services:
+  postgres:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  minio:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  api:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  web:
+    restart: always
+
+  # The migration job must stay one-shot in the demo too: a restarting migration
+  # would hide a failed schema change behind a loop.
+  migrations:
+    restart: "no"
