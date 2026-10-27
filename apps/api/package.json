@@ -4,5 +4,8 @@
   "private": true,
   "description": "HTTP API and application layer for the last-mile delivery ERP",
   "type": "module",
-  "main": "src/main.ts"
+  "main": "src/main.ts",
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
 }

@@ -1,7 +1,10 @@
 {
+  // Root tooling only. Every workspace is type-checked with its own tsconfig by
+  // the `typecheck` scripts in package.json, so app-specific options (for
+  // example apps/web's DOM lib and jsx setting) govern that app's sources.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts"]
+  "include": ["vitest.config.ts"]
 }

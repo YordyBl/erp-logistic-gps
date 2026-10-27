@@ -17,7 +17,7 @@ Delegation: all tasks delegated to bounded workers (user preference); parent orc
 
 ## Tasks
 
-- T1: Repo foundations: monorepo scaffold (npm workspaces: apps/api, apps/web placeholder, packages/api-contracts), strict TS config, ESLint (no-explicit-any), vitest, .env.example, README, .gitignore; ADR-001, ADR-002, ADR-003 in docs/architecture/decisions/; conceptual data model in docs/architecture/data-model.md. Route: delegated (Writer A). Status: pending.
+- T1: Repo foundations: monorepo scaffold (npm workspaces: apps/api, apps/web placeholder, packages/api-contracts), strict TS config, ESLint (no-explicit-any), vitest, .env.example, README, .gitignore; ADR-001, ADR-002, ADR-003 in docs/architecture/decisions/; conceptual data model in docs/architecture/data-model.md. Route: delegated (Writer A). Status: DONE — commit e9065d7, native review granted (lens readability) and acknowledged (lineage review-140e96aca855f874, authority burned). 4 advisory findings recorded in L6, fixes folded into T2.
 - T2: Pilot module `delivery-orders` in apps/api/src/modules/delivery-orders: domain (entities, VOs, events, policies, errors), application (ports, use cases create/get), Zod validation, shared helpers (ids, clock), tests (vitest, in-memory fakes, org scoping), module docs (README, architecture, business-rules, data-model, api-contracts, decisions). Route: delegated (Writer B). Status: pending.
 - T3: Verification and closure: parent re-runs one reported command per writer (spot check), runs seam checks (full test suite, typecheck, lint), attempts native risk assessment per commit, commits work units, updates this file and the Engram mirror. Route: parent (orchestration + state). Status: pending.
 
@@ -28,3 +28,5 @@ Delegation: all tasks delegated to bounded workers (user preference); parent orc
 - L3 (2026-10-26): Milestone definition quoted from plan §12 (see S1).
 - L4 (2026-10-26): Ratified decisions and corrections recorded in plan §11 (see S3); incident rule: any incident → failed attempt → warehouse return, no field retries; "no responde al celular" maps to `other`.
 - L5 (2026-10-26): Repo initialized (git init, main), plan doc committed as baseline 4700305. npm workspaces assumed (S8).
+- L6 (2026-10-26): T1 delivered by Writer A; spot check typecheck=0. Native assess: high_risk (ADR-003 authentication docs) → user granted review of e9065d7 → readability lens approved → acknowledged (lineage review-140e96aca855f874, authority burned). Non-blocking advisory findings to fix in T2: R2-tsconfig-gate-divergence (WARNING, tsconfig.json:6 gate ignores per-app configs), R2-env-credential-duplication (.env.example:15), R2-adr-status-vocabulary (ADR-002 §6 stale statuses), R2-engines-understated (package.json:12 engines >=22 vs toolchain >=22.13).
+- L7 (2026-10-26): T2 launched: Writer B implements the delivery-orders pilot module plus the four L6 fixes.

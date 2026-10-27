@@ -9,11 +9,15 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "npm run typecheck:root && npm run typecheck:api && npm run typecheck:contracts && npm run typecheck:web",
+    "typecheck:root": "tsc -p tsconfig.json",
+    "typecheck:api": "tsc -p apps/api/tsconfig.json",
+    "typecheck:contracts": "tsc -p packages/api-contracts/tsconfig.json",
+    "typecheck:web": "if find apps/web/src \\( -name '*.ts' -o -name '*.tsx' \\) | grep -q .; then tsc -p apps/web/tsconfig.json; else echo '[typecheck] apps/web has no sources yet; web tsconfig deferred until the first web source exists'; fi",
     "lint": "eslint .",
     "build": "npm run typecheck"
   },

@@ -84,15 +84,17 @@ the decision is ratified.
 | Architecture | Modular monolith, hexagonal, vertical slices | Confirmed (see ADR-001) |
 | ORM | TypeORM, Data Mapper | Confirmed |
 | Database | PostgreSQL | Confirmed |
-| Containers | Docker + Docker Compose, multi-stage builds | Confirmed |
+| Containers | Docker + Docker Compose, multi-stage builds | Planned; not scaffolded yet (deployment milestone) |
 | Spatial data | PostGIS | Recommended, pending |
-| Runtime validation | Zod | Recommended, pending |
-| Testing | Vitest or Jest; Supertest; Testcontainers | Pending |
+| Runtime validation | Zod | Confirmed for application/HTTP boundary validation; OpenAPI tooling pending |
+| Testing | Vitest (wired at the root); Supertest and Testcontainers pending | Vitest confirmed; the rest pending |
 | API | Versioned REST + OpenAPI 3.1 | Recommended, pending |
 | Timezone | America/Lima across database, API, UI, logs and audit | Confirmed |
 
-The exact test runner, HTTP contract tooling and spatial stack are decided in their own
-milestones; this ADR does not pre-empt them.
+Vitest is already the repository test runner. HTTP contract tooling (OpenAPI),
+Supertest/Testcontainers integration testing and the spatial stack are decided in their
+own milestones; this ADR does not pre-empt them. Docker Compose remains planned until the
+deployment milestone adds the local stack.
 
 ### 7. Data conventions
 

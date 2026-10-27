@@ -1,16 +1,17 @@
 # ERP Logistic — last-mile delivery platform for Lima
 
-Monorepo foundations for a multi-tenant last-mile delivery ERP covering Lima
+Monorepo for a multi-tenant last-mile delivery ERP covering Lima
 Metropolitana and Callao. Dispatchers plan routes with multiple stops and multiple orders
 per stop, drivers confirm each delivery independently with photo evidence, and recipients
 follow a single order through a limited public link.
 
-**Status:** planning and repo foundations complete. The pilot `delivery-orders` module is
-the next milestone; there is no HTTP server, database wiring, Docker setup or web UI yet.
+**Status:** foundations and the pilot `delivery-orders` module are implemented: domain,
+application use cases, Zod validation, unit tests, in-memory composition and module docs.
+There is no HTTP server, database wiring, Docker setup or web UI yet.
 
 ## Quick path
 
-1. Install Node 22 (`.nvmrc` is provided): `nvm use`
+1. Install Node 22.13 or newer (`.nvmrc` is provided): `nvm use`
 2. Install dependencies: `npm install`
 3. Run the quality gates:
 
@@ -27,7 +28,8 @@ the type check; the real build pipeline arrives with the application skeleton.
 
 | Path | Purpose |
 |---|---|
-| `apps/api` | Node.js + Express + TypeScript API. Modules, shared code and infrastructure arrive with the pilot module. |
+| `apps/api` | Node.js + Express + TypeScript API. Contains shared helpers and the `delivery-orders` module; HTTP and persistence adapters arrive later. |
+| `apps/api/src/modules/delivery-orders` | Pilot module: domain, use cases, ports, in-memory composition, tests and docs. |
 | `apps/web` | React + TypeScript client placeholder (dispatcher console, driver view, public tracking). |
 | `packages/api-contracts` | HTTP contracts shared by the API and the web client. |
 | `docs/architecture` | Architecture decisions and the conceptual data model. |
@@ -37,7 +39,7 @@ the type check; the real build pipeline arrives with the application skeleton.
 
 | Area | Choice |
 |---|---|
-| API | Node.js 22 + Express + strict TypeScript (ADR-001) |
+| API | Node.js 22.13+ + Express + strict TypeScript (ADR-001) |
 | Web | React + TypeScript with Vite + Tailwind + shadcn/ui; Leaflet first, map layer isolated for a later MapLibre migration (plan §11.6) |
 | Data | PostgreSQL + TypeORM Data Mapper; PostGIS recommended, pending (ADR-002) |
 | Auth | JWT access (15 min) + rotating opaque refresh (7 days) (ADR-003) |
@@ -47,10 +49,15 @@ the type check; the real build pipeline arrives with the application skeleton.
 
 | Command | What it does |
 |---|---|
-| `npm test` | Runs the Vitest suite (`apps/api/src/**/*.test.ts`). Passes with no tests while the scaffold has none. |
-| `npm run typecheck` | Strict TypeScript check over every workspace source file. |
+| `npm test` | Runs the Vitest suite (`apps/api/src/**/*.test.ts`). |
+| `npm run typecheck` | Type-checks each workspace with its own tsconfig: root tooling, `apps/api`, `packages/api-contracts`, and `apps/web` once it has sources. |
 | `npm run lint` | ESLint flat config; explicit `any` is an error. |
 | `npm run build` | Placeholder: currently runs the type check. |
+
+`npm run typecheck` runs `typecheck:root`, `typecheck:api`, `typecheck:contracts` and
+`typecheck:web`. The web config is applied as soon as `apps/web/src` contains a `.ts` or
+`.tsx` file; TypeScript rejects an empty `include`, so the gate defers it while the
+placeholder has no sources.
 
 ## Documentation
 
@@ -61,6 +68,7 @@ the type check; the real build pipeline arrives with the application skeleton.
 | [ADR-002](docs/architecture/decisions/ADR-002-postgresql-typeorm.md) | PostgreSQL + TypeORM Data Mapper, migrations, transactions, spatial data. |
 | [ADR-003](docs/architecture/decisions/ADR-003-jwt-auth.md) | JWT access/refresh policy, cookies, RBAC, public tracking tokens, WebSocket auth. |
 | [Conceptual data model](docs/architecture/data-model.md) | Entities, Mermaid ER diagram, invariants and tenant/timezone conventions. |
+| [`delivery-orders` module](apps/api/src/modules/delivery-orders/docs/README.md) | Pilot module: architecture, business rules, data model, proposed API contracts and local decisions. |
 
 ## Conventions
 
@@ -81,9 +89,12 @@ the type check; the real build pipeline arrives with the application skeleton.
 Done in this milestone:
 
 - npm workspaces scaffold (`apps/api`, `apps/web`, `packages/api-contracts`).
-- Strict TypeScript, ESLint and Vitest gates wired at the root.
+- Strict TypeScript, ESLint and Vitest gates wired at the root, with per-workspace type checks.
 - ADR-001, ADR-002, ADR-003 and the conceptual data model.
-- Placeholder environment file, editor config and Node version pin.
+- Pilot `delivery-orders` module: aggregate, value objects, status policy, typed errors,
+  create/get use cases, Zod validation, in-memory composition root, 27 unit tests and six
+  module documents.
+- Placeholder environment file, editor config and Node version pin (22.13+).
 
-Next milestone: the pilot `delivery-orders` module (domain, use cases, Zod validation,
-tests, module docs) per the architecture plan sections 10-12.
+Next milestone: persist orders with TypeORM/PostgreSQL, add the HTTP adapter and
+authentication scope, then start the identity/catalogues phase.
