@@ -8,7 +8,8 @@
   "scripts": {
     "migration:run": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:run",
     "migration:generate": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:generate",
-    "migration:revert": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:revert"
+    "migration:revert": "tsx ../../node_modules/typeorm/cli.js -d src/infrastructure/database/data-source.ts migration:revert",
+    "seed:demo": "tsx src/scripts/seed-demo.ts"
   },
   "dependencies": {
     "argon2": "^0.45.1",
