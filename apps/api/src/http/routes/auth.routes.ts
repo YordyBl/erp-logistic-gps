@@ -118,15 +118,9 @@ export function createAuthRouter(dependencies: AuthRouterDependencies): Router {
   });
 
   router.get('/me', dependencies.authenticate, (_request, response) => {
-    const user = getAuthenticatedUser(response);
-
-    if (user === undefined) {
-      throw new HttpError(
-        401,
-        'AUTH_TOKEN_MISSING',
-        'The Authorization header with a Bearer access token is required',
-      );
-    }
+    // `authenticate` runs first and throws 401 before `next()` when the token
+    // is missing or invalid, so a caller is always present in this handler.
+    const user = getAuthenticatedUser(response)!;
 
     response.status(200).json({
       data: {

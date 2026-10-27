@@ -3,7 +3,6 @@ import { Router } from 'express';
 
 import type { CreateUserUseCase } from '../../modules/identity-and-access/application/use-cases/create-user/CreateUserUseCase.js';
 import { createUserCommandSchema } from '../../modules/identity-and-access/application/use-cases/create-user/CreateUserCommand.js';
-import { HttpError } from '../errors.js';
 import { getAuthenticatedUser } from '../request-context.js';
 import { requireRole } from '../middleware/require-role.js';
 import { parseIdentityOrThrow } from '../validation.js';
@@ -44,15 +43,9 @@ export function createUsersRouter(
       'Create user request body is invalid',
     );
 
-    const actor = getAuthenticatedUser(response);
-
-    if (actor === undefined) {
-      throw new HttpError(
-        401,
-        'AUTH_TOKEN_MISSING',
-        'The Authorization header with a Bearer access token is required',
-      );
-    }
+    // `authenticate` and `requireRole` run before this handler; the first one
+    // throws 401 without a verified caller, so the actor is always present.
+    const actor = getAuthenticatedUser(response)!;
 
     const result = await dependencies.createUser.execute({
       organizationId: actor.organizationId,

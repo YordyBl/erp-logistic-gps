@@ -29,7 +29,7 @@ flowchart LR
         App["buildApp factory"]
         Log["pino-http + x-request-id"]
         Routes["delivery-orders router<br/>/api/v1/delivery-orders"]
-        Org["organizationResolver<br/>(temporary x-organization-id)"]
+        Auth["authenticate<br/>(shared JWT middleware)"]
         Health["/healthz and /readyz"]
         ErrorHandler["central error handler"]
     end
@@ -71,7 +71,7 @@ flowchart LR
     App --> Routes
     App --> Health
     App --> ErrorHandler
-    Routes --> Org
+    Routes --> Auth
     Routes --> Create
     Routes --> Get
     Create --> Schema
@@ -95,15 +95,16 @@ flowchart LR
 
 ## HTTP layer
 
-`apps/api/src/http/app.ts` exports `buildApp({ deliveryOrders, readiness, logger })`. It
-receives already-composed ports, reads no configuration and opens no connections, so HTTP
-tests build the real Express app with in-memory adapters. `apps/api/src/main.ts` is the
-process composition root.
+`apps/api/src/http/app.ts` exports `buildApp({ deliveryOrders, auth, catalogs, readiness,
+logger })`. It receives already-composed ports, reads no configuration and opens no
+connections, so HTTP tests build the real Express app with in-memory adapters.
+`apps/api/src/main.ts` is the process composition root.
 
 Middleware order is fixed: request logger (establishes `x-request-id` before anything can
-fail), JSON body parser with a `100kb` limit, health routes, the delivery-orders router,
-the terminal not-found handler and the central error handler. Express 5 forwards rejected
-async handlers to that error handler without an extra wrapper.
+fail), JSON body parser with a `100kb` limit, health routes, the auth and user routers, the
+delivery-orders router, the catalog routers, the terminal not-found handler and the central
+error handler. Express 5 forwards rejected async handlers to that error handler without an
+extra wrapper.
 
 | Method | Path | Behavior |
 |---|---|---|
@@ -111,12 +112,20 @@ async handlers to that error handler without an extra wrapper.
 | `GET` | `/api/v1/delivery-orders?publicCode=...` | Tenant-scoped code lookup, then the regular read use case |
 | `GET` | `/api/v1/delivery-orders/:orderId` | Read by internal UUID; cross-organization access is an indistinguishable `404` |
 
-The tenant is established by `organizationResolver`, which reads a UUID from the
-**temporary** `x-organization-id` header and stores it in the request context. This is a
-Fase 0 development adapter, not authentication: any caller can claim any organization.
-Fase 1 replaces it with verified JWT claims (ADR-003) and the use cases stay unchanged. The
-organization is never read from the body, path or query; the create body schema rejects an
+The tenant is established by the shared JWT middleware
+(`apps/api/src/http/middleware/authenticate.ts`), which every delivery-orders route mounts
+before its handlers. It verifies the Bearer access token (pinned HS256, issuer, audience,
+`exp`, `nbf`, `sub`, `jti`), reloads the user from storage, stores the caller and its
+organization in the request context and only then calls `next()`. Routes read the tenant
+with `requireOrganizationId(response)`; a missing context fails closed with `401
+AUTH_TOKEN_MISSING` instead of running without tenant scope. The Phase 0 `x-organization-id`
+header no longer exists, so any value sent under that name is ignored. The organization is
+never read from the body, path or query; the create body schema rejects an
 `organizationId` field.
+
+The router itself applies no role restriction in this milestone: every authenticated role
+may create and read orders. Role-specific rules (for example DRIVER access limited to its
+assigned route) arrive with the dispatch and delivery-execution modules.
 
 Responses and failures:
 
@@ -203,7 +212,8 @@ sequenceDiagram
     participant Ids as IdGenerator
     participant Bus as EventPublisher
 
-    Client->>Route: JSON body + x-organization-id
+    Client->>Route: JSON body + Bearer access token
+    Route->>Route: authenticate; organization from JWT context
     Route->>Route: parse body; organization from context
     Route->>UC: execute(command)
     UC->>Schema: safeParse(input)
@@ -253,7 +263,7 @@ sequenceDiagram
     participant UC as GetDeliveryOrderUseCase
     participant Repo as DeliveryOrderRepository
 
-    Client->>Route: orderId + x-organization-id
+    Client->>Route: orderId + Bearer access token
     Route->>UC: execute(query)
     UC->>Repo: findById(orderId)
     alt order missing
@@ -329,7 +339,7 @@ destroys the data source.
 | `apps/api/src/modules/delivery-orders/tests/get-delivery-order.test.ts` | Owner read, cross-organization forbidden, missing order, query validation |
 | `apps/api/src/modules/delivery-orders/tests/delivery-order-domain.test.ts` | Aggregate invariants, immutability, value-object validation |
 | `apps/api/src/modules/delivery-orders/tests/delivery-order-status-policy.test.ts` | Canonical vocabulary, allowed transitions, terminal states |
-| `apps/api/src/http/tests/delivery-orders.routes.test.ts` | Supertest routes: status/Location, validation, tenant header, pre-check and adapter-thrown `409`, `404` enumeration safety, generic `500` |
+| `apps/api/src/http/tests/delivery-orders.routes.test.ts` | Supertest routes: status/Location, validation, JWT tenant context (a spoofed `x-organization-id` is ignored), pre-check and adapter-thrown `409`, `404` enumeration safety, generic `500` |
 | `apps/api/src/http/tests/error-handling.test.ts` | Unknown route envelope, malformed JSON, generic `500` without leaking the cause |
 | `apps/api/src/http/tests/request-logger.test.ts` | Correlation id generation/honoring/rejection, Lima timestamps, credential redaction |
 | `apps/api/src/http/tests/health.routes.test.ts` | Liveness without PostgreSQL, readiness `200`/`503` without leaking probe errors |
@@ -343,7 +353,9 @@ and the full suite against a PostgreSQL service container, and builds every Comp
 
 - Import-boundary linting (`eslint-plugin-boundaries` or `import/no-restricted-paths`) is a
   follow-up from ADR-001; review currently protects module boundaries.
-- There are no role/authorization tests because authentication is Fase 1; the temporary
-  `x-organization-id` header is not an authorization mechanism.
+- The delivery-orders routes have no role restriction beyond authentication: every
+  authenticated role may create and read orders until dispatch defines per-role limits.
+  Authentication, RBAC, refresh rotation and rate limiting are covered by the identity and
+  HTTP suites.
 - OpenAPI contract tests and a coverage threshold are not configured yet. HTTP tests assert
   behavior but do not validate responses against `docs/api/openapi.yaml`.

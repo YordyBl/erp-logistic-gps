@@ -87,10 +87,12 @@ a compile-time dependency between `delivery-orders` and `identity-and-access`.
 
 ## ADR-004 — Tenant context is an explicit command input
 
-`LoginCommand` requires `organizationId` because the email lookup is tenant-scoped; the HTTP
-adapter resolves it from the tenant context (today the `x-organization-id` header) and never
-from user-supplied body claims. `CreateUserCommand` carries both `organizationId` and
-`actorUserId`: the use case loads the actor, rejects a foreign-tenant or unknown actor with
+`LoginCommand` requires `organizationId` because the email lookup is tenant-scoped. The login
+request carries it in the body: before authentication there is no verified session to derive
+it from, and a wrong organization simply fails the tenant-scoped lookup with the same generic
+credentials error. `CreateUserCommand` instead carries both `organizationId` and
+`actorUserId` from the verified JWT context (`POST /api/v1/users` rejects them in the body):
+the use case loads the actor, rejects a foreign-tenant or unknown actor with
 `UserNotFoundError`, and only then checks that the actor is an `ADMIN`.
 
 `RefreshSessionCommand` and `LogoutCommand` take only the raw refresh token: the stored token
@@ -107,10 +109,10 @@ complicate once the pepper rotates.
 
 The trade-off is that a database dump plus read access to the application code still does not
 yield usable tokens, but a leaked pepper would add defense in depth. A peppered HMAC with
-versioned keys is a deliberate follow-up, together with key rotation. Note that `.env.example`
-still names the earlier `JWT_ACCESS_SECRET` and `JWT_REFRESH_TOKEN_PEPPER` variables; the
-implemented configuration reads `JWT_SECRET` and does not use a pepper. Reconciling that file
-to `JWT_SECRET` is part of the HTTP/environment work.
+versioned keys is a deliberate follow-up, together with key rotation. `.env.example` was
+reconciled with the implemented configuration during the HTTP work: it now advertises only
+`JWT_SECRET` (minimum 32 characters) and no longer mentions `JWT_ACCESS_SECRET` or
+`JWT_REFRESH_TOKEN_PEPPER`. The refresh hash still uses no pepper.
 
 ## ADR-006 — Validation at the boundary, policy in explicit functions
 

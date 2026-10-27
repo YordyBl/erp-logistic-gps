@@ -130,15 +130,9 @@ export function buildInMemoryIdentityModule(
     userRepository: new InMemoryUserRepository(),
     organizationRepository: new InMemoryOrganizationRepository(),
     refreshTokenStore: new InMemoryRefreshTokenStore(),
-    passwordHasher: options.passwordHasher,
-    tokenService: options.tokenService,
-    dummyPasswordHash: options.dummyPasswordHash,
-    ...(options.clock === undefined ? {} : { clock: options.clock }),
-    ...(options.idGenerator === undefined
-      ? {}
-      : { idGenerator: options.idGenerator }),
-    ...(options.sessionPolicy === undefined
-      ? {}
-      : { sessionPolicy: options.sessionPolicy }),
+    // `buildIdentityModule` owns the clock, id-generator and session-policy
+    // defaults, so the optional fields are forwarded as they arrive instead of
+    // being filtered with conditional spreads (R2-conditional-spread-noise).
+    ...options,
   });
 }

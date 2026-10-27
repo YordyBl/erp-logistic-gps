@@ -3,7 +3,10 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type { Express } from 'express';
 import { pino, type Logger } from 'pino';
 
-import type { LoginRateLimitConfig } from '../../../config/config.js';
+import {
+  loadAuthConfig,
+  type LoginRateLimitConfig,
+} from '../../../config/config.js';
 import {
   buildCustomersModule,
 } from '../../../modules/customers/composition/composition-root.js';
@@ -23,6 +26,9 @@ import {
   FixedClock,
   SequentialIdGenerator,
 } from '../../../modules/delivery-orders/tests/support/test-doubles.js';
+import {
+  TEST_DUMMY_PASSWORD_HASH,
+} from '../../../modules/identity-and-access/tests/support/fixtures.js';
 import {
   buildInMemoryIdentityModule,
 } from '../../../modules/identity-and-access/tests/support/in-memory-adapters.js';
@@ -57,13 +63,13 @@ export const TEST_JWT_SECRET = randomBytes(32).toString('hex');
 export const TEST_JWT_ISSUER = 'erp-logistic-api-test';
 export const TEST_JWT_AUDIENCE = 'erp-logistic-web-test';
 
-/** Symbolic dummy hash: the fake hasher only needs a non-empty value. */
-export const TEST_DUMMY_PASSWORD_HASH = 'hashed:test-dummy-password';
-
-export const DEFAULT_LOGIN_RATE_LIMIT: LoginRateLimitConfig = {
-  maxAttempts: 10,
-  windowSeconds: 900,
-};
+/**
+ * Default login rate limit, taken from the validated configuration instead of
+ * repeating the literals: the HTTP tests must fail if the documented defaults
+ * drift (R2-dup-rate-limit-defaults).
+ */
+export const DEFAULT_LOGIN_RATE_LIMIT: LoginRateLimitConfig =
+  loadAuthConfig({ JWT_SECRET: TEST_JWT_SECRET }).loginRateLimit;
 
 /**
  * Valid create payload with the same shape the application command schema
