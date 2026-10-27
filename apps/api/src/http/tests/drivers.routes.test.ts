@@ -117,10 +117,14 @@ describe('POST /api/v1/drivers', () => {
 
     expect(dispatcher.status).toBe(201);
     expect(driver.status).toBe(403);
-    expect(driver.body.error.code).toBe('AUTH_FORBIDDEN');
-    expect(driver.body.error.details).toEqual({
-      requiredRoles: ['ADMIN', 'DISPATCHER'],
-      actualRole: 'DRIVER',
+    expect(driver.body.error).toMatchObject({
+      code: 'AUTH_FORBIDDEN',
+      message: expect.any(String),
+      details: {
+        requiredRoles: ['ADMIN', 'DISPATCHER'],
+        actualRole: 'DRIVER',
+      },
+      correlationId: expect.any(String),
     });
   });
 
@@ -134,7 +138,16 @@ describe('POST /api/v1/drivers', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('DRIVER_INVALID_INPUT');
+    expect(response.body.error).toMatchObject({
+      code: 'DRIVER_INVALID_INPUT',
+      message: expect.any(String),
+      details: {
+        issues: expect.arrayContaining([
+          expect.objectContaining({ message: 'Unrecognized key: "organizationId"', path: '' }),
+        ]),
+      },
+      correlationId: expect.any(String),
+    });
   });
 
   it('returns 400 with field paths for invalid input', async () => {

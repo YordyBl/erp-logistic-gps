@@ -155,7 +155,16 @@ describe('POST /api/v1/customers', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe('CUSTOMER_INVALID_INPUT');
+    expect(response.body.error).toMatchObject({
+      code: 'CUSTOMER_INVALID_INPUT',
+      message: expect.any(String),
+      details: {
+        issues: expect.arrayContaining([
+          expect.objectContaining({ message: 'Unrecognized key: "organizationId"', path: '' }),
+        ]),
+      },
+      correlationId: expect.any(String),
+    });
   });
 
   it('returns 400 with field paths for invalid input', async () => {
