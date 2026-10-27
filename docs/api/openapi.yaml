@@ -4,8 +4,8 @@ info:
   version: 0.2.0
   summary: Last-mile delivery ERP for Lima Metropolitana and Callao
   description: |
-    Phase 1 HTTP contract: JWT authentication, the pilot `delivery-orders`
-    module, and the org-scoped customer, driver and vehicle catalogs.
+    JWT authentication, organization-scoped catalogs and orders, and manual
+    route planning with audited order assignment.
 
     **Authentication.** Every `/api/v1` business route requires
     `Authorization: Bearer <access JWT>`. The token is HS256-only and carries
@@ -43,7 +43,9 @@ tags:
   - name: users
     description: ADMIN-only user provisioning
   - name: delivery-orders
-    description: Create and read delivery orders inside one organization
+    description: Create, list, edit, cancel and audit delivery orders inside one organization
+  - name: delivery-routes
+    description: Manual route planning with ordered stops and tenant-bound order assignment
   - name: customers
     description: Customer catalog inside one organization
   - name: drivers
@@ -291,6 +293,83 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-routes:
+    post:
+      tags: [delivery-routes]
+      operationId: planDeliveryRoute
+      summary: Plan a route with a driver, vehicle, stops and orders
+      description: |
+        ADMIN or DISPATCHER plans at least one sequenced stop; each stop can
+        contain several orders. The driver and vehicle must be active and free
+        from other active routes. Orders must be `created`, owned by the caller's
+        organization and not on another active route. Planning commits the
+        route, ordered stop/order links, both order transitions
+        `created → planned → assigned` and their audit rows in one transaction.
+        Rejections write nothing. Execution and GPS are separate milestones.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanDeliveryRouteRequest'
+      responses:
+        '201':
+          description: Planned route with ordered stops.
+          headers:
+            Location:
+              description: Relative URL of the created route.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryRouteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-routes/{routeId}:
+    get:
+      tags: [delivery-routes]
+      operationId: getDeliveryRoute
+      summary: Read one route in the caller organization
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: routeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Route found inside the caller's organization.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryRouteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/delivery-orders:
@@ -1360,6 +1439,108 @@ components:
                   message: An unexpected error occurred while processing the request
                   correlationId: c0ffee00-0000-4000-8000-000000000000
   schemas:
+    PlanDeliveryRouteRequest:
+      type: object
+      additionalProperties: false
+      required: [publicCode, plannedDate, driverId, vehicleId, stops]
+      properties:
+        publicCode:
+          type: string
+          minLength: 3
+          maxLength: 32
+          description: Readable route code, normalized to uppercase per organization.
+        plannedDate:
+          type: string
+          format: date
+        driverId:
+          type: string
+          format: uuid
+        vehicleId:
+          type: string
+          format: uuid
+        stops:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [sequence, addressLine, orderIds]
+            properties:
+              sequence:
+                type: integer
+                minimum: 1
+              addressLine:
+                type: string
+                minLength: 5
+                maxLength: 200
+              latitude:
+                type: number
+                minimum: -90
+                maximum: 90
+                description: Supply together with longitude, or omit both.
+              longitude:
+                type: number
+                minimum: -180
+                maximum: 180
+              orderIds:
+                type: array
+                minItems: 1
+                items:
+                  type: string
+                  format: uuid
+    DeliveryRouteResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, organizationId, publicCode, plannedDate, driverId, vehicleId, status, createdAt, stops]
+          properties:
+            id:
+              type: string
+              format: uuid
+            organizationId:
+              type: string
+              format: uuid
+            publicCode:
+              type: string
+            plannedDate:
+              type: string
+              format: date
+            driverId:
+              type: string
+              format: uuid
+            vehicleId:
+              type: string
+              format: uuid
+            status:
+              type: string
+              enum: [planned]
+            createdAt:
+              type: string
+              format: date-time
+            stops:
+              type: array
+              items:
+                type: object
+                required: [id, sequence, addressLine, latitude, longitude, orderIds]
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  sequence:
+                    type: integer
+                  addressLine:
+                    type: string
+                  latitude:
+                    type: [number, 'null']
+                  longitude:
+                    type: [number, 'null']
+                  orderIds:
+                    type: array
+                    items:
+                      type: string
+                      format: uuid
     UserRole:
       type: string
       enum: [ADMIN, DISPATCHER, DRIVER]

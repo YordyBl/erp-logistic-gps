@@ -25,6 +25,7 @@ import { DeliveryOrderPackageEntity } from './DeliveryOrderPackageEntity.js';
  * while the stored instant stays absolute.
  */
 @Entity({ name: 'delivery_orders' })
+@Unique('uq_delivery_orders_organization_id', ['organizationId', 'id'])
 @Unique('uq_delivery_orders_organization_public_code', ['organizationId', 'publicCode'])
 @Index('idx_delivery_orders_organization_id', ['organizationId'])
 @Check(
@@ -102,6 +103,16 @@ export class DeliveryOrderEntity {
 
   @Column({ name: 'status', type: 'varchar', length: 20, default: 'created' })
   status!: string;
+
+  @Column({ name: 'active_route_id', type: 'uuid', nullable: true })
+  activeRouteId!: string | null;
+
+  @ManyToOne('DeliveryRouteEntity', { nullable: true, onDelete: 'RESTRICT' })
+  @JoinColumn([
+    { name: 'organization_id', referencedColumnName: 'organizationId' },
+    { name: 'active_route_id', referencedColumnName: 'id' },
+  ])
+  activeRoute!: { readonly id: string } | null;
 
   @Column({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;

@@ -23,6 +23,7 @@ import {
   createDeliveryOrdersRouter,
   type DeliveryOrdersHttpPorts,
 } from './routes/delivery-orders.routes.js';
+import { createDeliveryRoutesRouter } from './routes/delivery-routes.routes.js';
 import {
   createDriversRouter,
   type DriversHttpPorts,
@@ -76,6 +77,8 @@ export interface CatalogsHttpDependencies {
 export interface AppDependencies {
   /** Use cases and repository of the delivery-orders module, already composed. */
   readonly deliveryOrders: DeliveryOrdersHttpPorts;
+  /** Optional for old test callers; production always composes the route planner. */
+  readonly deliveryRoutes?: import('../modules/delivery-routes/composition/composition-root.js').DeliveryRoutesModule;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
   /** Customer, driver and vehicle catalogs. */
@@ -100,6 +103,7 @@ export interface AppDependencies {
  */
 export function buildApp({
   deliveryOrders,
+  deliveryRoutes,
   auth,
   catalogs,
   readiness,
@@ -134,6 +138,9 @@ export function buildApp({
     '/api/v1/delivery-orders',
     createDeliveryOrdersRouter(deliveryOrders, authenticate),
   );
+  if (deliveryRoutes !== undefined) {
+    app.use('/api/v1/delivery-routes', createDeliveryRoutesRouter(deliveryRoutes, authenticate));
+  }
   app.use(
     '/api/v1/customers',
     createCustomersRouter(catalogs.customers, authenticate),

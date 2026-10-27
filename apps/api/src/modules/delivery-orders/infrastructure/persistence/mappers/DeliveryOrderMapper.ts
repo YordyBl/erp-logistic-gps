@@ -27,6 +27,7 @@ export function toOrderEntity(order: DeliveryOrder): DeliveryOrderEntity {
   entity.latitude = numberToNumeric(order.deliveryAddress.latitude);
   entity.longitude = numberToNumeric(order.deliveryAddress.longitude);
   entity.status = order.status;
+  entity.activeRouteId = order.activeRouteId;
   entity.createdAt = new Date(order.createdAt);
   entity.updatedAt = new Date(order.updatedAt);
 
@@ -80,6 +81,7 @@ export function toDomain(
     createdAt: orderEntity.createdAt.toISOString(),
     updatedAt: orderEntity.updatedAt.toISOString(),
     status: orderEntity.status,
+    activeRouteId: orderEntity.activeRouteId,
   });
 }
 

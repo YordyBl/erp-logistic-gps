@@ -26,6 +26,7 @@ export interface DeliveryOrderCreateProps {
   readonly deliveryAddress: DeliveryAddress;
   readonly packages: readonly Package[];
   readonly createdAt: string;
+  readonly activeRouteId?: string | null;
 }
 
 /**
@@ -47,6 +48,7 @@ export class DeliveryOrder {
   readonly status: DeliveryOrderStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly activeRouteId: string | null;
 
   private readonly packageItems: readonly Package[];
 
@@ -60,6 +62,7 @@ export class DeliveryOrder {
     createdAt: string,
     status: DeliveryOrderStatus = INITIAL_DELIVERY_ORDER_STATUS,
     updatedAt: string = createdAt,
+    activeRouteId: string | null = null,
   ) {
     this.id = id;
     this.organizationId = organizationId;
@@ -70,6 +73,7 @@ export class DeliveryOrder {
     this.status = status;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
+    this.activeRouteId = activeRouteId;
   }
 
   static create(props: DeliveryOrderCreateProps): DeliveryOrder {
@@ -109,6 +113,9 @@ export class DeliveryOrder {
       props.deliveryAddress,
       Object.freeze([...props.packages]),
       createdAt,
+      INITIAL_DELIVERY_ORDER_STATUS,
+      createdAt,
+      props.activeRouteId ?? null,
     );
   }
 
@@ -132,7 +139,7 @@ export class DeliveryOrder {
     return new DeliveryOrder(
       initial.id, initial.organizationId, initial.publicCode,
       initial.recipient, initial.deliveryAddress, initial.packages,
-      initial.createdAt, props.status, updatedAt,
+      initial.createdAt, props.status, updatedAt, props.activeRouteId ?? null,
     );
   }
 
@@ -148,6 +155,7 @@ export class DeliveryOrder {
       recipient: this.recipient, deliveryAddress: this.deliveryAddress,
       packages: this.packages, createdAt: this.createdAt,
       status: 'cancelled', updatedAt: occurredAt,
+      activeRouteId: this.activeRouteId,
     });
   }
 
@@ -169,7 +177,33 @@ export class DeliveryOrder {
       deliveryAddress: changes.deliveryAddress ?? this.deliveryAddress,
       packages: changes.packages ?? this.packages,
       createdAt: this.createdAt, updatedAt: occurredAt, status: this.status,
+      activeRouteId: this.activeRouteId,
     });
+  }
+
+  planAndAssign(routeId: string, plannedAt: string, assignedAt: string): {
+    readonly planned: DeliveryOrder; readonly assigned: DeliveryOrder;
+  } {
+    if (this.activeRouteId !== null || !canTransitionDeliveryOrderStatus(this.status, 'planned')) {
+      throw new DeliveryOrderInvariantError('Only a created, unassigned order can be planned');
+    }
+    if (!isUuid(routeId)) throw new DeliveryOrderValidationError('routeId must be a UUID');
+    const planned = DeliveryOrder.restore({
+      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      recipient: this.recipient, deliveryAddress: this.deliveryAddress,
+      packages: this.packages, createdAt: this.createdAt,
+      status: 'planned', updatedAt: plannedAt, activeRouteId: routeId,
+    });
+    if (!canTransitionDeliveryOrderStatus(planned.status, 'assigned')) {
+      throw new DeliveryOrderInvariantError('Planned order cannot be assigned');
+    }
+    const assigned = DeliveryOrder.restore({
+      id: planned.id, organizationId: planned.organizationId, publicCode: planned.publicCode,
+      recipient: planned.recipient, deliveryAddress: planned.deliveryAddress,
+      packages: planned.packages, createdAt: planned.createdAt,
+      status: 'assigned', updatedAt: assignedAt, activeRouteId: routeId,
+    });
+    return { planned, assigned };
   }
 }
 

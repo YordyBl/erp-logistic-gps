@@ -35,6 +35,9 @@ import {
   VehicleNotFoundError,
   VehicleValidationError,
 } from '../../modules/vehicles/domain/errors/VehicleError.js';
+import {
+  DeliveryRouteConflictError, DeliveryRouteNotFoundError, DeliveryRouteValidationError,
+} from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import type { ErrorDetails } from '../../shared/errors/DomainError.js';
 import { HttpError, toErrorBody } from '../errors.js';
 import { getCorrelationId } from '../request-context.js';
@@ -95,6 +98,17 @@ function mapError(error: unknown): MappedError {
       details: error.details,
       logLevel: undefined,
       logMessage: undefined,
+    };
+  }
+
+  if (error instanceof DeliveryRouteValidationError ||
+      error instanceof DeliveryRouteNotFoundError ||
+      error instanceof DeliveryRouteConflictError) {
+    return {
+      statusCode: error instanceof DeliveryRouteValidationError ? 400
+        : error instanceof DeliveryRouteNotFoundError ? 404 : 409,
+      code: error.code, message: error.message, details: error.details,
+      logLevel: undefined, logMessage: undefined,
     };
   }
 

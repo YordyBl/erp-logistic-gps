@@ -19,6 +19,7 @@ import {
  * decimal value.
  */
 @Entity({ name: 'vehicles' })
+@Unique('uq_vehicles_organization_id', ['organizationId', 'id'])
 @Unique('uq_vehicles_organization_plate', ['organizationId', 'plate'])
 @Index('idx_vehicles_organization_id', ['organizationId'])
 @Check('chk_vehicles_status', `"status" IN ('active', 'inactive')`)

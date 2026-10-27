@@ -7,6 +7,9 @@ import { DataSource, type DataSourceOptions } from 'typeorm';
 import { DeliveryOrderEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderPackageEntity.js';
 import { DeliveryOrderStatusHistoryEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderStatusHistoryEntity.js';
+import { DeliveryRouteEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryRouteEntity.js';
+import { DeliveryStopEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryStopEntity.js';
+import { DeliveryStopOrderEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryStopOrderEntity.js';
 import { CustomerEntity } from '../../modules/customers/infrastructure/persistence/entities/CustomerEntity.js';
 import { DriverEntity } from '../../modules/drivers/infrastructure/persistence/entities/DriverEntity.js';
 import { OrganizationEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/OrganizationEntity.js';
@@ -63,6 +66,9 @@ function commonOptions() {
       DeliveryOrderEntity,
       DeliveryOrderPackageEntity,
       DeliveryOrderStatusHistoryEntity,
+      DeliveryRouteEntity,
+      DeliveryStopEntity,
+      DeliveryStopOrderEntity,
       OrganizationEntity,
       UserEntity,
       RefreshTokenEntity,

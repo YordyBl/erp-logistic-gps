@@ -135,6 +135,8 @@ is a defect.
 | `PATCH` | `/api/v1/delivery-orders/:orderId` | Edit recipient, address or packages only in `created` (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/delivery-orders/:orderId/cancel` | Cancel before transit while preserving the audited status history (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
+| `POST` | `/api/v1/delivery-routes` | Plan sequenced stops and assign orders with an active driver and vehicle (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
@@ -221,8 +223,9 @@ API code (`docker compose build`).
 - The web client is a placeholder; the React application is not implemented.
 - The API runs through `tsx` instead of a compiled production build.
 - No backups, TLS/reverse proxy or observability backend.
-- Delivery execution (photo evidence, incidents), routes, dispatch and tracking are later
-  phases.
+- Manual route planning is implemented locally; reassignment, redespacho and
+  route execution are still pending in Phase 3. Photo evidence and incidents
+  belong to Phase 4, and tracking to Phase 5.
 
 The architecture plan assigns orders to Phase 2, routes and dispatch to Phase 3,
 delivery execution to Phase 4, and GPS tracking to Phase 5. The React client

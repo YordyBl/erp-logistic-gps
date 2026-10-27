@@ -13,9 +13,11 @@ import {
 import type { DeliveryOrderRepository } from '../../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
 import {
   createDeliveryOrdersModule,
+  InMemoryDeliveryOrderRepository,
   InMemoryEventPublisher,
   type DeliveryOrdersModule,
 } from '../../../modules/delivery-orders/composition/composition-root.js';
+import { createDeliveryRoutesModule, InMemoryRoutePlanningStore } from '../../../modules/delivery-routes/composition/composition-root.js';
 import {
   buildDriversModule,
 } from '../../../modules/drivers/composition/composition-root.js';
@@ -159,9 +161,19 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     eventPublisher: new InMemoryEventPublisher(),
     ...(options.repository === undefined ? {} : { repository: options.repository }),
   });
+  const drivers = buildDriversModule();
+  const vehicles = buildVehiclesModule();
+  const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
+    ? createDeliveryRoutesModule({
+      store: new InMemoryRoutePlanningStore(module.repository),
+      getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
+      clock: new FixedClock(CREATED_AT),
+    })
+    : undefined;
 
   const app = buildApp({
     deliveryOrders: module,
+    ...(deliveryRoutes === undefined ? {} : { deliveryRoutes }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,
@@ -177,8 +189,8 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     },
     catalogs: {
       customers: buildCustomersModule(),
-      drivers: buildDriversModule(),
-      vehicles: buildVehiclesModule(),
+      drivers,
+      vehicles,
     },
     readiness: options.readiness ?? (async () => undefined),
     logger,

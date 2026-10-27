@@ -18,6 +18,7 @@ import {
  * into `DriverInvariantError`.
  */
 @Entity({ name: 'drivers' })
+@Unique('uq_drivers_organization_id', ['organizationId', 'id'])
 @Unique('uq_drivers_organization_document_number', [
   'organizationId',
   'documentNumber',

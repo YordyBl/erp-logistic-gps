@@ -10,6 +10,8 @@ import {
   createDeliveryOrdersModuleFromDataSource,
   type DeliveryOrdersModule,
 } from '../../modules/delivery-orders/composition/composition-root.js';
+import { createDeliveryRoutesModule } from '../../modules/delivery-routes/composition/composition-root.js';
+import { RoutePlanningTypeOrmStore } from '../dispatch/RoutePlanningTypeOrmStore.js';
 import {
   createDriversModuleFromDataSource,
   type DriversModule,
@@ -25,13 +27,14 @@ import {
 
 export interface ComposedApiModules {
   readonly deliveryOrders: DeliveryOrdersModule;
+  readonly deliveryRoutes: ReturnType<typeof createDeliveryRoutesModule>;
   readonly identity: IdentityModule;
   readonly customers: CustomersModule;
   readonly drivers: DriversModule;
   readonly vehicles: VehiclesModule;
   readonly dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'auth' | 'catalogs'
   >;
 }
 
@@ -60,12 +63,17 @@ export async function composeApiModules(
       createDriversModuleFromDataSource(dataSource),
       createVehiclesModuleFromDataSource(dataSource),
     ]);
+  const deliveryRoutes = createDeliveryRoutesModule({
+    store: new RoutePlanningTypeOrmStore(dataSource),
+    getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
+  });
 
   const dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'auth' | 'catalogs'
   > = {
     deliveryOrders,
+    deliveryRoutes,
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,
@@ -82,5 +90,5 @@ export async function composeApiModules(
     catalogs: { customers, drivers, vehicles },
   };
 
-  return { deliveryOrders, identity, customers, drivers, vehicles, dependencies };
+  return { deliveryOrders, deliveryRoutes, identity, customers, drivers, vehicles, dependencies };
 }

@@ -66,6 +66,26 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     return edited;
   }
 
+  /** Stage all order transitions before applying any, so rejected plans write nothing. */
+  planAndAssign(organizationId: string, routeId: string, orderIds: readonly string[],
+    actorUserId: string, plannedAt: string, assignedAt: string): void {
+    const staged = orderIds.map((id) => {
+      const original = this.orders.get(id);
+      if (original === undefined || original.organizationId !== organizationId) {
+        throw new DeliveryOrderNotFoundError(id);
+      }
+      return { id, original, ...original.planAndAssign(routeId, plannedAt, assignedAt) };
+    });
+    for (const { id, original, assigned, planned } of staged) {
+      this.orders.set(id, assigned);
+      this.statusHistory.set(id, [
+        ...(this.statusHistory.get(id) ?? []),
+        { fromStatus: original.status, toStatus: planned.status, actorUserId, occurredAt: plannedAt },
+        { fromStatus: planned.status, toStatus: assigned.status, actorUserId, occurredAt: assignedAt },
+      ]);
+    }
+  }
+
   async cancel(organizationId: string, orderId: string, actorUserId: string, occurredAt: string): Promise<DeliveryOrder> {
     const order = this.orders.get(orderId);
     if (order === undefined) throw new DeliveryOrderNotFoundError(orderId);
