@@ -25,7 +25,7 @@ milestones.
 | Create/read use cases, Zod validation and Express routes under `/api/v1/delivery-orders` | Server-side public-code sequences |
 | TypeORM entities, repository adapter and the initial migration | `confirm-delivery`, incident reporting and evidence flows (`delivery-execution`) |
 | Per-organization uniqueness pre-check plus database-constraint translation to a 409 invariant | Cross-module event transport, outbox and replay guarantees |
-| Order-side status vocabulary and transition policy | JWT-based tenant resolution (a temporary header is used in Fase 0) |
+| Order-side status vocabulary and transition policy; JWT-based tenant resolution (Phase 1) | — |
 | `DeliveryOrderCreated` domain event | — |
 
 ## Boundaries and dependencies
@@ -87,10 +87,13 @@ Migrations live in `apps/api/migrations`. HTTP adapters live in `apps/api/src/ht
 ## Remaining production adaptation
 
 - [ ] Generate public codes from a per-organization sequence instead of trusting a caller.
-- [ ] Populate `organizationId` from validated JWT claims; the temporary
-      `x-organization-id` header in Fase 0 is not an authorization mechanism.
+- [x] Tenant context comes from verified JWT claims (Phase 1); the Phase 0
+      `x-organization-id` header is removed and spoofed values are ignored.
 - [ ] Publish `DeliveryOrderCreated` through the ratified event transport/outbox.
-- [ ] Add role-based authorization tests and keep the OpenAPI contract in sync with routes.
+- [x] Authorization tests: every delivery-orders route requires a valid bearer
+      token (missing/invalid → `401`); role-level RBAC is enforced where roles
+      gate routes (users, catalogs) and delivery-orders accepts every
+      authenticated role. OpenAPI stays in sync with the routes.
 
 ## Documentation
 

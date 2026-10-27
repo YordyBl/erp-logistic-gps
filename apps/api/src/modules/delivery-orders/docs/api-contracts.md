@@ -1,13 +1,14 @@
 # API contracts — `delivery-orders`
 
-> **Status: implemented (Fase 0).** The Express adapter lives in
+> **Status: implemented (Phase 0; auth updated in Phase 1).** The Express adapter lives in
 > `apps/api/src/http`. The OpenAPI 3.1 document at `docs/api/openapi.yaml` is the
 > source of truth for HTTP; this page explains the conventions, decisions and
 > error semantics that an OpenAPI reader cannot infer.
 
 ## Quick path
 
-1. Send `x-organization-id: <uuid>` with every delivery-orders request.
+1. Authenticate with `Authorization: Bearer <access-token>` (obtained from
+   `POST /api/v1/auth/login`); the tenant comes from the verified JWT claims.
 2. `POST /api/v1/delivery-orders` → `201` with the created resource and a `Location` header.
 3. Read it back with `GET /api/v1/delivery-orders/{orderId}` or
    `GET /api/v1/delivery-orders?publicCode=...`.
@@ -19,8 +20,8 @@
 | Topic | Rule |
 |---|---|
 | Base path | `/api/v1` |
-| Tenancy (temporary) | Fase 0 reads the caller's organization from `x-organization-id` (dev-only middleware). Fase 1 replaces it with verified JWT claims (ADR-003). Missing or malformed header → `401`. The organization is never accepted from the body, path or query. |
-| Authentication | Not implemented in Fase 0. JWT access tokens (15 min) and RBAC land in Fase 1. |
+| Tenancy | The caller's organization comes only from the verified JWT claims set by the shared `authenticate` middleware (ADR-003). The organization is never accepted from the body, path or query. |
+| Authentication | JWT access tokens (15 min, HS256 via `jose`, pinned algorithm and required claims) with RBAC roles (`ADMIN`, `DISPATCHER`, `DRIVER`). A missing or invalid token → `401`. |
 | Content type | `application/json; charset=utf-8` |
 | Ids | Internal UUIDs in paths. Public codes are lookup/display values, never credentials. |
 | Timestamps | ISO-8601 instants on the wire (UTC `Z`, as produced by the clock and `timestamptz` persistence). Clients render America/Lima (`-05:00`). |
@@ -34,7 +35,7 @@
 
 Creates one order in the caller's organization.
 
-Required headers: `x-organization-id`. Optional: `x-request-id`, `content-type: application/json`.
+Required headers: `authorization: Bearer <access-token>`. Optional: `x-request-id`, `content-type: application/json`.
 
 Request body — `organizationId` is not part of the accepted shape and is rejected as an unknown key:
 
@@ -98,7 +99,7 @@ and `x-request-id`.
 |---|---|
 | `201` | Order created |
 | `400` | Invalid body (field issues in `details.issues`) or malformed JSON |
-| `401` | Missing/invalid `x-organization-id` |
+| `401` | Missing/invalid access token |
 | `409` | `publicCode` already used in the organization |
 | `500` | Unexpected failure; generic message, no internals |
 
@@ -110,7 +111,7 @@ Reads one order inside the caller's organization.
 |---|---|
 | `200` | Order found and owned by the caller's organization |
 | `400` | `orderId` is not a UUID |
-| `401` | Missing/invalid `x-organization-id` |
+| `401` | Missing/invalid access token |
 | `404` | Unknown id **or** an order owned by another organization (DO-010) |
 | `500` | Unexpected failure |
 
@@ -128,7 +129,7 @@ Example: `GET /api/v1/delivery-orders?publicCode=ord-2026-0001`
 |---|---|
 | `200` | Code found in the caller's organization |
 | `400` | `publicCode` missing, malformed, or an unknown query parameter is present |
-| `401` | Missing/invalid `x-organization-id` |
+| `401` | Missing/invalid access token |
 | `404` | Unknown code **or** a code owned by another organization |
 | `500` | Unexpected failure |
 
@@ -167,8 +168,8 @@ the request body.
 |---|---|---|
 | Zod/value-object rejection | `DELIVERY_ORDER_INVALID_INPUT` | `400` |
 | Malformed JSON body | `INVALID_JSON` | `400` |
-| Missing tenant header | `ORGANIZATION_REQUIRED` | `401` |
-| Malformed tenant header | `ORGANIZATION_INVALID` | `401` |
+| Missing access token | `AUTH_TOKEN_MISSING` | `401` |
+| Invalid/expired access token | `AUTH_TOKEN_INVALID` | `401` |
 | Unknown order id | `DELIVERY_ORDER_NOT_FOUND` | `404` |
 | Order owned by another organization | `DELIVERY_ORDER_NOT_FOUND` | `404` |
 | Unknown route | `ROUTE_NOT_FOUND` | `404` |
@@ -201,8 +202,8 @@ reachable and become ready afterwards.
   header credentials are redacted; the error envelope never copies request data.
 - Public codes are not credentials. Public tracking uses a separate opaque,
   revocable token (ADR-003), not `publicCode` and not the internal UUID.
-- The temporary `x-organization-id` header is not authorization. Any caller can
-  claim any organization until JWT verification lands in Fase 1.
+- Tenancy is enforced by verified JWT claims: a caller can only address its own
+  organization, and cross-organization reads are indistinguishable from `404`.
 - Every state-changing operation will write an audit event in the same
   transaction once the audit model exists; creation is currently audited only by
   the domain event.

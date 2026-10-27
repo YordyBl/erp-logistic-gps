@@ -57,7 +57,7 @@ forbidden error so the distinction is testable.
 
 **Decision.** `GetDeliveryOrderUseCase` loads by id without a tenant filter and throws
 `DeliveryOrderNotFoundError` or `DeliveryOrderForbiddenError`. The HTTP adapter decides the
-wire behavior; Fase 0 maps both to `404` (DO-010).
+wire behavior; Phase 0 maps both to `404` (DO-010).
 
 **Why.** The application layer keeps enough information to make an explicit authorization
 decision; HTTP can choose the disclosure policy without re-querying.
@@ -147,7 +147,7 @@ data-loss bug; the OpenAPI document states the rendering convention explicitly.
 ## DO-010 — Cross-organization reads return 404 over HTTP
 
 **Context.** DO-003 keeps a distinct forbidden error in the application so the distinction
-stays testable. Fase 0 had to choose what the wire exposes; the parent decision is
+stays testable. Phase 0 had to choose what the wire exposes; the parent decision is
 enumeration safety.
 
 **Decision.** `DeliveryOrderForbiddenError` maps to `404` with code

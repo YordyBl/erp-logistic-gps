@@ -22,6 +22,12 @@ x-api-environment: &api-environment
   NODE_ENV: ${NODE_ENV:-development}
   TZ: ${TZ:-America/Lima}
   API_PORT: "3000"
+  # Throwaway local dev signing secret (>= 32 chars). Real deployments inject
+  # JWT_SECRET from outside the repository; never reuse the default.
+  JWT_SECRET: ${JWT_SECRET:-dev-only-throwaway-secret-change-me-32-bytes}
+  # The local stack serves plain HTTP, so the refresh cookie cannot be Secure
+  # here; production over TLS must set COOKIE_SECURE=true.
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
   # Derived from the POSTGRES_* values so the connection string cannot drift
   # from the database credentials. Override DATABASE_URL only for one-off
   # tooling that needs a different host (for example, a tool on the host).
