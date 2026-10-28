@@ -184,15 +184,28 @@ export class DeliveryOrder {
   planAndAssign(routeId: string, plannedAt: string, assignedAt: string): {
     readonly planned: DeliveryOrder; readonly assigned: DeliveryOrder;
   } {
-    if (this.activeRouteId !== null || !canTransitionDeliveryOrderStatus(this.status, 'planned')) {
-      throw new DeliveryOrderInvariantError('Only a created, unassigned order can be planned');
+    if (!canTransitionDeliveryOrderStatus(this.status, 'planned') ||
+        (this.status === 'created' && this.activeRouteId !== null) ||
+        (this.status === 'returned' && this.activeRouteId === null)) {
+      throw new DeliveryOrderInvariantError('Only a created order or a returned order with a prior route can be planned');
     }
     if (!isUuid(routeId)) throw new DeliveryOrderValidationError('routeId must be a UUID');
+    if (routeId === this.activeRouteId) {
+      throw new DeliveryOrderInvariantError('A retry requires a new route');
+    }
+    // A returned order can be replanned even when a test clock is behind its
+    // previous attempt; audit transitions must remain strictly chronological.
+    const effectivePlannedAt = this.status === 'returned' &&
+      Date.parse(plannedAt) <= Date.parse(this.updatedAt)
+      ? new Date(Date.parse(this.updatedAt) + 1).toISOString() : plannedAt;
+    const effectiveAssignedAt = this.status === 'returned'
+      ? new Date(Math.max(Date.parse(assignedAt), Date.parse(effectivePlannedAt) + 1)).toISOString()
+      : assignedAt;
     const planned = DeliveryOrder.restore({
       id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
       recipient: this.recipient, deliveryAddress: this.deliveryAddress,
       packages: this.packages, createdAt: this.createdAt,
-      status: 'planned', updatedAt: plannedAt, activeRouteId: routeId,
+      status: 'planned', updatedAt: effectivePlannedAt, activeRouteId: routeId,
     });
     if (!canTransitionDeliveryOrderStatus(planned.status, 'assigned')) {
       throw new DeliveryOrderInvariantError('Planned order cannot be assigned');
@@ -201,7 +214,7 @@ export class DeliveryOrder {
       id: planned.id, organizationId: planned.organizationId, publicCode: planned.publicCode,
       recipient: planned.recipient, deliveryAddress: planned.deliveryAddress,
       packages: planned.packages, createdAt: planned.createdAt,
-      status: 'assigned', updatedAt: assignedAt, activeRouteId: routeId,
+      status: 'assigned', updatedAt: effectiveAssignedAt, activeRouteId: routeId,
     });
     return { planned, assigned };
   }

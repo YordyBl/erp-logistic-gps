@@ -224,9 +224,9 @@ API code (`docker compose build`).
 - The web client is a placeholder; the React application is not implemented.
 - The API runs through `tsx` instead of a compiled production build.
 - No backups, TLS/reverse proxy or observability backend.
-- Manual route planning is implemented locally; reassignment, redespacho and
-  route execution are still pending in Phase 3. Photo evidence and incidents
-  belong to Phase 4, and tracking to Phase 5.
+- Manual route planning, driver/vehicle reassignment and redispatch of returned
+  orders are implemented locally; route execution is still pending.
+  Photo evidence and incidents belong to Phase 4, and tracking to Phase 5.
 
 The architecture plan assigns orders to Phase 2, routes and dispatch to Phase 3,
 delivery execution to Phase 4, and GPS tracking to Phase 5. The React client

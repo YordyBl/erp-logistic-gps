@@ -30,12 +30,13 @@ describe('DeliveryOrderStatusPolicy', () => {
     expect(canTransitionDeliveryOrderStatus('assigned', 'in_transit')).toBe(true);
     expect(canTransitionDeliveryOrderStatus('in_transit', 'delivered')).toBe(true);
     expect(canTransitionDeliveryOrderStatus('in_transit', 'returned')).toBe(true);
+    expect(canTransitionDeliveryOrderStatus('returned', 'planned')).toBe(true);
   });
 
-  it('rejects skipping steps and leaving terminal states', () => {
+  it('rejects skipping steps and leaving delivered or cancelled states', () => {
     expect(canTransitionDeliveryOrderStatus('created', 'delivered')).toBe(false);
     expect(canTransitionDeliveryOrderStatus('delivered', 'returned')).toBe(false);
-    expect(canTransitionDeliveryOrderStatus('returned', 'planned')).toBe(false);
+    expect(canTransitionDeliveryOrderStatus('returned', 'assigned')).toBe(false);
     expect(canTransitionDeliveryOrderStatus('cancelled', 'created')).toBe(false);
   });
 

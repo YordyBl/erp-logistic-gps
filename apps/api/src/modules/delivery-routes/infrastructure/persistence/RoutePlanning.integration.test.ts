@@ -115,6 +115,107 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     expect(await orders.findStatusHistory(organizationId, third)).toEqual([]);
   });
 
+  it('redispatches a returned order atomically without losing its prior route or audit', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const id = await makeOrder('RETURN-RETRY-1');
+    const first = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    const actor = randomUUID();
+    await store.plan(first, actor);
+    const returnedAt = '2026-10-27T16:00:00.000Z';
+    await source.query(`UPDATE delivery_orders SET status='returned', updated_at=$2
+      WHERE id=$1`, [id, returnedAt]);
+    await source.query(`INSERT INTO delivery_order_status_history
+      (id, order_id, organization_id, from_status, to_status, actor_user_id, occurred_at)
+      VALUES ($1,$2,$3,'assigned','returned',$4,$5)`, [randomUUID(), id, organizationId, actor, returnedAt]);
+    const original = await orders.findStatusHistory(organizationId, id);
+    const second = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    // The original route is no longer reserving its resources after execution.
+    await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1`, [first.id]);
+    await expect(store.plan(second, actor)).resolves.toEqual(second);
+    expect((await orders.findById(id))?.activeRouteId).toBe(second.id);
+    expect((await orders.findById(id))?.status).toBe('assigned');
+    const history = await orders.findStatusHistory(organizationId, id);
+    expect(history.slice(0, original.length)).toEqual(original);
+    expect(history.slice(original.length).map((entry) => [entry.fromStatus, entry.toStatus]))
+      .toEqual([['returned', 'planned'], ['planned', 'assigned']]);
+    expect(Date.parse(history.at(-2)?.occurredAt ?? '')).toBeGreaterThan(Date.parse(returnedAt));
+    const links = await source.query<{ route_id: string; active: boolean }[]>(
+      'SELECT route_id, active FROM delivery_stop_orders WHERE order_id=$1 ORDER BY created_at, route_id', [id]);
+    expect(links).toHaveLength(2);
+    expect(links.find((link) => link.route_id === first.id)?.active).toBe(false);
+    expect(links.find((link) => link.route_id === second.id)?.active).toBe(true);
+    await expect(store.plan(plannedRoute(organizationId, driverId, vehicleId, [id]), actor))
+      .rejects.toThrow();
+    expect(await orders.findStatusHistory(organizationId, id)).toEqual(history);
+  });
+
+  it('commits only one concurrent redispatch for the same returned order', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const id = await makeOrder('CONCURRENT-RETURN-1');
+    const actor = randomUUID();
+    const previous = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    await store.plan(previous, actor);
+    const returnedAt = '2026-10-27T16:00:00.000Z';
+    await source.query(`UPDATE delivery_orders SET status='returned', updated_at=$2 WHERE id=$1`,
+      [id, returnedAt]);
+    await source.query(`INSERT INTO delivery_order_status_history
+      (id, order_id, organization_id, from_status, to_status, actor_user_id, occurred_at)
+      VALUES ($1,$2,$3,'assigned','returned',$4,$5)`, [randomUUID(), id, organizationId, actor, returnedAt]);
+    await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1`, [previous.id]);
+    const alternateDriver = randomUUID();
+    const alternateVehicle = randomUUID();
+    await source.query(`INSERT INTO drivers
+      (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+      VALUES ($1,$2,'Alternate Driver',$3,'+51 911 222 333',$4,'active',$5,$5)`,
+    [alternateDriver, organizationId, `DNI-${alternateDriver.slice(0, 8).toUpperCase()}`,
+      `L-${alternateDriver.slice(0, 8).toUpperCase()}`, CREATED_AT]);
+    await source.query(`INSERT INTO vehicles
+      (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
+      VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
+    [alternateVehicle, organizationId, `R${alternateVehicle.slice(0, 6).toUpperCase()}`, CREATED_AT]);
+    const before = await orders.findStatusHistory(organizationId, id);
+    const first = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    const second = plannedRoute(organizationId, alternateDriver, alternateVehicle, [id]);
+    const outcomes = await Promise.allSettled([store.plan(first, actor), store.plan(second, actor)]);
+    expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const winner = outcomes[0]?.status === 'fulfilled' ? first : second;
+    const loser = winner === first ? second : first;
+    expect((await orders.findById(id))?.activeRouteId).toBe(winner.id);
+    expect((await orders.findById(id))?.status).toBe('assigned');
+    expect(await store.findById(organizationId, loser.id)).toBeNull();
+    const history = await orders.findStatusHistory(organizationId, id);
+    expect(history.slice(0, before.length)).toEqual(before);
+    expect(history.slice(before.length).map(({ fromStatus, toStatus }) => [fromStatus, toStatus]))
+      .toEqual([['returned', 'planned'], ['planned', 'assigned']]);
+    const links = await source.query<{ route_id: string; active: boolean }[]>(
+      'SELECT route_id, active FROM delivery_stop_orders WHERE order_id=$1 ORDER BY created_at, route_id', [id]);
+    expect(links).toHaveLength(2);
+    expect(links.find((link) => link.route_id === previous.id)?.active).toBe(false);
+    expect(links.find((link) => link.route_id === winner.id)?.active).toBe(true);
+  });
+
+  it('restores the prior link and returned order when retry audit insertion fails', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const id = await makeOrder('RETURN-ROLLBACK-1');
+    const first = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    await store.plan(first, randomUUID());
+    const returnedAt = '2026-10-27T16:00:00.000Z';
+    await source.query(`UPDATE delivery_orders SET status='returned', updated_at=$2 WHERE id=$1`,
+      [id, returnedAt]);
+    await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1`, [first.id]);
+    const history = await orders.findStatusHistory(organizationId, id);
+    const second = plannedRoute(organizationId, driverId, vehicleId, [id]);
+    await expect(store.plan(second, 'invalid-actor-id')).rejects.toThrow();
+    expect((await orders.findById(id))?.status).toBe('returned');
+    expect((await orders.findById(id))?.activeRouteId).toBe(first.id);
+    expect(await orders.findStatusHistory(organizationId, id)).toEqual(history);
+    expect(await store.findById(organizationId, second.id)).toBeNull();
+    const links = await source.query<{ route_id: string; active: boolean }[]>(
+      'SELECT route_id, active FROM delivery_stop_orders WHERE order_id=$1', [id]);
+    expect(links).toEqual([{ route_id: first.id, active: true }]);
+  });
+
   it('rolls back route, stops, links and order changes after a failed audit insert', async () => {
     const { organizationId, driverId, vehicleId, makeOrder } = await seed();
     const orderId = await makeOrder('ORDER-ROLLBACK-1');

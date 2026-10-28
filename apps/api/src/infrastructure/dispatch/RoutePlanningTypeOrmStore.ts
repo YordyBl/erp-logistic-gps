@@ -54,7 +54,24 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           const packages = await manager.find(DeliveryOrderPackageEntity, {
             where: { deliveryOrderId: id },
           });
-          assignedOrders.push({ id, ...toDomain(order, packages).planAndAssign(route.id, plannedAt, assignedAt) });
+          assignedOrders.push({ id, original: order,
+            ...toDomain(order, packages).planAndAssign(route.id, plannedAt, assignedAt) });
+        }
+
+        // Retain the previous link as route history, but release its active
+        // order reservation before the unique active-link index sees the retry.
+        for (const { id, original } of assignedOrders) {
+          if (original.status !== 'returned') continue;
+          if (original.activeRouteId === null) {
+            throw new DeliveryRouteConflictError('Returned order must reference its prior route');
+          }
+          const released = await manager.update(DeliveryStopOrderEntity, {
+            organizationId: route.organizationId, orderId: id,
+            routeId: original.activeRouteId, active: true,
+          }, { active: false });
+          if (released.affected !== 1) {
+            throw new DeliveryRouteConflictError('Returned order must have exactly one active prior route link');
+          }
         }
 
         const persistedRoute = new DeliveryRouteEntity();
@@ -96,13 +113,13 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           }
         }
 
-        for (const { id, planned, assigned } of assignedOrders) {
+        for (const { id, original, planned, assigned } of assignedOrders) {
           await manager.update(DeliveryOrderEntity, { id, organizationId: route.organizationId }, {
-            status: assigned.status, updatedAt: new Date(assignedAt), activeRouteId: route.id,
+            status: assigned.status, updatedAt: new Date(assigned.updatedAt), activeRouteId: route.id,
           });
           for (const [fromStatus, toStatus, occurredAt] of [
-            ['created', planned.status, plannedAt],
-            [planned.status, assigned.status, assignedAt],
+            [original.status, planned.status, planned.updatedAt],
+            [planned.status, assigned.status, assigned.updatedAt],
           ] as const) {
             const history = new DeliveryOrderStatusHistoryEntity();
             history.id = randomUUID();

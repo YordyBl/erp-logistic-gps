@@ -303,11 +303,15 @@ paths:
       description: |
         ADMIN or DISPATCHER plans at least one sequenced stop; each stop can
         contain several orders. The driver and vehicle must be active and free
-        from other active routes. Orders must be `created`, owned by the caller's
-        organization and not on another active route. Planning commits the
-        route, ordered stop/order links, both order transitions
-        `created → planned → assigned` and their audit rows in one transaction.
-        Rejections write nothing. Execution and GPS are separate milestones.
+        from other active routes. Orders must be `created` or `returned`, owned
+        by the caller's organization and not assigned to another active route.
+        Planning commits the route, ordered stop/order links and audited order
+        transitions in one transaction: `created → planned → assigned` for a
+        first dispatch or `returned → planned → assigned` for a retry of the
+        same order. A retry retains the old route and history but deactivates
+        only its previous active order link. No delivery-attempt record is
+        created until delivery execution is implemented. Rejections write
+        nothing. Execution and GPS are separate milestones.
       security:
         - bearerAuth: []
       parameters:

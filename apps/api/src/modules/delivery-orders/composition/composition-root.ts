@@ -80,8 +80,8 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
       this.orders.set(id, assigned);
       this.statusHistory.set(id, [
         ...(this.statusHistory.get(id) ?? []),
-        { fromStatus: original.status, toStatus: planned.status, actorUserId, occurredAt: plannedAt },
-        { fromStatus: planned.status, toStatus: assigned.status, actorUserId, occurredAt: assignedAt },
+        { fromStatus: original.status, toStatus: planned.status, actorUserId, occurredAt: planned.updatedAt },
+        { fromStatus: planned.status, toStatus: assigned.status, actorUserId, occurredAt: assigned.updatedAt },
       ]);
     }
   }

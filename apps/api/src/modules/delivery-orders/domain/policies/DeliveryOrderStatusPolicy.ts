@@ -10,7 +10,7 @@
  * - `assigned`  a route, driver and vehicle are assigned and the order is queued
  * - `in_transit` the driver started the route containing the order
  * - `delivered` a successful delivery attempt confirmed this order
- * - `returned`  a delivery incident failed the attempt and the order came back
+ * - `returned`  a delivery incident failed the attempt; a new dispatch may replan it
  * - `cancelled` the order was cancelled before delivery
  *
  * `failed` is deliberately not an order status. Failure belongs to
@@ -47,7 +47,7 @@ const ALLOWED_TRANSITIONS: Readonly<
   assigned: ['in_transit', 'cancelled'],
   in_transit: ['delivered', 'returned'],
   delivered: [],
-  returned: [],
+  returned: ['planned'],
   cancelled: [],
 };
 

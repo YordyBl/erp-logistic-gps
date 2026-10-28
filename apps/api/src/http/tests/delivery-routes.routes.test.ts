@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
+import { DeliveryOrder } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 
 import {
   ADMIN_ID, bearer, buildTestApp, DRIVER_EMAIL, DRIVER_ID,
@@ -49,6 +50,62 @@ async function seededRouteApp() {
 }
 
 describe('POST /api/v1/delivery-routes', () => {
+  it('redispatches the same returned order without replacing its prior history', async () => {
+    const ctx = await seededRouteApp();
+    const id = await ctx.createOrder('RETRY-ORDER-1');
+    const first = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
+      publicCode: 'RETRY-ROUTE-1', plannedDate: '2026-10-27',
+      driverId: ctx.driverId, vehicleId: ctx.vehicleId,
+      stops: [{ sequence: 1, addressLine: 'Old address', orderIds: [id] }],
+    });
+    expect(first.status).toBe(201);
+    // Phase 4 is not implemented: seed its returned outcome, then use the real HTTP planner.
+    const repository = ctx.testApp.module.repository as unknown as {
+      orders: Map<string, DeliveryOrder>;
+      statusHistory: Map<string, { fromStatus: string; toStatus: string; actorUserId: string; occurredAt: string }[]>;
+    };
+    const original = repository.orders.get(id);
+    expect(original).toBeDefined();
+    repository.orders.set(id, DeliveryOrder.restore({
+      id, organizationId: ORGANIZATION_ID, publicCode: original!.publicCode,
+      recipient: original!.recipient, deliveryAddress: original!.deliveryAddress,
+      packages: original!.packages, createdAt: original!.createdAt,
+      activeRouteId: first.body.data.id as string,
+      status: 'returned', updatedAt: '2026-10-26T15:00:00.002Z',
+    }));
+    repository.statusHistory.get(id)?.push({
+      fromStatus: 'assigned', toStatus: 'returned', actorUserId: ADMIN_ID,
+      occurredAt: '2026-10-26T15:00:00.002Z',
+    });
+    const prior = await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token));
+    const secondBody = {
+      publicCode: 'RETRY-ROUTE-2', plannedDate: '2026-10-27',
+      driverId: ctx.secondDriverId, vehicleId: ctx.secondVehicleId,
+      stops: [{ sequence: 1, addressLine: 'New address', orderIds: [id] }],
+    };
+    const denied = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.otherToken)).send(secondBody);
+    expect(denied.status).toBe(404);
+    const retry = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send(secondBody);
+    expect(retry.status).toBe(201);
+    expect((await request(ctx.testApp.app).get(`${ORDERS}/${id}`).set(bearer(ctx.token))).body.data)
+      .toMatchObject({ id, status: 'assigned' });
+    const history = await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token));
+    expect(history.status).toBe(200);
+    expect(history.body.data.slice(0, prior.body.data.length)).toEqual(prior.body.data);
+    expect(history.body.data.slice(prior.body.data.length).map(
+      (entry: { fromStatus: string; toStatus: string }) => [entry.fromStatus, entry.toStatus],
+    )).toEqual([['returned', 'planned'], ['planned', 'assigned']]);
+    expect(Date.parse(history.body.data.at(-2).occurredAt)).toBeGreaterThan(
+      Date.parse(prior.body.data.at(-1).occurredAt));
+    expect((await request(ctx.testApp.app).get(first.headers.location as string)
+      .set(bearer(ctx.token))).status).toBe(200);
+    const rejected = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token))
+      .send({ ...secondBody, publicCode: 'RETRY-ROUTE-3' });
+    expect(rejected.status).toBe(409);
+    expect((await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`)
+      .set(bearer(ctx.token))).body).toEqual(history.body);
+  });
+
   it('round-trips stops by sequence and keeps the order of orders within a stop', async () => {
     const { testApp, token, driverId, vehicleId, createOrder } = await seededRouteApp();
     const first = await createOrder('REG-ROUTE-001');
