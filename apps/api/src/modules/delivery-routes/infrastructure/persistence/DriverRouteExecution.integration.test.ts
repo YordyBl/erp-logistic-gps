@@ -261,4 +261,27 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect(await bindings.findDriverId(ctx.organizationId, ctx.actorId)).toBeNull();
     await expect(execution.mine(ctx.organizationId, ctx.actorId)).rejects.toThrow();
   });
+
+  it('keeps the running route visible and prevents a second active assignment', async () => {
+    const ctx = await seed();
+    const first = await ctx.plan([await ctx.createOrder('EXEC-PRIORITY-1')]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, first.id, ctx.actorId, AT);
+    const nextOrderId = await ctx.createOrder('EXEC-PRIORITY-2');
+    const nextVehicleId = randomUUID();
+    await source.query(`INSERT INTO vehicles (id, organization_id, plate, type,
+      capacity_kg, status, created_at, updated_at)
+      VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
+    [nextVehicleId, ctx.organizationId, `V${nextVehicleId.slice(0, 6).toUpperCase()}`, AT]);
+    const before = await hash(ctx.organizationId);
+    const second: PlannedRoute = {
+      ...first, id: randomUUID(), publicCode: `EXEC-${randomUUID().slice(0, 8)}`,
+      vehicleId: nextVehicleId,
+      stops: [{ ...first.stops[0]!, id: randomUUID(), orderIds: [nextOrderId] }],
+    };
+    await expect(planner.plan(second, ctx.adminId)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(before);
+    expect((await execution.mine(ctx.organizationId, ctx.actorId)).id).toBe(first.id);
+    expect((await orders.findById(nextOrderId))?.status).toBe('created');
+  });
 });

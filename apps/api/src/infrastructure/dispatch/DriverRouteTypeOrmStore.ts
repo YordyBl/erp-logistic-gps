@@ -85,11 +85,13 @@ export class DriverRouteTypeOrmStore implements DriverRouteExecutionStore {
         [organizationId, actorUserId]);
       const driverId = rows[0]?.driver_id;
       if (driverId === undefined) throw new DeliveryRouteNotFoundError();
+      // If an inconsistent legacy store ever exposes both, never hide the run
+      // already in progress behind a later planned assignment.
       const route = await manager.findOne(DeliveryRouteEntity, {
-        where: { organizationId, driverId, status: 'planned' },
+        where: { organizationId, driverId, status: 'in_progress' },
         lock: { mode: 'pessimistic_read' },
       }) ?? await manager.findOne(DeliveryRouteEntity, {
-        where: { organizationId, driverId, status: 'in_progress' },
+        where: { organizationId, driverId, status: 'planned' },
         lock: { mode: 'pessimistic_read' },
       });
       if (route === null) throw new DeliveryRouteNotFoundError();
