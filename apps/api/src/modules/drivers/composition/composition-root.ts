@@ -9,6 +9,68 @@ import { GetDriverUseCase } from '../application/use-cases/get-driver/GetDriverU
 import { ListDriversUseCase } from '../application/use-cases/list-drivers/ListDriversUseCase.js';
 import { UpdateDriverUseCase } from '../application/use-cases/update-driver/UpdateDriverUseCase.js';
 import type { Driver } from '../domain/entities/Driver.js';
+import type { UserRepository } from '../../identity-and-access/application/ports/UserRepository.js';
+import type { DriverAccountBindingStore } from '../application/ports/DriverAccountBindingStore.js';
+import { BindDriverAccountUseCase } from '../application/use-cases/bind-driver-account/BindDriverAccountUseCase.js';
+import { DriverInvariantError, DriverNotFoundError } from '../domain/errors/DriverError.js';
+
+/** In-memory binding adapter; production uses the database's transactional guard. */
+export class InMemoryDriverAccountBindingStore implements DriverAccountBindingStore {
+  private readonly bindings = new Map<string, string>();
+  private readonly history: Array<{ driverId: string; fromUserId: string | null;
+    toUserId: string | null; actorUserId: string; occurredAt: string }> = [];
+
+  constructor(private readonly drivers: DriverRepository,
+    private readonly users?: UserRepository) {}
+
+  async get(organizationId: string, driverId: string) {
+    if (await this.drivers.findById(organizationId, driverId) === null) {
+      throw new DriverNotFoundError(driverId);
+    }
+    return { driverId, userId: this.bindings.get(driverId) ?? null };
+  }
+
+  async findDriverId(organizationId: string, userId: string): Promise<string | null> {
+    for (const [driverId, linkedUserId] of this.bindings) {
+      if (linkedUserId === userId &&
+          await this.drivers.findById(organizationId, driverId) !== null) return driverId;
+    }
+    return null;
+  }
+
+  async bind(organizationId: string, driverId: string, userId: string | null,
+    actorUserId: string, occurredAt: string) {
+    if (await this.drivers.findById(organizationId, driverId) === null) {
+      throw new DriverNotFoundError(driverId);
+    }
+    const actor = await this.users?.findById(actorUserId);
+    if (actor === undefined || actor === null || actor.organizationId !== organizationId ||
+        actor.role !== 'ADMIN' || actor.status !== 'active') {
+      throw new DriverInvariantError('Only an active ADMIN account can bind drivers');
+    }
+    const previous = this.bindings.get(driverId) ?? null;
+    if (previous === userId) return { driverId, userId };
+    if (userId !== null) {
+      const user = await this.users?.findById(userId);
+      if (user === undefined || user === null || user.organizationId !== organizationId) {
+        throw new DriverNotFoundError(driverId);
+      }
+      if (user.role !== 'DRIVER' || user.status !== 'active') {
+        throw new DriverInvariantError('Only an active DRIVER account can be linked');
+      }
+      const owner = await this.findDriverId(organizationId, userId);
+      if (owner !== null && owner !== driverId) {
+        throw new DriverInvariantError('Account is linked to another driver');
+      }
+      this.bindings.set(driverId, userId);
+    } else {
+      this.bindings.delete(driverId);
+    }
+    this.history.push({ driverId, fromUserId: previous, toUserId: userId,
+      actorUserId, occurredAt });
+    return { driverId, userId };
+  }
+}
 
 /**
  * In-memory driver repository for tests and the demo composition.
@@ -76,6 +138,8 @@ export interface DriversModuleOptions {
   readonly repository?: DriverRepository;
   readonly idGenerator?: IdGenerator;
   readonly clock?: Clock;
+  readonly userRepository?: UserRepository;
+  readonly accountBindings?: DriverAccountBindingStore;
 }
 
 export interface DriversModule {
@@ -83,6 +147,8 @@ export interface DriversModule {
   readonly listDrivers: ListDriversUseCase;
   readonly getDriver: GetDriverUseCase;
   readonly updateDriver: UpdateDriverUseCase;
+  readonly bindDriverAccount: BindDriverAccountUseCase;
+  readonly accountBindings: DriverAccountBindingStore;
   readonly repository: DriverRepository;
 }
 
@@ -99,12 +165,16 @@ export function buildDriversModule(
   const repository = options.repository ?? new InMemoryDriverRepository();
   const idGenerator = options.idGenerator ?? new CryptoIdGenerator();
   const clock = options.clock ?? new SystemClock();
+  const accountBindings = options.accountBindings ?? new InMemoryDriverAccountBindingStore(
+    repository, options.userRepository);
 
   return {
     createDriver: new CreateDriverUseCase({ repository, idGenerator, clock }),
     listDrivers: new ListDriversUseCase({ repository }),
     getDriver: new GetDriverUseCase({ repository }),
     updateDriver: new UpdateDriverUseCase({ repository, clock }),
+    bindDriverAccount: new BindDriverAccountUseCase(accountBindings, clock),
+    accountBindings,
     repository,
   };
 }
@@ -120,9 +190,13 @@ export async function createDriversModuleFromDataSource(
   const { DriverTypeOrmRepository } = await import(
     '../infrastructure/persistence/DriverTypeOrmRepository.js'
   );
+  const { DriverAccountTypeOrmStore } = await import(
+    '../../../infrastructure/dispatch/DriverAccountTypeOrmStore.js'
+  );
 
   return buildDriversModule({
     ...options,
     repository: new DriverTypeOrmRepository(dataSource),
+    accountBindings: new DriverAccountTypeOrmStore(dataSource),
   });
 }

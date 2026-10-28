@@ -161,7 +161,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     eventPublisher: new InMemoryEventPublisher(),
     ...(options.repository === undefined ? {} : { repository: options.repository }),
   });
-  const drivers = buildDriversModule();
+  const drivers = buildDriversModule({ userRepository: identity.users });
   const vehicles = buildVehiclesModule();
   const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
     ? createDeliveryRoutesModule({

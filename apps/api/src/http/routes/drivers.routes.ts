@@ -7,9 +7,11 @@ import type { GetDriverUseCase } from '../../modules/drivers/application/use-cas
 import type { ListDriversUseCase } from '../../modules/drivers/application/use-cases/list-drivers/ListDriversUseCase.js';
 import { updateDriverBodySchema } from '../../modules/drivers/application/use-cases/update-driver/UpdateDriverCommand.js';
 import type { UpdateDriverUseCase } from '../../modules/drivers/application/use-cases/update-driver/UpdateDriverUseCase.js';
+import { bindDriverAccountBodySchema, type BindDriverAccountUseCase } from '../../modules/drivers/application/use-cases/bind-driver-account/BindDriverAccountUseCase.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { requireRole } from '../middleware/require-role.js';
 import { parseDriverOrThrow } from '../validation.js';
+import { getAuthenticatedUser } from '../request-context.js';
 
 /**
  * HTTP adapters for the driver catalog.
@@ -23,6 +25,7 @@ export interface DriversHttpPorts {
   readonly listDrivers: ListDriversUseCase;
   readonly getDriver: GetDriverUseCase;
   readonly updateDriver: UpdateDriverUseCase;
+  readonly bindDriverAccount: BindDriverAccountUseCase;
 }
 
 const createDriverBodySchema = createDriverCommandSchema.omit({
@@ -70,6 +73,25 @@ export function createDriversRouter(
     });
 
     response.status(200).json({ data: result.driver });
+  });
+
+  router.get('/:driverId/account', requireRole('ADMIN'), async (request, response) => {
+    const result = await ports.bindDriverAccount.get(
+      requireOrganizationId(response), request.params.driverId,
+    );
+    response.status(200).json({ data: result.binding });
+  });
+
+  router.put('/:driverId/account', requireRole('ADMIN'), async (request, response) => {
+    const body = parseDriverOrThrow(bindDriverAccountBodySchema, request.body,
+      'Bind driver account request body is invalid');
+    const actor = getAuthenticatedUser(response);
+    if (actor === undefined) throw new Error('Authenticated actor is required');
+    const result = await ports.bindDriverAccount.execute({
+      organizationId: requireOrganizationId(response),
+      driverId: request.params.driverId, actorUserId: actor.id, ...body,
+    });
+    response.status(200).json({ data: result.binding });
   });
 
   router.patch(

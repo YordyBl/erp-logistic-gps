@@ -23,6 +23,7 @@ import { OrganizationEntity } from './OrganizationEntity.js';
  */
 @Entity({ name: 'users' })
 @Unique('uq_users_organization_email', ['organizationId', 'email'])
+@Unique('uq_users_organization_id', ['organizationId', 'id'])
 @Index('idx_users_organization_id', ['organizationId'])
 @Check('chk_users_role', `"role" IN ('ADMIN', 'DISPATCHER', 'DRIVER')`)
 @Check('chk_users_status', `"status" IN ('active', 'disabled')`)

@@ -86,6 +86,45 @@ async function createDriver(
   return request(testApp.app).post(DRIVERS_PATH).set(bearer(token)).send(body);
 }
 
+describe('PUT /api/v1/drivers/:driverId/account', () => {
+  it('binds one active DRIVER account only through ADMIN, without exposing other tenants', async () => {
+    const { testApp, adminToken, dispatcherToken, driverToken, otherAdminToken } = await seedActors();
+    const first = await createDriver(testApp, adminToken);
+    const second = await createDriver(testApp, adminToken,
+      validDriverBody({ documentNumber: 'dni-87654321', licenseNumber: 'q-123456' }));
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const path = `${DRIVERS_PATH}/${first.body.data.id as string}/account`;
+    const body = { userId: DRIVER_ID };
+    const before = await request(testApp.app).get(first.headers.location as string).set(bearer(adminToken));
+    expect((await request(testApp.app).patch(first.headers.location as string)
+      .set(bearer(adminToken)).send(body)).status).toBe(400);
+    expect((await request(testApp.app).get(path).set(bearer(adminToken))).body.data)
+      .toEqual({ driverId: first.body.data.id, userId: null });
+    expect((await request(testApp.app).get(path).set(bearer(dispatcherToken))).status).toBe(403);
+    expect((await request(testApp.app).get(path).set(bearer(driverToken))).status).toBe(403);
+    expect((await request(testApp.app).put(path).set(bearer(dispatcherToken)).send(body)).status).toBe(403);
+    expect((await request(testApp.app).put(path).set(bearer(driverToken)).send(body)).status).toBe(403);
+    expect((await request(testApp.app).put(path).set(bearer(otherAdminToken)).send(body)).status).toBe(404);
+    expect((await request(testApp.app).put(path).set(bearer(adminToken))
+      .send({ userId: OTHER_ADMIN_ID })).status).toBe(404);
+    expect((await request(testApp.app).put(path).set(bearer(adminToken))
+      .send({ userId: ADMIN_ID })).status).toBe(409);
+    expect((await request(testApp.app).get(first.headers.location as string)
+      .set(bearer(adminToken))).body).toEqual(before.body);
+    const linked = await request(testApp.app).put(path).set(bearer(adminToken)).send(body);
+    expect(linked.status).toBe(200);
+    expect(linked.body.data).toEqual({ driverId: first.body.data.id, userId: DRIVER_ID });
+    expect((await request(testApp.app).get(path).set(bearer(adminToken))).body).toEqual(linked.body);
+    expect((await request(testApp.app).put(`${DRIVERS_PATH}/${second.body.data.id as string}/account`)
+      .set(bearer(adminToken)).send(body)).status).toBe(409);
+    const unlinked = await request(testApp.app).put(path).set(bearer(adminToken)).send({ userId: null });
+    expect(unlinked.body.data).toEqual({ driverId: first.body.data.id, userId: null });
+    expect((await request(testApp.app).put(`${DRIVERS_PATH}/${second.body.data.id as string}/account`)
+      .set(bearer(adminToken)).send(body)).status).toBe(200);
+  });
+});
+
 describe('POST /api/v1/drivers', () => {
   it('creates a driver in the caller organization with normalized values', async () => {
     const { testApp, adminToken } = await seedActors();
