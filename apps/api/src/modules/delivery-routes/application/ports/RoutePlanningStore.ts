@@ -15,7 +15,7 @@ export interface PlannedRoute {
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;
-  readonly status: 'planned';
+  readonly status: 'planned' | 'in_progress';
   readonly stops: readonly PlannedStop[];
   readonly createdAt: string;
 }

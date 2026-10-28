@@ -158,7 +158,7 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       where: { id: routeId, organizationId },
     });
     if (route === null) return null;
-    if (route.status !== 'planned') {
+    if (route.status !== 'planned' && route.status !== 'in_progress') {
       throw new DeliveryRouteConflictError('Persisted route status is not supported by this planner');
     }
     const stops = await manager.find(DeliveryStopEntity, {
@@ -170,8 +170,10 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
     return {
       id: route.id, organizationId: route.organizationId,
       publicCode: route.publicCode, plannedDate: route.plannedDate,
-      driverId: route.driverId, vehicleId: route.vehicleId, status: 'planned',
+      driverId: route.driverId, vehicleId: route.vehicleId,
+      status: route.status as PlannedRoute['status'],
       createdAt: route.createdAt.toISOString(),
+      ...(route.startedAt === null ? {} : { startedAt: route.startedAt.toISOString() }),
       stops: stops.map((stop) => ({
         id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
         latitude: stop.latitude === null ? null : Number(stop.latitude),

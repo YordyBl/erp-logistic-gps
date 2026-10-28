@@ -218,6 +218,20 @@ export class DeliveryOrder {
     });
     return { planned, assigned };
   }
+
+  /** A driver starts the assigned route; every order advances with one audited transition. */
+  startTransit(routeId: string, occurredAt: string): DeliveryOrder {
+    if (this.activeRouteId !== routeId ||
+        !canTransitionDeliveryOrderStatus(this.status, 'in_transit')) {
+      throw new DeliveryOrderInvariantError('Only an order assigned to this route can enter transit');
+    }
+    return DeliveryOrder.restore({
+      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      recipient: this.recipient, deliveryAddress: this.deliveryAddress,
+      packages: this.packages, createdAt: this.createdAt,
+      status: 'in_transit', updatedAt: occurredAt, activeRouteId: routeId,
+    });
+  }
 }
 
 function normalizePublicCode(value: unknown): string {

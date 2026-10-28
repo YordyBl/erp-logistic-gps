@@ -49,6 +49,60 @@ async function seededRouteApp() {
     createOrder };
 }
 
+describe('driver route execution', () => {
+  it('shows only the bound driver their route, grouped stop orders, and starts all orders once', async () => {
+    const ctx = await seededRouteApp();
+    const user = await ctx.testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const driverToken = await ctx.testApp.signIn(user);
+    const other = await ctx.testApp.seedUser({ id: '44444444-4444-4444-8444-444444444447',
+      email: 'second-driver@example.test', role: 'DRIVER' });
+    const otherToken = await ctx.testApp.signIn(other);
+    const ids = await Promise.all(['D-ROUTE-1', 'D-ROUTE-2'].map(ctx.createOrder));
+    const planned = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
+      publicCode: 'EXEC-ROUTE-1', plannedDate: '2026-10-27',
+      driverId: ctx.driverId, vehicleId: ctx.vehicleId,
+      stops: [{ sequence: 1, addressLine: 'First stop', orderIds: ids }],
+    });
+    expect(planned.status).toBe(201);
+    const mine = `${ROUTES}/mine`;
+    expect((await request(ctx.testApp.app).get(mine).set(bearer(otherToken))).status).toBe(404);
+    expect((await request(ctx.testApp.app).get(mine).set(bearer(ctx.token))).status).toBe(403);
+    expect((await request(ctx.testApp.app).get(mine)).status).toBe(401);
+    expect((await request(ctx.testApp.app).get(mine).set(bearer(driverToken))).status).toBe(404);
+    const bound = await request(ctx.testApp.app).put(`/api/v1/drivers/${ctx.driverId}/account`)
+      .set(bearer(ctx.token)).send({ userId: DRIVER_ID });
+    expect(bound.status).toBe(200);
+    const read = await request(ctx.testApp.app).get(mine).set(bearer(driverToken));
+    expect(read.status).toBe(200);
+    expect(read.body.data).toMatchObject({ id: planned.body.data.id, status: 'planned',
+      stops: [{ sequence: 1, orders: ids.map((id) => ({ id, status: 'assigned' })) }] });
+    const before = await Promise.all(ids.map(async (id) =>
+      (await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token))).body));
+    const start = `${ROUTES}/${planned.body.data.id as string}/start`;
+    expect((await request(ctx.testApp.app).post(start).set(bearer(otherToken)).send({})).status).toBe(404);
+    expect((await request(ctx.testApp.app).post(start).set(bearer(ctx.token)).send({})).status).toBe(403);
+    expect((await request(ctx.testApp.app).post(start).set(bearer(driverToken))
+      .send({ driverId: ctx.driverId })).status).toBe(400);
+    const started = await request(ctx.testApp.app).post(start).set(bearer(driverToken)).send({});
+    expect(started.status).toBe(200);
+    expect(started.body.data).toMatchObject({ id: planned.body.data.id, status: 'in_progress',
+      stops: [{ orders: ids.map((id) => ({ id, status: 'in_transit' })) }] });
+    expect(started.body.data.startedAt).toEqual(expect.any(String));
+    expect((await request(ctx.testApp.app).get(mine).set(bearer(driverToken))).body).toEqual(started.body);
+    for (const [index, id] of ids.entries()) {
+      const order = await request(ctx.testApp.app).get(`${ORDERS}/${id}`).set(bearer(ctx.token));
+      expect(order.body.data).toMatchObject({ id, status: 'in_transit' });
+      const history = await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token));
+      expect(history.body.data.slice(0, before[index].data.length)).toEqual(before[index].data);
+      expect(history.body.data.at(-1)).toMatchObject({ fromStatus: 'assigned',
+        toStatus: 'in_transit', actorUserId: DRIVER_ID });
+    }
+    expect((await request(ctx.testApp.app).post(start).set(bearer(driverToken)).send({})).status).toBe(409);
+    expect((await request(ctx.testApp.app).patch(`${ROUTES}/${planned.body.data.id as string}`)
+      .set(bearer(ctx.token)).send({ driverId: ctx.secondDriverId })).status).toBe(409);
+  });
+});
+
 describe('POST /api/v1/delivery-routes', () => {
   it('redispatches the same returned order without replacing its prior history', async () => {
     const ctx = await seededRouteApp();

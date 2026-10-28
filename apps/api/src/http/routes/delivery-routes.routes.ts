@@ -4,6 +4,8 @@ import { Router } from 'express';
 import { planRouteBodySchema, type PlanRouteUseCase } from '../../modules/delivery-routes/application/use-cases/plan-route/PlanRouteUseCase.js';
 import type { GetRouteUseCase } from '../../modules/delivery-routes/application/use-cases/get-route/GetRouteUseCase.js';
 import { reassignRouteBodySchema, type ReassignRouteUseCase } from '../../modules/delivery-routes/application/use-cases/reassign-route/ReassignRouteUseCase.js';
+import type { ExecuteDriverRouteUseCase } from '../../modules/delivery-routes/application/use-cases/execute-driver-route/ExecuteDriverRouteUseCase.js';
+import { z } from 'zod';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { requireRole } from '../middleware/require-role.js';
 import { getAuthenticatedUser } from '../request-context.js';
@@ -14,6 +16,7 @@ export function createDeliveryRoutesRouter(
     readonly planRoute: PlanRouteUseCase;
     readonly getRoute: GetRouteUseCase;
     readonly reassignRoute: ReassignRouteUseCase;
+    readonly executeDriverRoute: ExecuteDriverRouteUseCase;
   },
   authenticate: RequestHandler,
 ): Router {
@@ -28,6 +31,24 @@ export function createDeliveryRoutesRouter(
     const result = await ports.planRoute.execute({ organizationId, actorUserId: user.id, ...body });
     response.status(201).location(`/api/v1/delivery-routes/${result.route.id}`)
       .json({ data: result.route });
+  });
+  router.get('/mine', requireRole('DRIVER'), async (_request, response) => {
+    const user = getAuthenticatedUser(response);
+    if (user === undefined) throw new Error('Authenticated actor is required');
+    const result = await ports.executeDriverRoute.mine({
+      organizationId: requireOrganizationId(response), actorUserId: user.id,
+    });
+    response.status(200).json({ data: result.route });
+  });
+  router.post('/:routeId/start', requireRole('DRIVER'), async (request, response) => {
+    parseOrThrow(z.strictObject({}), request.body ?? {}, 'Start route request body is invalid');
+    const user = getAuthenticatedUser(response);
+    if (user === undefined) throw new Error('Authenticated actor is required');
+    const result = await ports.executeDriverRoute.start({
+      organizationId: requireOrganizationId(response), routeId: request.params.routeId,
+      actorUserId: user.id,
+    });
+    response.status(200).json({ data: result.route });
   });
   router.get('/:routeId', async (request, response) => {
     const result = await ports.getRoute.execute({

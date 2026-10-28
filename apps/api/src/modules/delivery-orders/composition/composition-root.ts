@@ -86,6 +86,27 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     }
   }
 
+  /** Stage every transition before mutating any stored order or audit list. */
+  startRoute(organizationId: string, routeId: string, orderIds: readonly string[],
+    actorUserId: string, occurredAt: string): void {
+    const staged = orderIds.map((id) => {
+      const original = this.orders.get(id);
+      if (original === undefined || original.organizationId !== organizationId) {
+        throw new DeliveryOrderNotFoundError(id);
+      }
+      const timestamp = new Date(Math.max(Date.parse(occurredAt), Date.parse(original.updatedAt) + 1))
+        .toISOString();
+      return { id, original, updated: original.startTransit(routeId, timestamp) };
+    });
+    for (const { id, original, updated } of staged) {
+      this.orders.set(id, updated);
+      this.statusHistory.set(id, [...(this.statusHistory.get(id) ?? []), {
+        fromStatus: original.status, toStatus: updated.status,
+        actorUserId, occurredAt: updated.updatedAt,
+      }]);
+    }
+  }
+
   async cancel(organizationId: string, orderId: string, actorUserId: string, occurredAt: string): Promise<DeliveryOrder> {
     const order = this.orders.get(orderId);
     if (order === undefined) throw new DeliveryOrderNotFoundError(orderId);

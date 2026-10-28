@@ -164,11 +164,15 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
   const drivers = buildDriversModule({ userRepository: identity.users });
   const vehicles = buildVehiclesModule();
   const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
-    ? createDeliveryRoutesModule({
-      store: new InMemoryRoutePlanningStore(module.repository),
-      getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
-      clock: new FixedClock(CREATED_AT),
-    })
+    ? (() => {
+      const store = new InMemoryRoutePlanningStore(module.repository,
+        drivers.accountBindings, identity.users, drivers.getDriver);
+      return createDeliveryRoutesModule({
+        store, executionStore: store,
+        getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
+        clock: new FixedClock(CREATED_AT),
+      });
+    })()
     : undefined;
 
   const app = buildApp({

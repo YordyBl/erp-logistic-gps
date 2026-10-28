@@ -12,6 +12,7 @@ import {
 } from '../../modules/delivery-orders/composition/composition-root.js';
 import { createDeliveryRoutesModule } from '../../modules/delivery-routes/composition/composition-root.js';
 import { RoutePlanningTypeOrmStore } from '../dispatch/RoutePlanningTypeOrmStore.js';
+import { DriverRouteTypeOrmStore } from '../dispatch/DriverRouteTypeOrmStore.js';
 import {
   createDriversModuleFromDataSource,
   type DriversModule,
@@ -65,6 +66,7 @@ export async function composeApiModules(
     ]);
   const deliveryRoutes = createDeliveryRoutesModule({
     store: new RoutePlanningTypeOrmStore(dataSource),
+    executionStore: new DriverRouteTypeOrmStore(dataSource),
     getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
   });
 
