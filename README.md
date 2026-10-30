@@ -5,9 +5,10 @@ Dispatchers plan routes with multiple stops and orders, drivers confirm deliveri
 photo evidence, and recipients follow a single order through a limited public link.
 
 **Status (2026-10-29):** Phases 0–3 are closed in the feature logs. Phase 4 is in progress:
-driver/account binding and authenticated route start are implemented; private photo evidence,
-delivery outcomes and the React client are still being built. The web client remains a
-placeholder, so `apps/web` keeps serving the static page.
+driver/account binding, authenticated route start, private photo evidence, delivery outcomes,
+incident reporting, and explicit route completion are implemented locally. The React driver
+and admin evidence views remain pending; the web client is still a placeholder, so `apps/web`
+keeps serving the static page.
 
 ## Quick path
 

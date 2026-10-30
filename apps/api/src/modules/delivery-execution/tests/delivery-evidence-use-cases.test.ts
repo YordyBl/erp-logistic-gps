@@ -11,6 +11,7 @@ import type {
 } from '../application/ports/DeliveryEvidenceStore.js';
 import type { EvidenceObjectStorage } from '../application/ports/EvidenceObjectStorage.js';
 import { DeliveryEvidenceUnavailableError } from '../domain/errors/DeliveryExecutionError.js';
+import { VALID_JPEG } from './evidence-fixtures.js';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ORDER = '22222222-2222-4222-8222-222222222222';
@@ -18,7 +19,7 @@ const DRIVER = '33333333-3333-4333-8333-333333333333';
 const ATTEMPT = '44444444-4444-4444-8444-444444444444';
 const EVIDENCE = '55555555-5555-4555-8555-555555555555';
 const AT = '2026-10-29T12:00:00.000Z';
-const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9]);
+const JPEG = VALID_JPEG;
 
 function reservation(status: EvidenceUploadReservation['status'] = 'pending_upload'):
 EvidenceUploadReservation {

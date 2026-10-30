@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DataSource, EntityManager } from 'typeorm';
+import { IsNull, type DataSource, type EntityManager } from 'typeorm';
 
 import type { DriverRouteExecutionStore, DriverRouteView } from '../../modules/delivery-routes/application/ports/DriverRouteExecutionStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
@@ -10,6 +10,7 @@ import { DeliveryOrderEntity } from '../../modules/delivery-orders/infrastructur
 import { DeliveryOrderPackageEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderPackageEntity.js';
 import { DeliveryOrderStatusHistoryEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderStatusHistoryEntity.js';
 import { DeliveryAttemptEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryAttemptEntity.js';
+import { DeliveryEvidenceEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryEvidenceEntity.js';
 import { toDomain } from '../../modules/delivery-orders/infrastructure/persistence/mappers/DeliveryOrderMapper.js';
 import { toDeliveryOrderDto } from '../../modules/delivery-orders/application/dto/DeliveryOrderDto.js';
 import type { DeliveryOrderDto } from '../../modules/delivery-orders/application/dto/DeliveryOrderDto.js';
@@ -65,6 +66,7 @@ export class DriverRouteTypeOrmStore implements DriverRouteExecutionStore {
       driverId: route.driverId, vehicleId: route.vehicleId,
       status: route.status as DriverRouteView['status'],
       startedAt: route.startedAt?.toISOString() ?? null,
+      completedAt: route.completedAt?.toISOString() ?? null,
       stops: stops.map((stop) => ({
         id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
         latitude: stop.latitude === null ? null : Number(stop.latitude),
@@ -171,4 +173,160 @@ export class DriverRouteTypeOrmStore implements DriverRouteExecutionStore {
       return this.view(manager, route);
     });
   }
+
+  async confirmDelivery(organizationId: string, orderId: string, actorUserId: string,
+    input: { readonly evidenceIds: readonly string[]; readonly receiverName: string | null;
+      readonly notes: string | null }, occurredAt: string): Promise<void> {
+    await this.dataSource.transaction(async (manager) => {
+      const { order, attempt } = await this.lockActiveAttempt(
+        manager, organizationId, orderId, actorUserId);
+      const selected = await this.lockAvailableEvidence(manager, organizationId, orderId,
+        attempt.id, input.evidenceIds);
+      if (selected.length !== input.evidenceIds.length) {
+        throw new DeliveryRouteConflictError('Delivery requires one or two available photos from this attempt');
+      }
+      const timestamp = outcomeTimestamp(occurredAt, order.updatedAt, attempt.startedAt);
+      await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
+        status: 'delivered', updatedAt: timestamp,
+      });
+      await manager.update(DeliveryAttemptEntity, { id: attempt.id, organizationId }, {
+        status: 'delivered', completedAt: timestamp,
+        receiverName: input.receiverName, deliveryNotes: input.notes,
+      });
+      await insertOrderHistory(manager, organizationId, orderId, actorUserId,
+        'in_transit', 'delivered', timestamp);
+      // The route deliberately remains in progress until explicit completion.
+    });
+  }
+
+  async reportDeliveryIncident(organizationId: string, orderId: string, actorUserId: string,
+    input: { readonly category: string; readonly description: string;
+      readonly evidenceIds: readonly string[] }, occurredAt: string): Promise<{ incident: {
+        readonly id: string; readonly category: string; readonly description: string;
+        readonly occurredAt: string;
+      } }> {
+    return this.dataSource.transaction(async (manager) => {
+      const { order, attempt } = await this.lockActiveAttempt(
+        manager, organizationId, orderId, actorUserId);
+      const selected = await this.lockAvailableEvidence(manager, organizationId, orderId,
+        attempt.id, input.evidenceIds);
+      if (selected.length !== input.evidenceIds.length) {
+        throw new DeliveryRouteConflictError('An incident requires one or two available photos from this attempt');
+      }
+      const timestamp = outcomeTimestamp(occurredAt, order.updatedAt, attempt.startedAt);
+      const incidentId = randomUUID();
+      await manager.query(`INSERT INTO delivery_incidents
+        (id, organization_id, order_id, attempt_id, category, description, actor_user_id, occurred_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [incidentId, organizationId, orderId, attempt.id, input.category,
+        input.description, actorUserId, timestamp]);
+      for (const row of selected) {
+        await manager.update(DeliveryEvidenceEntity,
+          { id: row.id, organizationId, orderId, attemptId: attempt.id }, { incidentId });
+      }
+      await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
+        status: 'returned', updatedAt: timestamp,
+      });
+      await manager.update(DeliveryAttemptEntity, { id: attempt.id, organizationId }, {
+        status: 'failed', completedAt: timestamp,
+      });
+      await insertOrderHistory(manager, organizationId, orderId, actorUserId,
+        'in_transit', 'returned', timestamp);
+      return { incident: { id: incidentId, category: input.category,
+        description: input.description, occurredAt: timestamp.toISOString() } };
+    });
+  }
+
+  async complete(organizationId: string, routeId: string, actorUserId: string,
+    occurredAt: string): Promise<DriverRouteView> {
+    return this.dataSource.transaction(async (manager) => {
+      const route = await manager.findOne(DeliveryRouteEntity, {
+        where: { id: routeId, organizationId }, lock: { mode: 'pessimistic_write' },
+      });
+      if (route === null) throw new DeliveryRouteNotFoundError();
+      await this.requireDriver(manager, organizationId, route.driverId, actorUserId);
+      if (route.status !== 'in_progress') {
+        throw new DeliveryRouteConflictError('Only an in-progress route can be completed');
+      }
+      const active = await manager.find(DeliveryStopOrderEntity, {
+        where: { organizationId, routeId, active: true }, order: { orderId: 'ASC' },
+      });
+      if (active.length === 0) throw new DeliveryRouteConflictError('Route has no active orders');
+      for (const link of active) {
+        const order = await manager.findOne(DeliveryOrderEntity, {
+          where: { id: link.orderId, organizationId }, lock: { mode: 'pessimistic_write' },
+        });
+        if (order === null || order.activeRouteId !== routeId ||
+            !['delivered', 'returned'].includes(order.status)) {
+          throw new DeliveryRouteConflictError('Every active route order must have a terminal outcome');
+        }
+      }
+      const timestamp = new Date(Math.max(Date.parse(occurredAt),
+        (route.startedAt?.getTime() ?? route.createdAt.getTime()) + 1));
+      await manager.update(DeliveryRouteEntity, { id: routeId, organizationId }, {
+        status: 'completed', completedAt: timestamp,
+      });
+      await manager.query(`INSERT INTO delivery_route_status_history
+        (id, organization_id, route_id, from_status, to_status, actor_user_id, occurred_at)
+        VALUES ($1,$2,$3,'in_progress','completed',$4,$5)`,
+      [randomUUID(), organizationId, routeId, actorUserId, timestamp]);
+      route.status = 'completed';
+      route.completedAt = timestamp;
+      return this.view(manager, route);
+    });
+  }
+
+  private async lockActiveAttempt(manager: EntityManager, organizationId: string,
+    orderId: string, actorUserId: string) {
+    const candidates = await manager.query<{ routeId: string; driverId: string }[]>(`
+      SELECT r.id AS "routeId", r.driver_id AS "driverId"
+      FROM delivery_orders o
+      JOIN delivery_routes r ON r.organization_id=o.organization_id AND r.id=o.active_route_id
+      JOIN delivery_attempts a ON a.organization_id=o.organization_id AND a.order_id=o.id
+        AND a.route_id=r.id AND a.status='in_progress'
+      WHERE o.organization_id=$1 AND o.id=$2 AND o.status='in_transit'
+        AND r.status='in_progress'
+      FOR UPDATE OF o, r, a`, [organizationId, orderId]);
+    const candidate = candidates[0];
+    if (candidate === undefined) throw new DeliveryRouteNotFoundError();
+    await this.requireDriver(manager, organizationId, candidate.driverId, actorUserId);
+    const order = await manager.findOne(DeliveryOrderEntity, {
+      where: { id: orderId, organizationId },
+    });
+    const attempt = await manager.findOne(DeliveryAttemptEntity, {
+      where: { organizationId, orderId, routeId: candidate.routeId, status: 'in_progress' },
+    });
+    if (order === null || attempt === null || order.activeRouteId !== candidate.routeId) {
+      throw new DeliveryRouteNotFoundError();
+    }
+    return { order, attempt };
+  }
+
+  private async lockAvailableEvidence(manager: EntityManager, organizationId: string,
+    orderId: string, attemptId: string, evidenceIds: readonly string[]) {
+    if (new Set(evidenceIds).size !== evidenceIds.length) return [];
+    const evidence = [];
+    for (const id of evidenceIds) {
+      const row = await manager.findOne(DeliveryEvidenceEntity, {
+        where: { id, organizationId, orderId, attemptId, status: 'available', incidentId: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (row !== null) evidence.push(row);
+    }
+    return evidence;
+  }
+}
+
+function outcomeTimestamp(occurredAt: string, orderUpdatedAt: Date, attemptStartedAt: Date): Date {
+  return new Date(Math.max(Date.parse(occurredAt), orderUpdatedAt.getTime() + 1,
+    attemptStartedAt.getTime() + 1));
+}
+
+async function insertOrderHistory(manager: EntityManager, organizationId: string, orderId: string,
+  actorUserId: string, fromStatus: string, toStatus: string, occurredAt: Date): Promise<void> {
+  const history = new DeliveryOrderStatusHistoryEntity();
+  history.id = randomUUID(); history.orderId = orderId; history.organizationId = organizationId;
+  history.fromStatus = fromStatus; history.toStatus = toStatus;
+  history.actorUserId = actorUserId; history.occurredAt = occurredAt;
+  await manager.insert(DeliveryOrderStatusHistoryEntity, history);
 }

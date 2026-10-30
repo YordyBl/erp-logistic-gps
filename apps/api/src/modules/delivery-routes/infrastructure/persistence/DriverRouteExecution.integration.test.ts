@@ -44,7 +44,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     if (!source?.isInitialized) return;
     await source.query(`DELETE FROM delivery_order_packages WHERE delivery_order_id IN
       (SELECT id FROM delivery_orders WHERE organization_id = ANY($1::uuid[]))`, [organizations]);
-    for (const table of ['delivery_evidence', 'delivery_attempts', 'driver_account_binding_history',
+    for (const table of ['delivery_evidence', 'delivery_incidents', 'delivery_attempts', 'driver_account_binding_history',
       'delivery_route_status_history', 'delivery_order_status_history',
       'delivery_stop_orders', 'delivery_orders',
       'delivery_stops', 'delivery_routes', 'driver_accounts', 'drivers', 'vehicles', 'users']) {
@@ -354,5 +354,190 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect(await hash(ctx.organizationId)).toBe(before);
     expect((await execution.mine(ctx.organizationId, ctx.actorId)).id).toBe(first.id);
     expect((await orders.findById(nextOrderId))?.status).toBe('created');
+  });
+
+  it('confirms one order only with available evidence and leaves route completion explicit', async () => {
+    const ctx = await seed();
+    const orderId = await ctx.createOrder('EXEC-CONFIRM-1');
+    const otherOrderId = await ctx.createOrder('EXEC-CONFIRM-2');
+    const route = await ctx.plan([orderId, otherOrderId]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const attempt = (await source.query<{ id: string }[]>(
+      'SELECT id FROM delivery_attempts WHERE order_id=$1', [orderId]))[0]!;
+    const otherAttempt = (await source.query<{ id: string }[]>(
+      'SELECT id FROM delivery_attempts WHERE order_id=$1', [otherOrderId]))[0]!;
+    const pending = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId,
+      actorUserId: ctx.actorId, idempotencyKey: 'confirm-pending',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'c'.repeat(64), createdAt: AT,
+    });
+    const secondPhoto = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId,
+      actorUserId: ctx.actorId, idempotencyKey: 'confirm-photo-2',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'b'.repeat(64), createdAt: AT,
+    });
+    const otherAttemptPhoto = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId: otherOrderId,
+      actorUserId: ctx.actorId, idempotencyKey: 'wrong-attempt-photo',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'a'.repeat(64), createdAt: AT,
+    });
+    const beforeRejected = await hash(ctx.organizationId);
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, ctx.actorId,
+      { evidenceIds: [pending.id], receiverName: 'Ana Torres', notes: null }, AT)).rejects.toThrow();
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, ctx.adminId,
+      { evidenceIds: [pending.id], receiverName: 'Ana Torres', notes: null }, AT)).rejects.toThrow();
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, ctx.actorId,
+      { evidenceIds: [pending.id, pending.id], receiverName: null, notes: null }, AT)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(beforeRejected);
+
+    const available = await evidence.markAvailable(ctx.organizationId, pending.id, AT);
+    await evidence.markAvailable(ctx.organizationId, secondPhoto.id, AT);
+    await evidence.markAvailable(ctx.organizationId, otherAttemptPhoto.id, AT);
+    expect(available.status).toBe('available');
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, ctx.actorId,
+      { evidenceIds: [otherAttemptPhoto.id], receiverName: null, notes: null }, AT)).rejects.toThrow();
+    const alternateDriverId = randomUUID();
+    const alternateUserId = randomUUID();
+    await source.query(`INSERT INTO users (id, organization_id, email, password_hash, role,
+      status, created_at) VALUES ($1,$2,$3,'test-hash','DRIVER','active',$4)`,
+    [alternateUserId, ctx.organizationId, `${alternateUserId}@example.test`, AT]);
+    await source.query(`INSERT INTO drivers (id, organization_id, full_name, document_number,
+      phone, license_number, status, created_at, updated_at)
+      VALUES ($1,$2,'Other Driver',$3,'+51 911 222 335',$4,'active',$5,$5)`,
+    [alternateDriverId, ctx.organizationId, `DNI-${alternateDriverId.slice(0, 8).toUpperCase()}`,
+      `L-${alternateDriverId.slice(0, 8).toUpperCase()}`, AT]);
+    await source.query(`INSERT INTO driver_accounts (organization_id, driver_id, user_id)
+      VALUES ($1,$2,$3)`, [ctx.organizationId, alternateDriverId, alternateUserId]);
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, alternateUserId,
+      { evidenceIds: [pending.id], receiverName: null, notes: null }, AT)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(beforeRejected);
+    const confirmations = await Promise.allSettled([1, 2].map(() =>
+      execution.confirmDelivery(ctx.organizationId, orderId, ctx.actorId,
+        { evidenceIds: [pending.id, secondPhoto.id], receiverName: 'Ana Torres', notes: null }, AT)));
+    expect(confirmations.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+
+    expect((await orders.findById(orderId))?.status).toBe('delivered');
+    expect(await source.query(
+      `SELECT id FROM delivery_attempts WHERE id=$1 AND status='delivered' AND completed_at IS NOT NULL`,
+      [attempt.id])).toHaveLength(1);
+    expect((await orders.findStatusHistory(ctx.organizationId, orderId)).at(-1))
+      .toMatchObject({ fromStatus: 'in_transit', toStatus: 'delivered', actorUserId: ctx.actorId });
+    expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
+    await expect(execution.confirmDelivery(ctx.organizationId, orderId, ctx.actorId,
+      { evidenceIds: [pending.id], receiverName: null, notes: null }, AT)).rejects.toThrow();
+    expect((await orders.findById(otherOrderId))?.status).toBe('in_transit');
+    expect(otherAttempt.id).not.toBe(attempt.id);
+  });
+
+  it('atomically records a photographed incident, failed attempt, returned order and audit', async () => {
+    const ctx = await seed();
+    const orderId = await ctx.createOrder('EXEC-INCIDENT-1');
+    const route = await ctx.plan([orderId]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const attempt = (await source.query<{ id: string }[]>(
+      'SELECT id FROM delivery_attempts WHERE order_id=$1', [orderId]))[0]!;
+    const upload = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId,
+      actorUserId: ctx.actorId, idempotencyKey: 'incident-photo',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'd'.repeat(64), createdAt: AT,
+    });
+    await evidence.markAvailable(ctx.organizationId, upload.id, AT);
+    const beforeInvalidIncident = await hash(ctx.organizationId);
+    await expect(execution.reportDeliveryIncident(ctx.organizationId, orderId, ctx.actorId, {
+      category: 'invalid-category', description: 'Should roll back', evidenceIds: [upload.id],
+    }, AT)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(beforeInvalidIncident);
+    expect(await source.query(
+      'SELECT id FROM delivery_incidents WHERE organization_id=$1', [ctx.organizationId]))
+      .toHaveLength(0);
+
+    await source.query(`CREATE FUNCTION reject_failed_attempt_for_test() RETURNS trigger
+      LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.status='failed' THEN RAISE EXCEPTION 'forced attempt update failure'; END IF;
+        RETURN NEW;
+      END $$`);
+    await source.query(`CREATE TRIGGER reject_failed_attempt_for_test
+      BEFORE UPDATE ON delivery_attempts FOR EACH ROW
+      EXECUTE FUNCTION reject_failed_attempt_for_test()`);
+    try {
+      await expect(execution.reportDeliveryIncident(ctx.organizationId, orderId, ctx.actorId, {
+        category: 'recipient_absent', description: 'Forced transaction rollback',
+        evidenceIds: [upload.id],
+      }, AT)).rejects.toThrow();
+    } finally {
+      await source.query('DROP TRIGGER reject_failed_attempt_for_test ON delivery_attempts');
+      await source.query('DROP FUNCTION reject_failed_attempt_for_test()');
+    }
+    expect(await hash(ctx.organizationId)).toBe(beforeInvalidIncident);
+    expect(await source.query(
+      'SELECT id FROM delivery_incidents WHERE organization_id=$1', [ctx.organizationId]))
+      .toHaveLength(0);
+    expect(await source.query(
+      'SELECT id FROM delivery_evidence WHERE id=$1 AND incident_id IS NULL', [upload.id]))
+      .toHaveLength(1);
+
+    const result = await execution.reportDeliveryIncident(ctx.organizationId, orderId, ctx.actorId, {
+      category: 'recipient_absent', description: 'Recipient was not available',
+      evidenceIds: [upload.id],
+    }, AT);
+
+    expect(result.incident).toMatchObject({ category: 'recipient_absent', description: 'Recipient was not available' });
+    expect((await orders.findById(orderId))?.status).toBe('returned');
+    expect(await source.query(
+      `SELECT id FROM delivery_attempts WHERE id=$1 AND status='failed' AND completed_at IS NOT NULL`,
+      [attempt.id])).toHaveLength(1);
+    expect(await source.query(
+      `SELECT id FROM delivery_evidence WHERE id=$1 AND incident_id=$2 AND status='available'`,
+      [upload.id, result.incident.id])).toHaveLength(1);
+    expect((await orders.findStatusHistory(ctx.organizationId, orderId)).at(-1))
+      .toMatchObject({ fromStatus: 'in_transit', toStatus: 'returned', actorUserId: ctx.actorId });
+    const completed = await execution.complete(ctx.organizationId, route.id, ctx.actorId, AT);
+    expect(completed.status).toBe('completed');
+    const redispatched = await ctx.plan([orderId]);
+    expect(redispatched.id).not.toBe(route.id);
+    expect((await orders.findById(orderId))?.status).toBe('assigned');
+    expect((await orders.findStatusHistory(ctx.organizationId, orderId)).slice(-2)
+      .map((entry) => [entry.fromStatus, entry.toStatus]))
+      .toEqual([['returned', 'planned'], ['planned', 'assigned']]);
+  });
+
+  it('completes a route explicitly only when all active stop orders have outcomes', async () => {
+    const ctx = await seed();
+    const ids = [await ctx.createOrder('EXEC-ROUTE-DONE-1'), await ctx.createOrder('EXEC-ROUTE-DONE-2')];
+    const route = await ctx.plan(ids);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const before = await hash(ctx.organizationId);
+    await expect(execution.complete(ctx.organizationId, route.id, ctx.actorId, AT)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(before);
+    const attempt = (await source.query<{ id: string }[]>(
+      'SELECT id FROM delivery_attempts WHERE order_id=$1', [ids[0]]))[0]!;
+    const upload = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId: ids[0]!,
+      actorUserId: ctx.actorId, idempotencyKey: 'route-complete-photo',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'e'.repeat(64), createdAt: AT,
+    });
+    await evidence.markAvailable(ctx.organizationId, upload.id, AT);
+    await execution.confirmDelivery(ctx.organizationId, ids[0]!, ctx.actorId,
+      { evidenceIds: [upload.id], receiverName: null, notes: null }, AT);
+    const secondPhoto = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId: ids[1]!,
+      actorUserId: ctx.actorId, idempotencyKey: 'route-complete-incident-photo',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'f'.repeat(64), createdAt: AT,
+    });
+    await evidence.markAvailable(ctx.organizationId, secondPhoto.id, AT);
+    await execution.reportDeliveryIncident(ctx.organizationId, ids[1]!, ctx.actorId, {
+      category: 'other', description: 'Other delivery issue', evidenceIds: [secondPhoto.id],
+    }, AT);
+    const completed = await execution.complete(ctx.organizationId, route.id, ctx.actorId, AT);
+    expect(completed.status).toBe('completed');
+    expect(completed.completedAt).not.toBeNull();
+    expect(await source.query(
+      `SELECT id FROM delivery_attempts WHERE id=$1 AND status='delivered'`, [attempt.id])).toHaveLength(1);
+    expect(await source.query(
+      `SELECT id FROM delivery_route_status_history WHERE route_id=$1 AND to_status='completed'`,
+      [route.id])).toHaveLength(1);
   });
 });

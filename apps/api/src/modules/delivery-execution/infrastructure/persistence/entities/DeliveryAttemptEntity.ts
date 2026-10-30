@@ -32,4 +32,10 @@ export class DeliveryAttemptEntity {
 
   @Column({ name: 'completed_at', type: 'timestamptz', nullable: true })
   completedAt!: Date | null;
+
+  @Column({ name: 'receiver_name', type: 'varchar', length: 120, nullable: true })
+  receiverName!: string | null;
+
+  @Column({ name: 'delivery_notes', type: 'varchar', length: 500, nullable: true })
+  deliveryNotes!: string | null;
 }

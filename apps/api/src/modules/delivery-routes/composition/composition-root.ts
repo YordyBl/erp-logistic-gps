@@ -90,7 +90,7 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
     })));
     return { id: route.id, publicCode: route.publicCode, plannedDate: route.plannedDate,
       driverId: route.driverId, vehicleId: route.vehicleId, status: route.status,
-      startedAt: route.startedAt ?? null, stops };
+      startedAt: route.startedAt ?? null, completedAt: null, stops };
   }
 
   async mine(organizationId: string, actorUserId: string): Promise<DriverRouteView> {

@@ -412,6 +412,120 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+  /api/v1/delivery-routes/orders/{orderId}/confirm:
+    post:
+      tags: [delivery-routes]
+      operationId: confirmDeliveryOrder
+      summary: Confirm an order delivery with available private evidence (DRIVER)
+      description: |
+        Only the explicitly assigned active driver can confirm an in-transit order.
+        One or two uploaded, available photos from its active attempt are required.
+        The order and attempt transition to delivered with an audit record in one
+        database transaction; the route remains in progress until explicitly completed.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [evidenceIds]
+              properties:
+                evidenceIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items: { type: string, format: uuid }
+                receiverName: { type: [string, 'null'], maxLength: 120 }
+                notes: { type: [string, 'null'], maxLength: 500 }
+      responses:
+        '200':
+          description: Order confirmation was recorded.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/delivery-routes/orders/{orderId}/incidents:
+    post:
+      tags: [delivery-routes]
+      operationId: reportDeliveryIncident
+      summary: Report a photographed delivery incident (DRIVER)
+      description: |
+        Records the incident, its evidence links, failed attempt, returned order and
+        order audit atomically. The order returns to the warehouse and cannot be
+        retried in the field; redispatch remains a separate dispatcher decision.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [category, description, evidenceIds]
+              properties:
+                category:
+                  type: string
+                  enum: [recipient_absent, incorrect_address, delivery_refused, damaged_package, access_restricted, vehicle_issue, other]
+                description: { type: string, minLength: 3, maxLength: 1000 }
+                evidenceIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 2
+                  items: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Incident and failed delivery outcome were recorded.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/v1/delivery-routes/{routeId}/complete:
+    post:
+      tags: [delivery-routes]
+      operationId: completeDeliveryRoute
+      summary: Explicitly complete a route after all orders have outcomes (DRIVER)
+      description: |
+        Only the assigned active driver can complete an in-progress route, and only
+        when every active stop order is delivered or returned. The route completion
+        and status audit are atomic; delivery of the last order never auto-completes it.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: routeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Completed route.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DriverRouteResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /api/v1/delivery-routes/{routeId}:
     get:
       tags: [delivery-routes]
@@ -1844,7 +1958,7 @@ components:
       properties:
         data:
           type: object
-          required: [id, publicCode, plannedDate, driverId, vehicleId, status, startedAt, stops]
+          required: [id, publicCode, plannedDate, driverId, vehicleId, status, startedAt, completedAt, stops]
           properties:
             id:
               type: string
@@ -1862,8 +1976,11 @@ components:
               format: uuid
             status:
               type: string
-              enum: [planned, in_progress]
+              enum: [planned, in_progress, completed]
             startedAt:
+              type: [string, 'null']
+              format: date-time
+            completedAt:
               type: [string, 'null']
               format: date-time
             stops:

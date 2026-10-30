@@ -205,20 +205,21 @@ are not part of the §5 business list.
 
 **DeliveryAttempt** — result of one delivery attempt.
 
-- Key fields: `id`, `organizationId`, `orderId`, `routeId`, `stopId`, `driverId`,
-  `attemptNumber`, `status` (`succeeded`, `failed`), `startedAt`, `finishedAt`
-  (nullable), `failureReason` (nullable), `notes`.
+- Key fields: `id`, `organizationId`, `orderId`, `routeId`, `driverId`,
+  `attemptNumber`, `status` (`in_progress`, `delivered`, `failed`), `startedAt`,
+  `completedAt` (nullable), `receiverName` and `deliveryNotes` (nullable).
 - Invariants: one terminal outcome per attempt; a successful attempt requires at least
   one valid evidence file (invariant 10); a registered delivery incident marks the
   attempt failed (invariant 14); there are no field retries — a new attempt requires a
   new dispatcher assignment (plan §11.4); confirmation is independent of GPS
   (invariant 4).
 
-**ProofOfDelivery** — delivery record for one order and attempt.
+**ProofOfDelivery** — explicit confirmation of one order and attempt.
 
-- Key fields: `id`, `organizationId`, `orderId`, `attemptId` (unique), `recipientName`
-  (nullable), `deliveredAt`, `latitude` / `longitude` (nullable), `notes` (nullable),
-  `createdByUserId`.
+- The current MVP stores receiver name and notes on the attempt, records the
+  `in_transit → delivered` transition in order status history, and associates one or
+  two available evidence rows with that attempt; it does not create a separate
+  proof-of-delivery table.
 - Invariants: at most one per successful attempt; requires at least one available
   evidence file (invariant 10); location is optional and never proves delivery by
   itself; binaries are not stored here.
@@ -247,16 +248,13 @@ are not part of the §5 business list.
 
 **OperationalIncident** — operational event or delivery incident.
 
-- Key fields: `id`, `organizationId`, `orderId` (nullable), `stopId` (nullable),
-  `routeId` (nullable), `category` (`recipient_absent`, `incorrect_address`,
-  `delivery_refused`, `damaged_package`, `access_restricted`, `vehicle_issue`,
-  `other`), `description`, `reportedByUserId`, `reportedAt`, `status`
-  (`open`, `closed`).
-- Invariants: at least one of order/stop/route is set; a delivery incident requires
-  category, description and at least one evidence file, unless an audited exception is
-  authorized (invariant 11); registering a delivery incident marks the attempt failed
-  and the order `returned` in the same transaction (invariant 14); "recipient did not
-  answer" uses `other` (plan §11.4); incidents are audited.
+- The implemented delivery incident stores `organizationId`, `orderId`, `attemptId`,
+  category, description, actor, and occurrence time. Categories are
+  `recipient_absent`, `incorrect_address`, `delivery_refused`, `damaged_package`,
+  `access_restricted`, `vehicle_issue`, and `other`.
+- Recording the incident, linking one or two available evidence rows, marking the
+  attempt `failed`, returning the order, and appending order history are one PostgreSQL
+  transaction. Returned orders remain eligible for a new dispatcher assignment.
 
 **TrackingAccessToken** — revocable public permission for one order.
 
