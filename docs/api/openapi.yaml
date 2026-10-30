@@ -804,6 +804,171 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-orders/{orderId}/evidence:
+    post:
+      tags: [delivery-execution]
+      operationId: uploadDeliveryEvidence
+      summary: Upload one private photo for the active delivery attempt
+      description: |
+        DRIVER only. The authenticated account must be explicitly bound to the
+        active assigned driver. Send one raw JPEG, PNG, or WebP image per request;
+        actual container bytes are validated, EXIF/GPS metadata is removed, and
+        each attempt accepts at most two photos of up to 5,000,000 bytes each.
+        Retries must reuse the same Idempotency-Key and identical image bytes.
+        A storage or database failure leaves the record pending and never deletes
+        a possibly persisted object.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 128
+            pattern: '^[A-Za-z0-9._:-]+$'
+      requestBody:
+        required: true
+        description: One raw image, no multipart envelope; maximum 5,000,000 bytes.
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+          image/png:
+            schema:
+              type: string
+              format: binary
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '201':
+          description: Evidence metadata after the private object is available.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryEvidenceResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          description: Image exceeds the request body limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: Storage is unavailable; the upload remains pending for an idempotent retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      tags: [delivery-execution]
+      operationId: listDeliveryEvidence
+      summary: List evidence metadata for one order
+      description: ADMIN and DISPATCHER users may read evidence in their organization; DRIVER access is limited to their bound attempts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Evidence metadata; storage keys are never returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DeliveryEvidence'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/evidence/{evidenceId}/download:
+    get:
+      tags: [delivery-execution]
+      operationId: downloadDeliveryEvidence
+      summary: Download an available private evidence image
+      description: An authenticated ADMIN/DISPATCHER in the evidence organization or the assigned DRIVER may download the image. The response is non-cacheable and is never a public object URL.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: evidenceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Private image bytes with EXIF/GPS metadata removed.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: private, no-store
+            X-Content-Type-Options:
+              schema:
+                type: string
+                example: nosniff
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/webp:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Private storage is unavailable or the stored object failed integrity verification.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/customers:
     post:
       tags: [customers]
@@ -1627,6 +1792,52 @@ components:
                   message: An unexpected error occurred while processing the request
                   correlationId: c0ffee00-0000-4000-8000-000000000000
   schemas:
+    DeliveryEvidenceResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: '#/components/schemas/DeliveryEvidence'
+    DeliveryEvidence:
+      type: object
+      required: [id, orderId, attemptId, incidentId, mimeType, byteSize, checksum, uploadedBy, status, createdAt, availableAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        orderId:
+          type: string
+          format: uuid
+        attemptId:
+          type: string
+          format: uuid
+        incidentId:
+          type: string
+          format: uuid
+          nullable: true
+        mimeType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        byteSize:
+          type: integer
+          minimum: 1
+          maximum: 5000000
+        checksum:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+        uploadedBy:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending_upload, available]
+        createdAt:
+          type: string
+          format: date-time
+        availableAt:
+          type: string
+          format: date-time
+          nullable: true
     DriverRouteResponse:
       type: object
       required: [data]

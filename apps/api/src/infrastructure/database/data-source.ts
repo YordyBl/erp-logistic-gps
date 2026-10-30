@@ -16,6 +16,8 @@ import { OrganizationEntity } from '../../modules/identity-and-access/infrastruc
 import { RefreshTokenEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/RefreshTokenEntity.js';
 import { UserEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/UserEntity.js';
 import { VehicleEntity } from '../../modules/vehicles/infrastructure/persistence/entities/VehicleEntity.js';
+import { DeliveryAttemptEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryAttemptEntity.js';
+import { DeliveryEvidenceEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryEvidenceEntity.js';
 
 /**
  * Process-wide TypeORM data source.
@@ -75,6 +77,8 @@ function commonOptions() {
       CustomerEntity,
       DriverEntity,
       VehicleEntity,
+      DeliveryAttemptEntity,
+      DeliveryEvidenceEntity,
     ],
     migrations: [MIGRATIONS_GLOB],
     migrationsTableName: 'migrations',

@@ -2,6 +2,12 @@ import type { DataSource } from 'typeorm';
 
 import type { AuthConfig } from '../../config/config.js';
 import type { AppDependencies } from '../../http/app.js';
+import type { S3EvidenceObjectStorageConfig } from '../../modules/delivery-execution/infrastructure/S3EvidenceObjectStorage.js';
+import { S3EvidenceObjectStorage } from '../../modules/delivery-execution/infrastructure/S3EvidenceObjectStorage.js';
+import {
+  createDeliveryExecutionModuleFromDataSource,
+  type DeliveryExecutionModule,
+} from '../../modules/delivery-execution/composition/composition-root.js';
 import {
   createCustomersModuleFromDataSource,
   type CustomersModule,
@@ -29,13 +35,14 @@ import {
 export interface ComposedApiModules {
   readonly deliveryOrders: DeliveryOrdersModule;
   readonly deliveryRoutes: ReturnType<typeof createDeliveryRoutesModule>;
+  readonly deliveryExecution?: DeliveryExecutionModule;
   readonly identity: IdentityModule;
   readonly customers: CustomersModule;
   readonly drivers: DriversModule;
   readonly vehicles: VehiclesModule;
   readonly dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'auth' | 'catalogs'
   >;
 }
 
@@ -55,6 +62,7 @@ export interface ComposedApiModules {
 export async function composeApiModules(
   dataSource: DataSource,
   authConfig: AuthConfig,
+  evidenceStorageConfig?: S3EvidenceObjectStorageConfig,
 ): Promise<ComposedApiModules> {
   const [deliveryOrders, identity, customers, drivers, vehicles] =
     await Promise.all([
@@ -64,6 +72,12 @@ export async function composeApiModules(
       createDriversModuleFromDataSource(dataSource),
       createVehiclesModuleFromDataSource(dataSource),
     ]);
+  const deliveryExecution = evidenceStorageConfig === undefined
+    ? undefined
+    : await createDeliveryExecutionModuleFromDataSource(
+      dataSource,
+      new S3EvidenceObjectStorage(evidenceStorageConfig),
+    );
   const deliveryRoutes = createDeliveryRoutesModule({
     store: new RoutePlanningTypeOrmStore(dataSource),
     executionStore: new DriverRouteTypeOrmStore(dataSource),
@@ -72,10 +86,11 @@ export async function composeApiModules(
 
   const dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'auth' | 'catalogs'
   > = {
     deliveryOrders,
     deliveryRoutes,
+    ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,
@@ -92,5 +107,9 @@ export async function composeApiModules(
     catalogs: { customers, drivers, vehicles },
   };
 
-  return { deliveryOrders, deliveryRoutes, identity, customers, drivers, vehicles, dependencies };
+  return {
+    deliveryOrders, deliveryRoutes,
+    ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
+    identity, customers, drivers, vehicles, dependencies,
+  };
 }

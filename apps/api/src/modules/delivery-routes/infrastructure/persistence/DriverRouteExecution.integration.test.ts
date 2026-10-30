@@ -6,6 +6,8 @@ import { createDataSource } from '../../../../infrastructure/database/data-sourc
 import { DriverRouteTypeOrmStore } from '../../../../infrastructure/dispatch/DriverRouteTypeOrmStore.js';
 import { DriverAccountTypeOrmStore } from '../../../../infrastructure/dispatch/DriverAccountTypeOrmStore.js';
 import { RoutePlanningTypeOrmStore } from '../../../../infrastructure/dispatch/RoutePlanningTypeOrmStore.js';
+import { DeliveryEvidenceTypeOrmStore } from '../../../delivery-execution/infrastructure/persistence/DeliveryEvidenceTypeOrmStore.js';
+import { DeliveryEvidenceConflictError, DeliveryEvidenceNotFoundError } from '../../../delivery-execution/domain/errors/DeliveryExecutionError.js';
 import { DeliveryOrder } from '../../../delivery-orders/domain/entities/DeliveryOrder.js';
 import { Recipient } from '../../../delivery-orders/domain/value-objects/Recipient.js';
 import { DeliveryAddress } from '../../../delivery-orders/domain/value-objects/DeliveryAddress.js';
@@ -25,6 +27,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   let source: DataSource;
   let planner: RoutePlanningTypeOrmStore;
   let execution: DriverRouteTypeOrmStore;
+  let evidence: DeliveryEvidenceTypeOrmStore;
   let orders: DeliveryOrderTypeOrmRepository;
   const organizations: string[] = [];
 
@@ -33,6 +36,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await source.initialize();
     planner = new RoutePlanningTypeOrmStore(source);
     execution = new DriverRouteTypeOrmStore(source);
+    evidence = new DeliveryEvidenceTypeOrmStore(source);
     orders = new DeliveryOrderTypeOrmRepository(source);
   });
 
@@ -40,8 +44,8 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     if (!source?.isInitialized) return;
     await source.query(`DELETE FROM delivery_order_packages WHERE delivery_order_id IN
       (SELECT id FROM delivery_orders WHERE organization_id = ANY($1::uuid[]))`, [organizations]);
-    for (const table of ['driver_account_binding_history', 'delivery_route_status_history',
-      'delivery_order_status_history',
+    for (const table of ['delivery_evidence', 'delivery_attempts', 'driver_account_binding_history',
+      'delivery_route_status_history', 'delivery_order_status_history',
       'delivery_stop_orders', 'delivery_orders',
       'delivery_stops', 'delivery_routes', 'driver_accounts', 'drivers', 'vehicles', 'users']) {
       await source.query(`DELETE FROM "${table}" WHERE organization_id = ANY($1::uuid[])`, [organizations]);
@@ -101,7 +105,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   }
 
   async function hash(organizationId: string) {
-    const snapshots = await Promise.all(['delivery_routes', 'delivery_orders',
+    const snapshots = await Promise.all(['delivery_routes', 'delivery_orders', 'delivery_attempts',
       'delivery_route_status_history', 'delivery_order_status_history'].map(async (table) =>
       source.query(`SELECT * FROM "${table}" WHERE organization_id=$1 ORDER BY id`, [organizationId])));
     return createHash('sha256').update(JSON.stringify(snapshots)).digest('hex');
@@ -124,6 +128,50 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       stops: [{ orders: ids.map((id) => ({ id, status: 'in_transit' })) }] });
     expect((await execution.mine(ctx.organizationId, ctx.actorId)).startedAt).toBe(started.startedAt);
     expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
+    const attempts = await source.query<{ id: string; order_id: string; attempt_number: number; status: string }[]>(
+      `SELECT id, order_id, attempt_number, status FROM delivery_attempts
+        WHERE organization_id=$1 AND route_id=$2 ORDER BY order_id`,
+      [ctx.organizationId, route.id]);
+    expect(attempts).toHaveLength(ids.length);
+    expect(attempts.every((attempt) => attempt.attempt_number === 1 && attempt.status === 'in_progress'))
+      .toBe(true);
+    const reserve = (orderId: string, actorUserId: string, key: string, byteSize = 16,
+      checksum = 'a'.repeat(64)) => evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId, actorUserId,
+      idempotencyKey: key, mimeType: 'image/jpeg', byteSize, checksum, createdAt: AT,
+    });
+    expect(await source.query(
+      `SELECT id FROM delivery_evidence WHERE organization_id=$1 AND attempt_id=$2`,
+      [ctx.organizationId, attempts.find((attempt) => attempt.order_id === ids[0])?.id],
+    )).toHaveLength(0);
+    const firstEvidence = await reserve(ids[0]!, ctx.actorId, 'delivery-photo-1');
+    expect(firstEvidence).toMatchObject({
+      orderId: ids[0], status: 'pending_upload',
+      attemptId: attempts.find((attempt) => attempt.order_id === ids[0])?.id,
+    });
+    const retriedEvidence = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId: ids[0]!,
+      actorUserId: ctx.actorId, idempotencyKey: 'delivery-photo-1',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'a'.repeat(64), createdAt: AT,
+    });
+    expect(retriedEvidence.id).toBe(firstEvidence.id);
+    await expect(evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId: ids[0]!,
+      actorUserId: ctx.actorId, idempotencyKey: 'delivery-photo-1',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'b'.repeat(64), createdAt: AT,
+    })).rejects.toBeInstanceOf(DeliveryEvidenceConflictError);
+    await expect(reserve(ids[0]!, ctx.actorId, 'delivery-photo-2'))
+      .resolves.toMatchObject({ status: 'pending_upload' });
+    await expect(reserve(ids[0]!, ctx.actorId, 'delivery-photo-3'))
+      .rejects.toBeInstanceOf(DeliveryEvidenceConflictError);
+    await expect(reserve(ids[0]!, ctx.adminId, 'admin-photo-1'))
+      .rejects.toBeInstanceOf(DeliveryEvidenceNotFoundError);
+    await expect(evidence.listForOrder(randomUUID(), ids[0]!, ctx.actorId))
+      .rejects.toBeInstanceOf(DeliveryEvidenceNotFoundError);
+    const available = await evidence.markAvailable(ctx.organizationId, firstEvidence.id, AT);
+    expect(available.status).toBe('available');
+    await expect(evidence.findForDownload(ctx.organizationId, firstEvidence.id, ctx.actorId))
+      .resolves.toMatchObject({ objectKey: firstEvidence.objectKey, checksum: 'a'.repeat(64) });
     for (const id of ids) {
       expect((await orders.findById(id))?.status).toBe('in_transit');
       expect((await orders.findStatusHistory(ctx.organizationId, id)).at(-1))
@@ -162,6 +210,29 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect((await source.query(`SELECT id FROM delivery_route_status_history WHERE route_id=$1`,
       [route.id]))).toHaveLength(1);
+    expect((await source.query(`SELECT id FROM delivery_attempts WHERE route_id=$1`,
+      [route.id]))).toHaveLength(1);
+  });
+
+  it('serializes concurrent evidence reservations at the two-photo attempt limit', async () => {
+    const ctx = await seed();
+    const orderId = await ctx.createOrder('EXEC-EVIDENCE-RACE-1');
+    const route = await ctx.plan([orderId]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const reservations = await Promise.allSettled([1, 2, 3].map((number) =>
+      evidence.reserveUpload({
+        id: randomUUID(), organizationId: ctx.organizationId, orderId,
+        actorUserId: ctx.actorId, idempotencyKey: `evidence-race-${number}`,
+        mimeType: 'image/jpeg', byteSize: 16, checksum: String(number).repeat(64), createdAt: AT,
+      })));
+
+    expect(reservations.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    expect(reservations.filter((result) => result.status === 'rejected' &&
+      result.reason instanceof DeliveryEvidenceConflictError)).toHaveLength(1);
+    const stored = await source.query<{ count: string }[]>(
+      `SELECT count(*)::text AS count FROM delivery_evidence WHERE order_id=$1`, [orderId]);
+    expect(stored[0]?.count).toBe('2');
   });
 
   it('rejects revoked, disabled and other-tenant accounts without changing route or audit', async () => {

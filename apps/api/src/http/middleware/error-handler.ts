@@ -38,6 +38,12 @@ import {
 import {
   DeliveryRouteConflictError, DeliveryRouteNotFoundError, DeliveryRouteValidationError,
 } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
+import {
+  DeliveryEvidenceConflictError,
+  DeliveryEvidenceNotFoundError,
+  DeliveryEvidenceUnavailableError,
+  DeliveryEvidenceValidationError,
+} from '../../modules/delivery-execution/domain/errors/DeliveryExecutionError.js';
 import type { ErrorDetails } from '../../shared/errors/DomainError.js';
 import { HttpError, toErrorBody } from '../errors.js';
 import { getCorrelationId } from '../request-context.js';
@@ -109,6 +115,23 @@ function mapError(error: unknown): MappedError {
         : error instanceof DeliveryRouteNotFoundError ? 404 : 409,
       code: error.code, message: error.message, details: error.details,
       logLevel: undefined, logMessage: undefined,
+    };
+  }
+
+  if (error instanceof DeliveryEvidenceValidationError ||
+      error instanceof DeliveryEvidenceNotFoundError ||
+      error instanceof DeliveryEvidenceConflictError ||
+      error instanceof DeliveryEvidenceUnavailableError) {
+    return {
+      statusCode: error instanceof DeliveryEvidenceValidationError ? 400
+        : error instanceof DeliveryEvidenceNotFoundError ? 404
+          : error instanceof DeliveryEvidenceConflictError ? 409 : 503,
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      logLevel: error instanceof DeliveryEvidenceUnavailableError ? 'warn' : undefined,
+      logMessage: error instanceof DeliveryEvidenceUnavailableError
+        ? 'delivery evidence storage operation unavailable' : undefined,
     };
   }
 

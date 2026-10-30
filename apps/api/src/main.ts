@@ -3,6 +3,7 @@ import 'reflect-metadata';
 import { createServer } from 'node:http';
 
 import { applyRuntimeTimezone, loadAuthConfig, loadConfig } from './config/config.js';
+import { loadEvidenceStorageConfig } from './config/evidence-storage-config.js';
 import { buildApp } from './http/app.js';
 import { createLogger } from './http/logger.js';
 import { createDataSource } from './infrastructure/database/data-source.js';
@@ -60,7 +61,11 @@ async function readiness(): Promise<void> {
   await dataSource.query('SELECT 1');
 }
 
-const { dependencies } = await composeApiModules(dataSource, authConfig);
+const { dependencies } = await composeApiModules(
+  dataSource,
+  authConfig,
+  loadEvidenceStorageConfig(),
+);
 const app = buildApp({ ...dependencies, readiness, logger });
 const server = createServer(app);
 

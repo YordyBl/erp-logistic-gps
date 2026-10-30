@@ -9,6 +9,7 @@ import { DeliveryStopOrderEntity } from '../../modules/delivery-routes/infrastru
 import { DeliveryOrderEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderPackageEntity.js';
 import { DeliveryOrderStatusHistoryEntity } from '../../modules/delivery-orders/infrastructure/persistence/entities/DeliveryOrderStatusHistoryEntity.js';
+import { DeliveryAttemptEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryAttemptEntity.js';
 import { toDomain } from '../../modules/delivery-orders/infrastructure/persistence/mappers/DeliveryOrderMapper.js';
 import { toDeliveryOrderDto } from '../../modules/delivery-orders/application/dto/DeliveryOrderDto.js';
 import type { DeliveryOrderDto } from '../../modules/delivery-orders/application/dto/DeliveryOrderDto.js';
@@ -144,6 +145,20 @@ export class DriverRouteTypeOrmStore implements DriverRouteExecutionStore {
         history.toStatus = updated.status; history.actorUserId = actorUserId;
         history.occurredAt = timestamp;
         await manager.insert(DeliveryOrderStatusHistoryEntity, history);
+        const attemptNumber = await manager.count(DeliveryAttemptEntity, {
+          where: { organizationId, orderId: order.id },
+        }) + 1;
+        const attempt = new DeliveryAttemptEntity();
+        attempt.id = randomUUID();
+        attempt.organizationId = organizationId;
+        attempt.orderId = order.id;
+        attempt.routeId = routeId;
+        attempt.driverId = route.driverId;
+        attempt.attemptNumber = attemptNumber;
+        attempt.status = 'in_progress';
+        attempt.startedAt = timestamp;
+        attempt.completedAt = null;
+        await manager.insert(DeliveryAttemptEntity, attempt);
       }
       await manager.update(DeliveryRouteEntity, { id: routeId, organizationId }, {
         status: 'in_progress', startedAt: timestamp,

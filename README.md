@@ -4,11 +4,10 @@ Monorepo for a multi-tenant last-mile delivery ERP covering Lima Metropolitana a
 Dispatchers plan routes with multiple stops and orders, drivers confirm deliveries with
 photo evidence, and recipients follow a single order through a limited public link.
 
-**Status (2026-10-27):** Phase 1 is implemented. The `identity-and-access` module (users,
-organizations, Argon2id passwords, rotating refresh tokens), the HTTP JWT surface (login,
-refresh, logout, `me`, ADMIN-only user creation), the customer/driver/vehicle catalogs, the
-demo seed and the OpenAPI 3.1 contract are in place. The web client is still a placeholder,
-so `apps/web` keeps serving the static page.
+**Status (2026-10-29):** Phases 0–3 are closed in the feature logs. Phase 4 is in progress:
+driver/account binding and authenticated route start are implemented; private photo evidence,
+delivery outcomes and the React client are still being built. The web client remains a
+placeholder, so `apps/web` keeps serving the static page.
 
 ## Quick path
 
@@ -77,10 +76,19 @@ Point the API at a reachable PostgreSQL and run the migrations once:
 npm ci
 export DATABASE_URL=postgres://<user>:<password>@localhost:5432/erp_logistic
 export JWT_SECRET="$(openssl rand -hex 32)"
+export EVIDENCE_S3_ENDPOINT=http://localhost:9000
+export EVIDENCE_S3_BUCKET=delivery-evidence
+export EVIDENCE_S3_REGION=us-east-1
+export EVIDENCE_S3_ACCESS_KEY="${MINIO_ROOT_USER:-minioadmin}"
+export EVIDENCE_S3_SECRET_KEY="${MINIO_ROOT_PASSWORD:-change-me-local-only}"
 npm run migration:run -w apps/api
 npm run seed:demo -w apps/api     # optional: demo organization and users
 npx tsx apps/api/src/main.ts
 ```
+
+The API container receives equivalent `EVIDENCE_S3_*` values from Compose and waits for
+MinIO health. The local development bucket is private and is created on the first evidence
+upload. Production must configure an HTTPS endpoint and externally managed credentials.
 
 The API reads process environment only. To use `.env` locally, load it first
 (`set -a; . ./.env; set +a`). Without `DATABASE_URL`, the data source falls back to the
@@ -110,6 +118,7 @@ is a defect.
 | `apps/api` | Express 5 API: HTTP layer, configuration, TypeORM data source, migrations, middleware and routers. |
 | `apps/api/src/modules/identity-and-access` | Users, organizations, Argon2id hashing, JWT/refresh sessions, RBAC context, tests and docs. |
 | `apps/api/src/modules/delivery-orders` | Pilot module: domain, use cases, ports, persistence adapter, HTTP adapter, tests and docs. |
+| `apps/api/src/modules/delivery-execution` | Delivery attempts and private photo evidence; confirmation and incident outcomes remain pending. |
 | `apps/api/src/modules/customers`, `drivers`, `vehicles` | Org-scoped catalogs: domain, use cases, TypeORM persistence, HTTP routes and module docs. |
 | `apps/api/src/scripts/seed-demo.ts` | Demo seed: demo organization plus ADMIN/DISPATCHER/DRIVER users with documented demo credentials. |
 | `apps/web` | Static placeholder served by nginx; the React client arrives in a later phase. |
@@ -135,6 +144,9 @@ is a defect.
 | `PATCH` | `/api/v1/delivery-orders/:orderId` | Edit recipient, address or packages only in `created` (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/delivery-orders/:orderId/cancel` | Cancel before transit while preserving the audited status history (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
+| `POST` | `/api/v1/delivery-orders/:orderId/evidence` | Upload one private JPEG/PNG/WebP photo for the authenticated driver's active attempt (1–2 photos, maximum 5,000,000 bytes each) |
+| `GET` | `/api/v1/delivery-orders/:orderId/evidence` | List evidence metadata for authorized organization users or the assigned driver |
+| `GET` | `/api/v1/evidence/:evidenceId/download` | Stream available evidence after tenant/attempt authorization; never exposes a public object URL |
 | `POST` | `/api/v1/delivery-routes` | Plan sequenced stops and assign orders with an active driver and vehicle (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
 | `PATCH` | `/api/v1/delivery-routes/:routeId` | Reassign the driver or vehicle of a planned route without touching orders (ADMIN or DISPATCHER) |
@@ -224,9 +236,10 @@ API code (`docker compose build`).
 - The web client is a placeholder; the React application is not implemented.
 - The API runs through `tsx` instead of a compiled production build.
 - No backups, TLS/reverse proxy or observability backend.
-- Manual route planning, driver/vehicle reassignment and redispatch of returned
-  orders are implemented locally; route execution is still pending.
-  Photo evidence and incidents belong to Phase 4, and tracking to Phase 5.
+- Manual route planning, resource reassignment, redispatch, explicit driver-account binding
+  and route start are implemented locally. Photo evidence storage is in progress; delivery
+  confirmation, incident outcomes, explicit route completion and the React driver/admin views
+  remain pending in Phase 4. Tracking belongs to Phase 5.
 
 The architecture plan assigns orders to Phase 2, routes and dispatch to Phase 3,
 delivery execution to Phase 4, and GPS tracking to Phase 5. The React client
