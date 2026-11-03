@@ -11,7 +11,10 @@ import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../domai
 import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteUseCase.js';
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
 import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
+import { ListRoutesUseCase } from '../application/use-cases/list-routes/ListRoutesUseCase.js';
 import type { PlannedRoute, RoutePlanningStore } from '../application/ports/RoutePlanningStore.js';
+import type { MapLinkResolver } from '../application/ports/MapLinkResolver.js';
+import { GoogleMapsLinkResolver } from '../infrastructure/GoogleMapsLinkResolver.js';
 
 /** In-memory adapter for tests and demo; production uses the database transaction adapter. */
 export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRouteExecutionStore {
@@ -41,6 +44,14 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
   async findById(organizationId: string, routeId: string): Promise<PlannedRoute | null> {
     const route = this.routes.get(routeId);
     return route?.organizationId === organizationId ? route : null;
+  }
+
+  async list(organizationId: string): Promise<readonly PlannedRoute[]> {
+    return [...this.routes.values()]
+      .filter((route) => route.organizationId === organizationId)
+      .filter((route) => route.status === 'planned' || route.status === 'in_progress' || route.status === 'completed')
+      .sort((left, right) => left.plannedDate.localeCompare(right.plannedDate) ||
+        left.createdAt.localeCompare(right.createdAt));
   }
 
   async reassign(organizationId: string, routeId: string, changes: {
@@ -127,11 +138,13 @@ export function createDeliveryRoutesModule(options: {
   readonly getVehicle: GetVehicleUseCase;
   readonly executionStore: DriverRouteExecutionStore;
   readonly clock?: Clock;
+  readonly mapLinkResolver?: MapLinkResolver;
 }) {
   const clock = options.clock ?? new SystemClock();
   return {
     planRoute: new PlanRouteUseCase(options.store, options.getDriver,
-      options.getVehicle, clock),
+      options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver()),
+    listRoutes: new ListRoutesUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
     reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),
     executeDriverRoute: new ExecuteDriverRouteUseCase(options.executionStore, clock),

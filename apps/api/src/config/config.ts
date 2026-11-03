@@ -7,6 +7,8 @@
  * development values that Compose also uses.
  */
 
+import { isUuid } from '../shared/ids.js';
+
 /** Ratified system-wide timezone (architecture plan §2). Lima has no DST. */
 export const LIMA_TIME_ZONE = 'America/Lima' as const;
 
@@ -27,6 +29,9 @@ const LOG_LEVELS = [
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 const DEFAULT_PORT = 3000;
+const DEFAULT_GPS_SIMULATION_INTERVAL_SECONDS = 4;
+const DEFAULT_GPS_SIMULATION_TIME_SCALE = 1;
+const DEFAULT_GPS_POSITION_RETENTION_DAYS = 30;
 
 export interface AppConfig {
   readonly environment: AppEnvironment;
@@ -38,6 +43,10 @@ export interface AppConfig {
   readonly databaseUrl: string | undefined;
   readonly timezone: typeof LIMA_TIME_ZONE;
   readonly logLevel: LogLevel;
+  readonly gpsSimulationIntervalSeconds: number;
+  readonly gpsSimulationTimeScale: number;
+  readonly gpsPositionRetentionDays: number;
+  readonly valhallaUrl: string | undefined;
 }
 
 /**
@@ -54,6 +63,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl: readOptional(env.DATABASE_URL),
     timezone: LIMA_TIME_ZONE,
     logLevel: readLogLevel(env),
+    gpsSimulationIntervalSeconds: readBoundedInteger(
+      env.GPS_SIMULATION_INTERVAL_SECONDS,
+      'GPS_SIMULATION_INTERVAL_SECONDS',
+      DEFAULT_GPS_SIMULATION_INTERVAL_SECONDS,
+      3,
+      5,
+    ),
+    gpsSimulationTimeScale: readBoundedInteger(
+      env.GPS_SIMULATION_TIME_SCALE,
+      'GPS_SIMULATION_TIME_SCALE',
+      DEFAULT_GPS_SIMULATION_TIME_SCALE,
+      1,
+      100,
+    ),
+    gpsPositionRetentionDays: readPositiveInteger(
+      env.GPS_POSITION_RETENTION_DAYS,
+      'GPS_POSITION_RETENTION_DAYS',
+      DEFAULT_GPS_POSITION_RETENTION_DAYS,
+    ),
+    valhallaUrl: readOptionalLocalServiceUrl(env.VALHALLA_URL, 'VALHALLA_URL'),
   };
 }
 
@@ -95,6 +124,22 @@ function readPort(env: NodeJS.ProcessEnv): number {
   return DEFAULT_PORT;
 }
 
+function readBoundedInteger(
+  raw: string | undefined,
+  variable: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = readOptional(raw);
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${variable} must be an integer between ${minimum} and ${maximum}, received "${value}"`);
+  }
+  return parsed;
+}
+
 function parsePort(raw: string, variable: string): number {
   const port = Number(raw);
 
@@ -128,6 +173,26 @@ function readOptional(value: string | undefined): string | undefined {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
+function readOptionalLocalServiceUrl(raw: string | undefined, variable: string): string | undefined {
+  const value = readOptional(raw);
+  if (value === undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${variable} must be a local HTTP(S) URL`);
+  }
+  const host = url.hostname.toLowerCase();
+  const localHost = host === 'localhost' || host.endsWith('.localhost') ||
+    host === 'valhalla' || host === 'host.docker.internal' ||
+    host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
+  if (!['http:', 'https:'].includes(url.protocol) || !localHost ||
+      url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '') {
+    throw new Error(`${variable} must be a local HTTP(S) URL without credentials or query parameters`);
+  }
+  return url.toString().replace(/\/$/, '');
+}
+
 function isEnvironment(value: string): value is AppEnvironment {
   return (ENVIRONMENTS as readonly string[]).includes(value);
 }
@@ -152,6 +217,7 @@ export interface LoginRateLimitConfig {
 }
 
 export interface AuthConfig {
+  readonly loginOrganizationId?: string;
   readonly jwtSecret: string;
   readonly jwtIssuer: string;
   readonly jwtAudience: string;
@@ -177,7 +243,12 @@ const DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS = 900;
  * is an MVP assumption (S9).
  */
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
+  const loginOrganizationId = readOptional(env.LOGIN_ORGANIZATION_ID);
+  if (loginOrganizationId !== undefined && !isUuid(loginOrganizationId)) {
+    throw new Error('LOGIN_ORGANIZATION_ID must be a UUID');
+  }
   return {
+    ...(loginOrganizationId === undefined ? {} : { loginOrganizationId }),
     jwtSecret: readJwtSecret(env),
     jwtIssuer: readOptional(env.JWT_ISSUER) ?? DEFAULT_JWT_ISSUER,
     jwtAudience: readOptional(env.JWT_AUDIENCE) ?? DEFAULT_JWT_AUDIENCE,

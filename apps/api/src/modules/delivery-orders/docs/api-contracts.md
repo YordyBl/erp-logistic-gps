@@ -24,6 +24,7 @@
 | Base path | `/api/v1` |
 | Tenancy | The caller's organization comes only from the verified JWT claims set by the shared `authenticate` middleware (ADR-003). The organization is never accepted from the body, path or query. |
 | Authentication | JWT access tokens (15 min, HS256 via `jose`, pinned algorithm and required claims) with RBAC roles (`ADMIN`, `DISPATCHER`, `DRIVER`). A missing or invalid token → `401`. |
+| Catalog access | Customer catalog and general delivery-order reads and writes require `ADMIN` or `DISPATCHER`; `DRIVER` uses assigned-route and delivery-execution endpoints. |
 | Content type | `application/json; charset=utf-8` |
 | Ids | Internal UUIDs in paths. Public codes are lookup/display values, never credentials. |
 | Timestamps | ISO-8601 instants on the wire (UTC `Z`, as produced by the clock and `timestamptz` persistence). Clients render America/Lima (`-05:00`). |
@@ -35,7 +36,7 @@
 
 ### `POST /api/v1/delivery-orders`
 
-Creates one order in the caller's organization.
+Creates one order in the caller's organization. Only `ADMIN` and `DISPATCHER` may create orders; other authenticated roles receive `403`.
 
 Required headers: `authorization: Bearer <access-token>`. Optional: `x-request-id`, `content-type: application/json`.
 
@@ -43,6 +44,7 @@ Request body — `organizationId` is not part of the accepted shape and is rejec
 
 ```json
 {
+  "customerId": "55555555-5555-4555-8555-555555555551",
   "publicCode": "ORD-2026-0001",
   "recipient": {
     "name": "Ana Torres",
@@ -61,6 +63,8 @@ Request body — `organizationId` is not part of the accepted shape and is rejec
 }
 ```
 
+`customerId` is required and must identify an active customer in the caller's organization. Unknown or cross-organization customer IDs return the tenant-scoped customer-not-found response; inactive customers return `409 CUSTOMER_INACTIVE`.
+
 Notes:
 
 - `publicCode` is normalized to uppercase and unique per organization. Server-side
@@ -75,6 +79,7 @@ Response `201 Created`:
   "data": {
     "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     "organizationId": "11111111-1111-4111-8111-111111111111",
+    "customerId": "55555555-5555-4555-8555-555555555551",
     "publicCode": "ORD-2026-0001",
     "status": "created",
     "recipient": { "name": "Ana Torres", "phone": "+51 987 654 321" },
@@ -104,6 +109,39 @@ and `x-request-id`.
 | `401` | Missing/invalid access token |
 | `409` | `publicCode` already used in the organization |
 | `500` | Unexpected failure; generic message, no internals |
+
+### `POST /api/v1/delivery-orders/import`
+
+Imports CSV (`text/csv`) or XLSX (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`) as raw request bodies. The endpoint is restricted to `ADMIN` and `DISPATCHER`, limits uploads to 5 MB and 5,000 data rows, and derives the organization only from the authenticated request. The file must not contain a tenant identifier.
+
+The `Orders` worksheet and CSV header row use the same columns:
+
+```text
+customerCode,timeWindow,publicCode,recipientName,recipientPhone,addressLine,district,latitude,longitude,packageCode,packageDescription,packageWeightKg
+```
+
+One row represents one package. Repeat all order-level values for every row with the same `publicCode`. `latitude`, `longitude`, and `packageWeightKg` are optional columns/values; coordinates must be supplied together. A customer is matched by `customerCode` within the caller's organization and must be active. Unknown, missing required, duplicate, or blank headers reject the entire file before writes. For a valid header, all rows of each order group are validated together: one invalid row rejects that entire order, reports its source row numbers and issues, and does not prevent unrelated valid orders from being imported. Orders are persisted with all packages through the existing aggregate create use case.
+
+Response `200 OK`:
+
+```json
+{
+  "data": {
+    "importedOrders": [],
+    "rejectedOrders": [
+      {
+        "publicCode": "ORD-2026-0002",
+        "rowNumbers": [3, 4],
+        "issues": [
+          { "rowNumber": 4, "field": "packageDescription", "message": "Too small: expected string to have >=1 characters" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`GET /api/v1/delivery-orders/import/template` returns a blank XLSX workbook named `delivery-orders-template.xlsx` with the shared headers on its `Orders` worksheet. Both endpoints use the normal authenticated API client; drivers receive `403`.
 
 ### `GET /api/v1/delivery-orders/{orderId}`
 

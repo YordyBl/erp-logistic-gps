@@ -5,6 +5,7 @@ import { Check, Column, Entity, Index, JoinColumn, ManyToOne, PrimaryColumn, Uni
 @Unique('uq_delivery_routes_organization_id', ['organizationId', 'id'])
 @Unique('uq_delivery_routes_organization_public_code', ['organizationId', 'publicCode'])
 @Check('chk_delivery_routes_status', `"status" IN ('planned', 'in_progress', 'completed', 'cancelled')`)
+@Check('chk_delivery_routes_origin', `("origin_address_line" IS NULL AND "origin_latitude" IS NULL AND "origin_longitude" IS NULL) OR ("origin_address_line" IS NOT NULL AND "origin_latitude" IS NOT NULL AND "origin_longitude" IS NOT NULL)`)
 @Index('uq_delivery_routes_active_driver', ['driverId'], {
   unique: true, where: `"status" IN ('planned', 'in_progress')`,
 })
@@ -31,6 +32,14 @@ export class DeliveryRouteEntity {
     { name: 'vehicle_id', referencedColumnName: 'id' },
   ]) vehicle!: { readonly id: string };
   @Column({ type: 'varchar', length: 20 }) status!: string;
+  @Column({ name: 'origin_address_line', type: 'varchar', length: 200, nullable: true })
+  originAddressLine!: string | null;
+  @Column({ name: 'origin_latitude', type: 'numeric', precision: 9, scale: 6, nullable: true })
+  originLatitude!: string | null;
+  @Column({ name: 'origin_longitude', type: 'numeric', precision: 9, scale: 6, nullable: true })
+  originLongitude!: string | null;
+  @Column({ name: 'simulated_completion_enabled', type: 'boolean', default: false })
+  simulatedCompletionEnabled!: boolean;
   @Column({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
   @Column({ name: 'started_at', type: 'timestamptz', nullable: true }) startedAt!: Date | null;
   @Column({ name: 'completed_at', type: 'timestamptz', nullable: true }) completedAt!: Date | null;

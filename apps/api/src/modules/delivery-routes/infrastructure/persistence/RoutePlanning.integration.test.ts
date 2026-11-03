@@ -42,6 +42,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
         await source.query(`DELETE FROM "${table}" WHERE "organization_id" = ANY($1::uuid[])`,
           [organizationIds]);
       }
+      await source.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
       await source.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [organizationIds]);
     }
     await source.destroy();
@@ -49,12 +50,17 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
 
   async function seed() {
     const organizationId = randomUUID();
+    const customerId = randomUUID();
     const driverId = randomUUID();
     const vehicleId = randomUUID();
     organizationIds.push(organizationId);
     await new OrganizationTypeOrmRepository(source).save(Organization.create({
       id: organizationId, name: 'Route integration', createdAt: CREATED_AT,
     }));
+    await source.query(`INSERT INTO customers
+      (id, organization_id, public_code, name, contact_name, contact_email, contact_phone, status, created_at)
+      VALUES ($1,$2,'TEST-CUSTOMER','Integration Customer','Test Contact','route@example.test','+51 900 000 001','active',$3)`,
+    [customerId, organizationId, CREATED_AT]);
     await source.query(`INSERT INTO drivers
       (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
       VALUES ($1,$2,'Test Driver',$3,'+51 911 222 333',$4,'active',$5,$5)`,
@@ -66,7 +72,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     [vehicleId, organizationId, `R${vehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
     const makeOrder = async (code: string) => {
       const order = DeliveryOrder.create({
-        id: randomUUID(), organizationId, publicCode: code,
+        id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
         deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })],
@@ -113,6 +119,25 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     await expect(store.plan(competing, actor)).rejects.toThrow();
     expect((await orders.findById(third))?.status).toBe('created');
     expect(await orders.findStatusHistory(organizationId, third)).toEqual([]);
+  });
+
+  it('persists resolved stop coordinates for later route geometry and GPS simulation', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const first = await makeOrder('ORDER-COORDINATE-1');
+    const second = await makeOrder('ORDER-COORDINATE-2');
+    const base = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
+    const route: PlannedRoute = {
+      ...base,
+      stops: [
+        { ...base.stops[0]!, sequence: 1, latitude: -11.974070, longitude: -77.081446, orderIds: [first] },
+        { ...base.stops[0]!, id: randomUUID(), sequence: 2, latitude: -12.046400, longitude: -77.042800,
+          addressLine: 'Plaza Mayor', orderIds: [second] },
+      ],
+    };
+
+    await store.plan(route, randomUUID());
+
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(route);
   });
 
   it('redispatches a returned order atomically without losing its prior route or audit', async () => {

@@ -1,0 +1,217 @@
+.driver-management {
+  width: 100%;
+  color: var(--ink);
+}
+
+.driver-management__header,
+.driver-management__section-heading,
+.driver-management__identity,
+.driver-management__form-actions,
+.driver-management__row-actions,
+.driver-management__linked-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.driver-management__header {
+  margin: 0 auto 1.4rem;
+  max-width: 1180px;
+  padding-bottom: 1.1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.driver-management__header h1 {
+  margin-bottom: .35rem;
+  color: var(--brand-deep);
+  font-size: 1.75rem;
+  font-weight: 730;
+  letter-spacing: -.04em;
+}
+
+.driver-management__header p,
+.driver-management__section-heading p {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: .87rem;
+  line-height: 1.5;
+}
+
+.driver-management__count {
+  flex: 0 0 auto;
+  color: var(--brand);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.driver-management__create-surface,
+.driver-management__list-surface {
+  max-width: 1180px;
+  margin: 0 auto 1rem;
+  padding: clamp(1rem, 2vw, 1.5rem);
+}
+
+.driver-management__section-heading {
+  align-items: flex-start;
+  margin-bottom: 1.1rem;
+}
+
+.driver-management__section-heading h2 {
+  margin-bottom: .3rem;
+  color: var(--brand-deep);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.driver-management__form,
+.driver-management__edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .85rem 1rem;
+}
+
+.driver-management__field {
+  display: grid;
+  min-width: 0;
+  gap: .38rem;
+  color: var(--ink);
+  font-size: .79rem;
+  font-weight: 650;
+}
+
+.driver-management__field input,
+.driver-management__field select {
+  width: 100%;
+  min-height: 43px;
+  padding: .6rem .72rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: .84rem;
+}
+
+.driver-management__field input:focus,
+.driver-management__field select:focus {
+  border-color: var(--brand);
+  outline: 3px solid oklch(0.39 0.075 232 / .14);
+  outline-offset: 1px;
+}
+
+.driver-management__form-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+.driver-management__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.driver-management__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(250px, .75fr);
+  gap: 1rem 1.5rem;
+  padding: 1.2rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.driver-management__identity {
+  align-items: flex-start;
+  grid-column: 1 / -1;
+}
+
+.driver-management__identity h3 {
+  margin-bottom: .7rem;
+  color: var(--brand-deep);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.driver-management__identity p {
+  display: flex;
+  gap: .55rem;
+  margin-bottom: .32rem;
+  color: var(--ink);
+  font-size: .81rem;
+}
+
+.driver-management__identity p span {
+  min-width: 5rem;
+  color: var(--muted);
+}
+
+.driver-management__row-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.driver-management__account {
+  min-width: 0;
+  padding: .85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: oklch(0.97 0.006 245);
+}
+
+.driver-management__account h4 {
+  margin-bottom: .55rem;
+  color: var(--brand-deep);
+  font-size: .8rem;
+}
+
+.driver-management__link-controls {
+  display: grid;
+  gap: .65rem;
+}
+
+.driver-management__linked-account {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  color: var(--ink);
+  font-size: .84rem;
+  overflow-wrap: anywhere;
+}
+
+.driver-management__account-restricted,
+.driver-management__link-controls p {
+  margin: 0;
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.45;
+}
+
+.driver-management__alert,
+.driver-management__success {
+  max-width: 1180px;
+  margin: 0 auto .85rem;
+  padding: .7rem .85rem;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: .82rem;
+  line-height: 1.45;
+}
+
+.driver-management__alert { background: var(--danger-wash); color: var(--danger); }
+.driver-management__success { background: var(--success-wash); color: var(--success); }
+.driver-management__loading,
+.driver-management__empty { padding: 1.2rem .25rem; color: var(--muted); font-size: .88rem; }
+.driver-management__empty h3 { margin-bottom: .35rem; color: var(--ink); font-size: .95rem; }
+.driver-management__empty p { margin-bottom: .8rem; }
+
+@media (max-width: 760px) {
+  .driver-management__row { grid-template-columns: minmax(0, 1fr); }
+  .driver-management__identity { grid-column: auto; }
+}
+
+@media (max-width: 560px) {
+  .driver-management__header { align-items: flex-start; flex-direction: column; }
+  .driver-management__form,
+  .driver-management__edit-form { grid-template-columns: minmax(0, 1fr); }
+  .driver-management__form-actions { grid-column: auto; justify-content: stretch; }
+  .driver-management__form-actions .button { width: 100%; }
+  .driver-management__identity { align-items: flex-start; }
+}

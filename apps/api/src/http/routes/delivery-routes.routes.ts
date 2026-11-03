@@ -14,6 +14,7 @@ import { parseOrThrow } from '../validation.js';
 export function createDeliveryRoutesRouter(
   ports: {
     readonly planRoute: PlanRouteUseCase;
+    readonly listRoutes: { execute(input: unknown): Promise<{ routes: readonly unknown[] }> };
     readonly getRoute: GetRouteUseCase;
     readonly reassignRoute: ReassignRouteUseCase;
     readonly executeDriverRoute: ExecuteDriverRouteUseCase;
@@ -22,6 +23,10 @@ export function createDeliveryRoutesRouter(
 ): Router {
   const router = Router();
   router.use(authenticate);
+  router.get('/', requireRole('ADMIN', 'DISPATCHER'), async (_request, response) => {
+    const result = await ports.listRoutes.execute({ organizationId: requireOrganizationId(response) });
+    response.status(200).json({ data: result.routes });
+  });
   router.post('/', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
     const body = parseOrThrow(planRouteBodySchema, request.body, 'Plan route request body is invalid');
     const organizationId = requireOrganizationId(response);
@@ -89,7 +94,7 @@ export function createDeliveryRoutesRouter(
     });
     response.status(201).json({ data: result.incident });
   });
-  router.get('/:routeId', async (request, response) => {
+  router.get('/:routeId', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
     const result = await ports.getRoute.execute({
       organizationId: requireOrganizationId(response), routeId: request.params.routeId,
     });

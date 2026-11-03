@@ -15,6 +15,7 @@ export class SimulatedPositionProvider implements PositionProvider {
     private readonly geometryProvider: RouteGeometryProvider,
     private readonly clock: Clock = new SystemClock(),
     private readonly accuracyMeters = DEFAULT_ACCURACY_METERS,
+    private readonly timeScale = 1,
   ) {}
 
   async sample(
@@ -24,13 +25,14 @@ export class SimulatedPositionProvider implements PositionProvider {
     const instant = Date.parse(recordedAt);
     const startedAt = Date.parse(route.startedAt);
     if (!Number.isFinite(instant) || !Number.isFinite(startedAt)) return null;
-    if (route.stops.length < 2 || route.stops.some((stop) =>
+    if (route.stops.length === 0 || route.stops.some((stop) =>
       stop.latitude === null || stop.longitude === null)) return null;
+    if (route.origin === undefined && route.stops.length < 2) return null;
 
-    const geometry = await this.geometryProvider.getGeometry(route.stops);
+    const geometry = await this.geometryProvider.getGeometry(route.stops, route.origin);
     if (!isUsableGeometry(geometry)) return null;
 
-    const elapsedSeconds = Math.max(0, (instant - startedAt) / 1_000);
+    const elapsedSeconds = Math.max(0, (instant - startedAt) / 1_000) * this.timeScale;
     const progress = Math.min(1, elapsedSeconds / geometry.durationSeconds);
     const coordinate = coordinateAtProgress(geometry, progress);
     if (coordinate === null) return null;

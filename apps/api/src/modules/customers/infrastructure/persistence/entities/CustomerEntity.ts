@@ -19,6 +19,7 @@ import {
  */
 @Entity({ name: 'customers' })
 @Unique('uq_customers_organization_public_code', ['organizationId', 'publicCode'])
+@Unique('uq_customers_organization_id_id', ['organizationId', 'id'])
 @Index('idx_customers_organization_id', ['organizationId'])
 @Check('chk_customers_status', `"status" IN ('active', 'inactive')`)
 @Check('chk_customers_public_code', `"public_code" = upper("public_code")`)

@@ -38,6 +38,23 @@ import {
 export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
   constructor(private readonly dataSource: DataSource) {}
 
+  async nextCodes(packageCount: number): Promise<{
+    readonly publicCode: string;
+    readonly packageCodes: readonly string[];
+  }> {
+    const [orderRows, packageRows] = await Promise.all([
+      this.dataSource.query('SELECT nextval(\'delivery_order_public_code_seq\') AS value'),
+      this.dataSource.query(
+        'SELECT nextval(\'delivery_order_package_code_seq\') AS value FROM generate_series(1, $1)',
+        [packageCount],
+      ),
+    ]) as [{ value: string }[], { value: string }[]];
+    return {
+      publicCode: formatGeneratedCode('ORD', Number(orderRows[0]?.value)),
+      packageCodes: packageRows.map((row) => formatGeneratedCode('PKG', Number(row.value))),
+    };
+  }
+
   async save(order: DeliveryOrder): Promise<void> {
     const orderEntity = toOrderEntity(order);
     const packageEntities = toPackageEntities(order);
@@ -119,6 +136,7 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
       await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
         recipientName: mapped.recipientName, recipientPhone: mapped.recipientPhone,
         deliveryAddressLine: mapped.deliveryAddressLine, deliveryDistrict: mapped.deliveryDistrict,
+        googleMapsUrl: mapped.googleMapsUrl,
         latitude: mapped.latitude, longitude: mapped.longitude, updatedAt: mapped.updatedAt,
       });
       if (changes.packages !== undefined) {
@@ -179,6 +197,10 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
       };
     });
   }
+}
+
+function formatGeneratedCode(prefix: string, value: number): string {
+  return `${prefix}-${String(value).padStart(8, '0')}`;
 }
 
 interface PostgresDriverError {

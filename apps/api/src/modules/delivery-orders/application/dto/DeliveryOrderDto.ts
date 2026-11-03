@@ -9,6 +9,7 @@ export interface DeliveryOrderRecipientDto {
 export interface DeliveryOrderAddressDto {
   readonly addressLine: string;
   readonly district: string;
+  readonly googleMapsUrl: string | null;
   readonly latitude: number | null;
   readonly longitude: number | null;
 }
@@ -28,6 +29,8 @@ export interface DeliveryOrderPackageDto {
 export interface DeliveryOrderDto {
   readonly id: string;
   readonly organizationId: string;
+  readonly customerId: string;
+  readonly timeWindow: 'AM' | 'PM';
   readonly publicCode: string;
   readonly status: DeliveryOrderStatus;
   readonly recipient: DeliveryOrderRecipientDto;
@@ -41,6 +44,8 @@ export function toDeliveryOrderDto(order: DeliveryOrder): DeliveryOrderDto {
   return {
     id: order.id,
     organizationId: order.organizationId,
+    customerId: order.customerId,
+    timeWindow: order.timeWindow,
     publicCode: order.publicCode,
     status: order.status,
     recipient: {
@@ -50,6 +55,7 @@ export function toDeliveryOrderDto(order: DeliveryOrder): DeliveryOrderDto {
     deliveryAddress: {
       addressLine: order.deliveryAddress.addressLine,
       district: order.deliveryAddress.district,
+      googleMapsUrl: order.deliveryAddress.googleMapsUrl ?? null,
       latitude: order.deliveryAddress.latitude ?? null,
       longitude: order.deliveryAddress.longitude ?? null,
     },

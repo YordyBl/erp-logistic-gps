@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { SimulatedPositionProvider } from '../application/SimulatedPositionProvider.js';
 
@@ -45,5 +45,27 @@ describe('SimulatedPositionProvider', () => {
       receivedAt: RECEIVED_AT,
     });
     expect(position?.longitude).toBeCloseTo(-76.9955, 8);
+  });
+
+  it('starts from the persisted origin and supports a local accelerated demonstration scale', async () => {
+    const getGeometry = vi.fn(async () => ({
+      coordinates: [
+        { latitude: -11.9740702, longitude: -77.0814464 },
+        { latitude: -11.9598866, longitude: -77.0428574 },
+      ],
+      distanceMeters: 5_000,
+      durationSeconds: 100,
+    }));
+    const provider = new SimulatedPositionProvider({ getGeometry }, { now: () => RECEIVED_AT }, 5, 2);
+    const origin = { latitude: -11.9740702, longitude: -77.0814464 };
+    const destination = { latitude: -11.9598866, longitude: -77.0428574 };
+
+    const position = await provider.sample({
+      organizationId: ORGANIZATION_ID, routeId: ROUTE_ID, driverId: DRIVER_ID,
+      startedAt: STARTED_AT, origin, stops: [destination],
+    }, RECORDED_AT);
+
+    expect(getGeometry).toHaveBeenCalledWith([destination], origin);
+    expect(position).toMatchObject({ latitude: destination.latitude, longitude: destination.longitude });
   });
 });

@@ -33,20 +33,25 @@ export class CreateDeliveryOrderUseCase {
   async execute(input: unknown): Promise<CreateDeliveryOrderResult> {
     const command = parseCreateDeliveryOrderCommand(input);
 
+    const generated = await this.dependencies.repository.nextCodes(command.packages.length);
+    const publicCode = command.publicCode ?? generated.publicCode;
     const recipient = Recipient.create(command.recipient);
     const deliveryAddress = DeliveryAddress.create(command.deliveryAddress);
-    const packages = command.packages.map((item) => Package.create(item));
+    const packages = command.packages.map((item, index) => Package.create({
+      ...item,
+      code: item.code ?? generated.packageCodes[index]!,
+    }));
 
     const existing = await this.dependencies.repository.findByPublicCode(
       command.organizationId,
-      command.publicCode,
+      publicCode,
     );
     if (existing !== null) {
       throw new DeliveryOrderInvariantError(
-        `Public code ${command.publicCode} is already used in organization ${command.organizationId}`,
+        `Public code ${publicCode} is already used in organization ${command.organizationId}`,
         {
           field: 'publicCode',
-          publicCode: command.publicCode,
+          publicCode,
           organizationId: command.organizationId,
         },
       );
@@ -56,7 +61,9 @@ export class CreateDeliveryOrderUseCase {
     const order = DeliveryOrder.create({
       id: this.dependencies.idGenerator.nextId(),
       organizationId: command.organizationId,
-      publicCode: command.publicCode,
+      customerId: command.customerId,
+      timeWindow: command.timeWindow,
+      publicCode,
       recipient,
       deliveryAddress,
       packages,

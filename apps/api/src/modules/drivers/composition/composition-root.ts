@@ -10,7 +10,7 @@ import { ListDriversUseCase } from '../application/use-cases/list-drivers/ListDr
 import { UpdateDriverUseCase } from '../application/use-cases/update-driver/UpdateDriverUseCase.js';
 import type { Driver } from '../domain/entities/Driver.js';
 import type { UserRepository } from '../../identity-and-access/application/ports/UserRepository.js';
-import type { DriverAccountBindingStore } from '../application/ports/DriverAccountBindingStore.js';
+import type { DriverAccountBindingStore, DriverAccountOption } from '../application/ports/DriverAccountBindingStore.js';
 import { BindDriverAccountUseCase } from '../application/use-cases/bind-driver-account/BindDriverAccountUseCase.js';
 import { DriverInvariantError, DriverNotFoundError } from '../domain/errors/DriverError.js';
 
@@ -28,6 +28,18 @@ export class InMemoryDriverAccountBindingStore implements DriverAccountBindingSt
       throw new DriverNotFoundError(driverId);
     }
     return { driverId, userId: this.bindings.get(driverId) ?? null };
+  }
+
+  async listAccounts(organizationId: string): Promise<DriverAccountOption[]> {
+    if (this.users === undefined) return [];
+    const users = await this.users.listByOrganizationAndRole(organizationId, 'DRIVER');
+    const driverByUser = new Map([...this.bindings].map(([driverId, userId]) => [userId, driverId]));
+    return users.filter((user) => user.status === 'active' || driverByUser.has(user.id)).map((user) => ({
+      userId: user.id,
+      email: user.email,
+      status: user.status,
+      driverId: driverByUser.get(user.id) ?? null,
+    }));
   }
 
   async findDriverId(organizationId: string, userId: string): Promise<string | null> {

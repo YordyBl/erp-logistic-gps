@@ -42,6 +42,7 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
         await source.query(`DELETE FROM "${table}" WHERE "organization_id" = ANY($1::uuid[])`,
           [organizationIds]);
       }
+      await source.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
       await source.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [organizationIds]);
     }
     await source.destroy();
@@ -49,11 +50,16 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
 
   async function seed() {
     const organizationId = randomUUID();
+    const customerId = randomUUID();
     const driverId = randomUUID();
     const vehicleId = randomUUID();
     organizationIds.push(organizationId);
     await new OrganizationTypeOrmRepository(source).save(Organization.create({
       id: organizationId, name: 'Reassign integration', createdAt: CREATED_AT }));
+    await source.query(`INSERT INTO customers
+      (id, organization_id, public_code, name, contact_name, contact_email, contact_phone, status, created_at)
+      VALUES ($1,$2,'TEST-CUSTOMER','Integration Customer','Test Contact','reassign@example.test','+51 900 000 001','active',$3)`,
+    [customerId, organizationId, CREATED_AT]);
     await source.query(`INSERT INTO drivers
       (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
       VALUES ($1,$2,'Test Driver',$3,'+51 911 222 333',$4,'active',$5,$5)`,
@@ -65,7 +71,7 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
     [vehicleId, organizationId, `R${vehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
     const makeOrder = async (code: string) => {
       const order = DeliveryOrder.create({
-        id: randomUUID(), organizationId, publicCode: code,
+        id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
         deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })],

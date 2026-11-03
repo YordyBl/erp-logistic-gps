@@ -284,7 +284,7 @@ Estimación revisable: el plazo de 4 semanas solo es plausible con alcance contr
 ### Bloqueantes — RATIFICADAS (2026-10-26)
 1. **Tenancy**: plataforma multi-tenant desde el inicio con `organizationId` en cada entidad/agregado.
 2. **Identidad**: usuarios creados únicamente por ADMIN (invitación); cliente corporativo fuera del MVP (solo tracking público con token). Roles MVP: ADMIN, DISPATCHER, DRIVER.
-3. **Pedido**: un pedido puede tener uno o varios bultos (`Package`); creación manual + importación CSV; franjas horarias simples (AM/PM), ampliables después.
+3. **Pedido**: un pedido puede tener uno o varios bultos (`Package`); creación manual + importación CSV; franjas horarias simples (AM/PM), ampliables después. Decisión confirmada: cada pedido debe asociarse obligatoriamente a un cliente activo de su organización; ADMIN y DISPATCHER gestionan los pedidos. La API valida esta asociación y PostgreSQL aplica una clave foránea compuesta por organización y cliente; la migración se niega a modificar instalaciones con pedidos existentes sin asociaciones verificadas.
 4. **Rutas**: planificación manual; reasignación y redespacho. Política de incidencias: toda incidencia registrada marca el intento como fallido y el pedido retorna a almacén (`returned`), sin reintentos en campo (destinatario ausente, dirección equivocada, no responde, etc.). Un nuevo reparto es una nueva decisión de despacho. La falta de respuesta del destinatario se registra con la categoría `other` (sin categoría propia).
 5. **GPS**: demo 100% simulada en el MVP; el contrato `PositionProvider` aísla la fuente para un proveedor real futuro.
 6. **Frontend**: React + TypeScript con stack propio; Vite + Tailwind + shadcn/ui; Leaflet para empezar, con la capa de mapas aislada para migrar a MapLibre sin dolor.
@@ -307,3 +307,58 @@ Estimación revisable: el plazo de 4 semanas solo es plausible con alcance contr
 ## 12. Siguiente hito
 
 Las decisiones bloqueantes están cerradas (ver apartado 11). Crear ADR-001 (monolito modular hexagonal + slices), ADR-002 (PostgreSQL/TypeORM), ADR-003 (JWT), modelo conceptual de datos y el primer módulo piloto `delivery-orders` con sus documentos y pruebas.
+
+## 13. Checklist de avance del MVP
+
+Esta lista sigue el alcance de las secciones 1, 5, 7, 9A, 10 y 11. Marcar una casilla solo cuando la capacidad descrita esté implementada y verificada; una API sin interfaz o una prueba pendiente no completa el flujo. Los estados parciales describen evidencia conocida, no una aprobación integral. Actualizar la lista conforme avance el desarrollo y registrar la evidencia en el documento de tareas correspondiente.
+
+### Acceso y seguridad
+
+- [x] Inicio de sesión API para los tres roles de la demo: ADMIN, DISPATCHER y DRIVER; comprobado a través del proxy web.
+- [ ] Completar y verificar los flujos de usuarios, sesiones, revocación y permisos por rol desde las interfaces correspondientes. El backend dispone de autenticación y aislamiento por organización; el catálogo y la gestión general de clientes/pedidos están restringidos a ADMIN y DISPATCHER, mientras los conductores usan operaciones de rutas y entregas asignadas. Hay pruebas HTTP enfocadas.
+- [ ] Verificar de extremo a extremo el aislamiento por organización y la protección de datos y recursos privados para todos los flujos del MVP.
+- [ ] Cerrar la revisión pendiente del acceso simplificado para una instalación de una sola empresa. El formulario ya no solicita `organizationId`; el servidor puede configurarlo con `LOGIN_ORGANIZATION_ID` y el aislamiento interno se conserva. Las pruebas enfocadas y los tres accesos de demo vía proxy pasaron; falta la revisión native.
+
+### Información operativa y pedidos de entrega
+
+- [x] Gestionar desde la web las empresas clientes que contratan el servicio: catálogo con estados, contactos y formulario de creación; verificado con pruebas de interfaz y API.
+- [x] Gestionar desde la web conductores y el vínculo autorizado de sus perfiles con cuentas DRIVER: catálogo de perfiles, edición de campos permitidos y vínculo/desvínculo con confirmación. Verificado con pruebas HTTP, PostgreSQL, API client e interfaz; el listado de cuentas expone solo campos seguros y está restringido a ADMIN.
+- [x] Gestionar desde la web vehículos y su disponibilidad del catálogo: registrar, consultar y editar tipo, capacidad y estado activo/inactivo, con acceso operativo para ADMIN/DISPATCHER. Verificado con pruebas de interfaz, API client y navegación por rol. La API actual no ofrece agenda horaria ni detección de conflictos de asignación.
+- [x] Completar la gestión web de pedidos vinculados obligatoriamente a un cliente activo de la organización, incluyendo franjas AM/PM e historial de estados. Verificado: la API y el formulario requieren AM o PM sin valor predeterminado; se listan y crean pedidos con cliente activo y se consulta el historial tenant-scoped de cambios de estado. La migración se niega a inventar franjas para pedidos existentes. La consulta de incidencias/evidencias corresponde a la sección de ejecución y la importación CSV al siguiente punto.
+- [x] Implementar y verificar la creación manual y la importación CSV/XLSX de pedidos previstas en la sección 11; plantilla Excel compartida, rechazo de grupos completos con detalle de filas, tenant y clientes activos validados. API/web: 54 pruebas enfocadas; suite completa: 326 aprobadas y 53 pruebas PostgreSQL omitidas por falta de `DATABASE_URL`; typecheck, lint y build web aprobados. Auditoría de dependencias omitida por decisión del usuario.
+
+### Planificación y despacho
+
+- [x] Planificar desde la web rutas manuales con varias paradas y varios pedidos por parada. Implementado y verificado con pruebas HTTP/web y PostgreSQL.
+- [x] Asignar conductor y vehículo; reasignar recursos y redespachar pedidos conforme a las reglas de negocio. Los pedidos devueltos conservan la ruta e historial previos; el historial muestra la incidencia registrada sin inventar categoría o descripción. Verificado con pruebas PostgreSQL.
+- [x] Consultar desde la web el estado y progreso de rutas y pedidos. La vista presenta rutas planificadas, en curso y completadas, paradas y estado actual de cada pedido; pruebas web y PostgreSQL aprobadas.
+- [x] Completar sin llamadas manuales a la API el flujo desde la creación o importación del pedido hasta su asignación a una ruta. Verificado con suite completa: 387 pruebas aprobadas en una base PostgreSQL desechable y migrada. La revisión nativa RDD de alto riesgo sigue pendiente; no se emitió aprobación.
+
+### Ejecución y evidencias
+
+- [ ] Completar y verificar la vista móvil del conductor: ruta asignada, paradas, inicio y cierre explícito de ruta. La vista y las operaciones principales están implementadas.
+- [ ] Confirmar cada entrega independientemente, con fotos guardadas, receptor y observación cuando corresponda. Existe implementación de backend y frontend; falta prueba integral.
+- [ ] Registrar incidencias con categoría, descripción y foto; devolver el pedido a almacén para una nueva decisión de despacho. Existe implementación de backend y frontend; falta prueba integral.
+- [ ] Verificar selección o captura, previsualización, repetición y reintento explícito de fotos ante fallos de conexión o carga.
+- [ ] Consultar fotos e incidencias privadas desde el detalle operativo del pedido y recibir actualizaciones en tiempo real. Existe consulta de evidencias en la web; falta completar y verificar el flujo.
+- [ ] Comprobar que conductores no asignados, otras organizaciones y visitantes públicos no acceden a evidencias privadas ajenas.
+- [ ] Probar en navegador una carga y descarga real de evidencia con MinIO, incluida la consistencia ante fallos.
+
+### GPS, mapa y tracking público
+
+- [ ] Implementar y verificar GPS simulado mediante `PositionProvider`, con puntos sobre calles y actualizaciones en tiempo real.
+- [ ] Mostrar mapa administrativo y seguimiento del progreso de rutas; distinguir la última posición conocida de una ubicación actual.
+- [ ] Implementar tracking público por pedido con token opaco, vencimiento y revocación, sin revelar otros pedidos, paradas o clientes.
+- [ ] Limitar el acceso público a las evidencias expresamente permitidas y verificar privacidad y autorización.
+- [ ] Resolver las decisiones de mapa, proveedor de rutas, ETA y ventana de visibilidad indicadas en la sección 8 antes de implementar las partes afectadas.
+
+### Dashboard y demo integral
+
+- [ ] Mostrar un dashboard con indicadores mínimos de reparto.
+- [ ] Preparar datos ficticios de Lima y Callao que permitan probar clientes, conductores, vehículos, pedidos y rutas. El seed actual incluye organización y usuarios de demo.
+- [ ] Probar de extremo a extremo pedido, despacho, ruta, entrega o incidencia, evidencia y tracking público.
+- [ ] Completar documentación, seguridad, pruebas, migraciones, builds y despliegue de demo conforme a la definición de terminado de la sección 6.
+- [ ] Revisar las pantallas frente a Manifest como referencia visual, sin reutilizar su código, recursos ni marca.
+- [ ] Cerrar la revisión pendiente de T4/T5 y registrar la evidencia correspondiente en `odd/tasks/fase-4-delivery-execution.md`.
+
+**Fuera del alcance inicial:** facturación SUNAT, contabilidad, inventario avanzado, aplicación móvil nativa, optimización compleja de rutas y rastreadores GPS físicos.

@@ -14,6 +14,8 @@ import { createErrorHandler } from './middleware/error-handler.js';
 import { InMemoryLoginRateLimiter } from './middleware/login-rate-limit.js';
 import { notFoundHandler } from './middleware/not-found.js';
 import { createRequestLogger } from './middleware/request-logger.js';
+import { getAuthenticatedUser, getOrganizationId } from './request-context.js';
+import { classifyTrackingMutation } from './tracking-mutation.js';
 import { createAuthRouter } from './routes/auth.routes.js';
 import {
   createCustomersRouter,
@@ -35,6 +37,8 @@ import {
   type ReadinessCheck,
 } from './routes/health.routes.js';
 import { createUsersRouter } from './routes/users.routes.js';
+import { createDispatchDashboardRouter, type DispatchDashboardQuery } from './routes/dispatch-dashboard.routes.js';
+import type { TrackingWebSocketHub } from '../modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
 import {
   createVehiclesRouter,
   type VehiclesHttpPorts,
@@ -53,6 +57,7 @@ const JSON_BODY_LIMIT = '100kb';
  * HTTP route (T1 review finding R1-002).
  */
 export interface AuthHttpDependencies {
+  readonly loginOrganizationId?: string;
   readonly login: LoginUseCase;
   readonly refreshSession: RefreshSessionUseCase;
   readonly logout: LogoutUseCase;
@@ -83,6 +88,10 @@ export interface AppDependencies {
   readonly deliveryRoutes?: import('../modules/delivery-routes/composition/composition-root.js').DeliveryRoutesModule;
   /** Production always composes private evidence storage; optional for legacy test callers. */
   readonly deliveryExecution?: DeliveryExecutionModule;
+  /** Optional for HTTP-only test callers; production always binds the tracking socket hub. */
+  readonly trackingHub?: Pick<TrackingWebSocketHub, 'issueTicket' | 'publish'>;
+  /** Tenant-scoped dashboard read model; optional only for legacy HTTP test callers. */
+  readonly dispatchDashboard?: DispatchDashboardQuery;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
   /** Customer, driver and vehicle catalogs. */
@@ -109,6 +118,8 @@ export function buildApp({
   deliveryOrders,
   deliveryRoutes,
   deliveryExecution,
+  trackingHub,
+  dispatchDashboard,
   auth,
   catalogs,
   readiness,
@@ -124,10 +135,41 @@ export function buildApp({
   app.use(createRequestLogger(logger));
   app.use(express.json({ limit: JSON_BODY_LIMIT }));
   app.use(createHealthRouter({ readiness, logger }));
+  app.use((request, response, next) => {
+    const mutation = classifyTrackingMutation(request.method, request.path);
+    if (mutation !== null) {
+      response.once('finish', () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) return;
+        const organizationId = getOrganizationId(response);
+        if (organizationId !== undefined) {
+          void trackingHub?.publish(organizationId, mutation);
+        }
+      });
+    }
+    next();
+  });
+  app.post('/api/v1/tracking/ticket', authenticate, (request, response) => {
+    const identity = getAuthenticatedUser(response);
+    if (identity === undefined) {
+      response.status(401).json({ error: { code: 'AUTH_SESSION_INVALID' } });
+      return;
+    }
+    if (trackingHub === undefined) {
+      response.status(503).json({ error: { code: 'TRACKING_UNAVAILABLE' } });
+      return;
+    }
+    const issued = trackingHub.issueTicket({
+      id: identity.id,
+      organizationId: identity.organizationId,
+      role: identity.role,
+    }, request.header('origin'));
+    response.status(201).set('Cache-Control', 'private, no-store').json({ data: issued });
+  });
   app.use(
     '/api/v1/auth',
     createAuthRouter({
       login: auth.login,
+      ...(auth.loginOrganizationId === undefined ? {} : { loginOrganizationId: auth.loginOrganizationId }),
       refreshSession: auth.refreshSession,
       logout: auth.logout,
       cookie: auth.cookie,
@@ -139,15 +181,26 @@ export function buildApp({
     '/api/v1/users',
     createUsersRouter({ createUser: auth.createUser }, authenticate),
   );
+  if (dispatchDashboard !== undefined) {
+    app.use('/api/v1/dashboard', createDispatchDashboardRouter(dispatchDashboard, authenticate));
+  }
+  // Delivery-execution has narrower per-route role gates (including DRIVER
+  // evidence uploads). Mount it before the role-restricted order catalog so
+  // those exact paths can be handled without broadening catalog access.
+  if (deliveryExecution !== undefined) {
+    app.use('/api/v1', createDeliveryExecutionRouter(deliveryExecution, authenticate));
+  }
   app.use(
     '/api/v1/delivery-orders',
-    createDeliveryOrdersRouter(deliveryOrders, authenticate),
+    createDeliveryOrdersRouter(
+      deliveryOrders,
+      authenticate,
+      catalogs.customers.getCustomer,
+      catalogs.customers.listCustomers,
+    ),
   );
   if (deliveryRoutes !== undefined) {
     app.use('/api/v1/delivery-routes', createDeliveryRoutesRouter(deliveryRoutes, authenticate));
-  }
-  if (deliveryExecution !== undefined) {
-    app.use('/api/v1', createDeliveryExecutionRouter(deliveryExecution, authenticate));
   }
   app.use(
     '/api/v1/customers',

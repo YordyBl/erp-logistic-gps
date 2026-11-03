@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { Express } from 'express';
+import ExcelJS from 'exceljs';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
@@ -11,6 +12,10 @@ import {
   ADMIN_ID,
   DRIVER_ID,
   DRIVER_EMAIL,
+  CUSTOMER_ID,
+  OTHER_CUSTOMER_ID,
+  DISPATCHER_ID,
+  DISPATCHER_EMAIL,
   bearer,
   buildTestApp,
   createFailingRepository,
@@ -26,6 +31,29 @@ import {
 
 const UNKNOWN_ORDER_ID = '99999999-9999-4999-8999-999999999999';
 
+describe('POST /api/v1/delivery-orders/resolve-map-link', () => {
+  it('returns coordinates for an allowlisted map URL with embedded coordinates', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/resolve-map-link')
+      .set(bearer(token))
+      .send({ url: 'https://www.google.com/maps/@-12.1,-77.02,15z' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { latitude: -12.1, longitude: -77.02 } });
+  });
+});
+
+const IMPORT_HEADERS = [
+  'customerCode', 'timeWindow', 'publicCode', 'recipientName', 'recipientPhone',
+  'addressLine', 'district', 'latitude', 'longitude', 'packageCode',
+  'packageDescription', 'packageWeightKg',
+];
+
+function importCsvRows(rows: readonly (readonly string[])[]): string {
+  return [IMPORT_HEADERS.join(','), ...rows.map((row) => row.join(','))].join('\n');
+}
+
 interface SeededApp {
   readonly app: Express;
   readonly token: string;
@@ -34,7 +62,7 @@ interface SeededApp {
 
 /** Two tenants, each with one ADMIN actor, and one bearer token per tenant. */
 async function buildSeededApp(options: TestAppOptions = {}): Promise<SeededApp> {
-  const testApp = buildTestApp(options);
+  const testApp = buildTestApp({ ...options, seedTestCustomer: true });
 
   await testApp.seedOrganization({ id: ORGANIZATION_ID, name: 'Lima Express' });
   await testApp.seedOrganization({ id: OTHER_ORGANIZATION_ID, name: 'Callao Express' });
@@ -72,6 +100,24 @@ async function createOrder(
 }
 
 describe('POST /api/v1/delivery-orders', () => {
+  it('allows dispatchers to create orders and rejects drivers without storing an order', async () => {
+    const testApp = buildTestApp({ seedTestCustomer: true });
+    await testApp.seedOrganization({ id: ORGANIZATION_ID, name: 'Lima Express' });
+    const dispatcher = await testApp.seedUser({ id: DISPATCHER_ID, email: DISPATCHER_EMAIL, role: 'DISPATCHER' });
+    const driver = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const driverToken = await testApp.signIn(driver);
+    const dispatcherToken = await testApp.signIn(dispatcher);
+
+    const denied = await request(testApp.app).post('/api/v1/delivery-orders').set(bearer(driverToken)).send(validOrderBody());
+    expect(denied.status).toBe(403);
+    expect(denied.body.error.code).toBe('AUTH_FORBIDDEN');
+    const lookup = await request(testApp.app).get('/api/v1/delivery-orders')
+      .query({ publicCode: 'ORD-2026-0001' }).set(bearer(dispatcherToken));
+    expect(lookup.status).toBe(404);
+    const created = await request(testApp.app).post('/api/v1/delivery-orders').set(bearer(dispatcherToken)).send(validOrderBody());
+    expect(created.status).toBe(201);
+  });
+
   it('creates an order in the JWT organization and returns 201 with Location', async () => {
     const { app, token } = await buildSeededApp();
 
@@ -85,14 +131,17 @@ describe('POST /api/v1/delivery-orders', () => {
     expect(response.headers.location).toBe(`/api/v1/delivery-orders/${FIRST_ORDER_ID}`);
     expect(response.body).toEqual({
       data: {
-        id: FIRST_ORDER_ID,
-        organizationId: ORGANIZATION_ID,
+      id: FIRST_ORDER_ID,
+      organizationId: ORGANIZATION_ID,
+      customerId: CUSTOMER_ID,
+        timeWindow: 'AM',
         publicCode: 'ORD-2026-0001',
         status: 'created',
         recipient: { name: 'Ana Torres', phone: '+51 987 654 321' },
         deliveryAddress: {
           addressLine: 'Av. Javier Prado Este 1234',
           district: 'San Borja',
+          googleMapsUrl: null,
           latitude: -12.0975,
           longitude: -77.0023,
         },
@@ -104,6 +153,19 @@ describe('POST /api/v1/delivery-orders', () => {
         updatedAt: CREATED_AT,
       },
     });
+  });
+
+  it('requires an explicit AM/PM delivery window', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders')
+      .set(bearer(token))
+      .send(validOrderBody({ timeWindow: undefined }));
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.details.issues).toContainEqual(
+      expect.objectContaining({ path: 'timeWindow' }),
+    );
   });
 
   it('returns 400 with field details and stores nothing when the body is invalid', async () => {
@@ -135,6 +197,36 @@ describe('POST /api/v1/delivery-orders', () => {
       .set(bearer(token));
 
     expect(lookup.status).toBe(404);
+  });
+
+  it('requires a customer belonging to the authenticated organization', async () => {
+    const { app, token } = await buildSeededApp();
+    const missing = await request(app).post('/api/v1/delivery-orders')
+      .set(bearer(token)).send(validOrderBody({ customerId: undefined }));
+    expect(missing.status).toBe(400);
+    expect(missing.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+
+    const foreign = await request(app).post('/api/v1/delivery-orders')
+      .set(bearer(token)).send(validOrderBody({ customerId: OTHER_CUSTOMER_ID }));
+    expect(foreign.status).toBe(404);
+    expect(foreign.body.error.code).toBe('CUSTOMER_NOT_FOUND');
+
+    const lookup = await request(app).get('/api/v1/delivery-orders')
+      .set(bearer(token)).query({ publicCode: 'ORD-2026-0001' });
+    expect(lookup.status).toBe(404);
+  });
+
+  it('rejects an inactive customer without creating the delivery order', async () => {
+    const testApp = buildTestApp({ seedTestCustomer: true, testCustomerStatus: 'inactive' });
+    await testApp.seedOrganization();
+    const admin = await testApp.seedUser();
+    const response = await request(testApp.app).post('/api/v1/delivery-orders')
+      .set(bearer(await testApp.signIn(admin))).send(validOrderBody());
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe('CUSTOMER_INACTIVE');
+    expect(await testApp.module.repository.findByPublicCode(ORGANIZATION_ID, 'ORD-2026-0001'))
+      .toBeNull();
   });
 
   it('rejects an organizationId in the body instead of trusting it', async () => {
@@ -207,6 +299,9 @@ describe('POST /api/v1/delivery-orders', () => {
     // the adapter translates 23505 into the same typed invariant error.
     let saveCalls = 0;
     const repository: DeliveryOrderRepository = {
+      async nextCodes() {
+        return { publicCode: 'ORD-00000001', packageCodes: ['PKG-00000001'] };
+      },
       async save() {
         saveCalls += 1;
         throw new DeliveryOrderInvariantError(
@@ -273,6 +368,150 @@ describe('POST /api/v1/delivery-orders', () => {
       'An unexpected error occurred while processing the request',
     );
     expect(JSON.stringify(response.body)).not.toContain('database connection lost');
+  });
+});
+
+describe('POST /api/v1/delivery-orders/import', () => {
+  it('rejects invalid columns before writing any orders', async () => {
+    const { app, token } = await buildSeededApp();
+
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send('wrongColumn,publicCode\nvalue,IMP-1');
+
+    expect(response.status).toBe(400);
+    const orders = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(orders.body.data).toEqual([]);
+  });
+
+  it('imports valid order groups and rejects every row of a group with an invalid package', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send(importCsvRows([
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', '2'],
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-2', '', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-3', 'Sobre', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-4', 'Caja', '1'],
+      ]));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders).toHaveLength(1);
+    expect(response.body.data.importedOrders[0].publicCode).toBe('IMP-2');
+    expect(response.body.data.rejectedOrders).toEqual([
+      expect.objectContaining({ publicCode: 'IMP-1', rowNumbers: [2, 3] }),
+    ]);
+    const orders = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(orders.body.data.map((order: { publicCode: string }) => order.publicCode)).toEqual(['IMP-2']);
+    expect(orders.body.data[0].packages).toHaveLength(2);
+  });
+
+  it('imports XLSX workbooks and serves an XLSX template with the shared headers', async () => {
+    const { app, token } = await buildSeededApp();
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Orders');
+    worksheet.addRow(IMPORT_HEADERS);
+    worksheet.addRow([
+      'TEST-CUSTOMER', 'PM', 'IMP-XLSX', 'Ana Torres', '+51 987 654 321',
+      'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-XLSX', 'Caja', 1.5,
+    ]);
+    const upload = Buffer.from(await workbook.xlsx.writeBuffer());
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .send(upload);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders[0].publicCode).toBe('IMP-XLSX');
+
+    const templateResponse = await request(app)
+      .get('/api/v1/delivery-orders/import/template')
+      .set(bearer(token))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(templateResponse.status).toBe(200);
+    expect(templateResponse.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(templateResponse.headers['content-disposition']).toContain('delivery-orders-template.xlsx');
+    expect(Buffer.isBuffer(templateResponse.body)).toBe(true);
+    const template = new ExcelJS.Workbook();
+    await template.xlsx.load(templateResponse.body as unknown as ArrayBuffer);
+    expect((template.getWorksheet('Orders')?.getRow(1).values as unknown[]).slice(1)).toEqual([...IMPORT_HEADERS]);
+  });
+
+  it('does not resolve a customer code owned by another organization', async () => {
+    const { app, token, otherToken } = await buildSeededApp();
+    const foreignCustomer = await request(app)
+      .post('/api/v1/customers')
+      .set(bearer(otherToken))
+      .send({
+        publicCode: 'FOREIGN-CUSTOMER', name: 'Foreign Customer',
+        contactName: 'Test Contact', contactEmail: 'foreign@example.test',
+        contactPhone: '+51 900 000 002',
+      });
+    expect(foreignCustomer.status).toBe(201);
+
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send(importCsvRows([
+        ['FOREIGN-CUSTOMER', 'AM', 'IMP-FOREIGN', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+      ]));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders).toEqual([]);
+    expect(response.body.data.rejectedOrders[0].issues).toContainEqual(
+      expect.objectContaining({ field: 'customerCode', message: 'Customer code was not found in this organization.' }),
+    );
+    const orders = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(orders.body.data).toEqual([]);
+  });
+
+  it('rejects rows for an inactive customer without creating an order', async () => {
+    const testApp = buildTestApp({ seedTestCustomer: true, testCustomerStatus: 'inactive' });
+    await testApp.seedOrganization({ id: ORGANIZATION_ID });
+    const admin = await testApp.seedUser();
+    const token = await testApp.signIn(admin);
+    const response = await request(testApp.app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send(importCsvRows([
+        ['TEST-CUSTOMER', 'AM', 'IMP-INACTIVE', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+      ]));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders).toEqual([]);
+    expect(response.body.data.rejectedOrders[0].issues).toContainEqual(
+      expect.objectContaining({ field: 'customerCode', message: 'Customer is inactive.' }),
+    );
+    const orders = await request(testApp.app).get('/api/v1/delivery-orders').set(bearer(token));
+    expect(orders.body.data).toEqual([]);
+  });
+
+  it('rejects DRIVER access before parsing an import body', async () => {
+    const testApp = buildTestApp();
+    await testApp.seedOrganization({ id: ORGANIZATION_ID });
+    const driver = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const token = await testApp.signIn(driver);
+
+    const response = await request(testApp.app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send('invalid,columns');
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe('AUTH_FORBIDDEN');
   });
 });
 
@@ -364,7 +603,7 @@ describe('POST /api/v1/delivery-orders/:orderId/cancel', () => {
   });
 
   it('rejects a spoofed tenant body and forbids a DRIVER without changing status or audit', async () => {
-    const testApp = buildTestApp();
+    const testApp = buildTestApp({ seedTestCustomer: true });
     await testApp.seedOrganization();
     const admin = await testApp.seedUser();
     const driver = await testApp.seedUser({
@@ -479,6 +718,25 @@ describe('GET /api/v1/delivery-orders/{orderId}', () => {
 });
 
 describe('GET /api/v1/delivery-orders?publicCode=...', () => {
+  it('denies DRIVER access to the general order catalog and history endpoints', async () => {
+    const testApp = buildTestApp({ seedTestCustomer: true });
+    await testApp.seedOrganization();
+    const driver = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const token = await testApp.signIn(driver);
+    const orderPath = `/api/v1/delivery-orders/${FIRST_ORDER_ID}`;
+    const responses = await Promise.all([
+      request(testApp.app).get('/api/v1/delivery-orders').set(bearer(token)),
+      request(testApp.app).get('/api/v1/delivery-orders').query({ publicCode: 'ORD-2026-0001' }).set(bearer(token)),
+      request(testApp.app).get(orderPath).set(bearer(token)),
+      request(testApp.app).get(`${orderPath}/history`).set(bearer(token)),
+    ]);
+
+    for (const response of responses) {
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('AUTH_FORBIDDEN');
+    }
+  });
+
   it('returns 200 for a code in the caller organization', async () => {
     const { app, token } = await buildSeededApp();
     const orderId = await createOrder(app, token);
@@ -510,7 +768,7 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     const { app, token, otherToken } = await buildSeededApp();
     const firstId = await createOrder(app, token);
     const secondId = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0002' }));
-    await createOrder(app, otherToken, validOrderBody({ publicCode: 'ord-2026-0001' }));
+    await createOrder(app, otherToken, validOrderBody({ customerId: OTHER_CUSTOMER_ID, publicCode: 'ord-2026-0001' }));
 
     const response = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
     expect(response.status).toBe(200);
@@ -568,7 +826,7 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
 
 describe('PATCH /api/v1/delivery-orders/:orderId', () => {
   it('rejects DRIVER edits without changing the order or history', async () => {
-    const testApp = buildTestApp();
+    const testApp = buildTestApp({ seedTestCustomer: true });
     await testApp.seedOrganization();
     const admin = await testApp.seedUser();
     const driver = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });

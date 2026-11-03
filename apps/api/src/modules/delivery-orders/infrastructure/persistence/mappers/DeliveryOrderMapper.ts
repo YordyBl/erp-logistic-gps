@@ -19,11 +19,14 @@ export function toOrderEntity(order: DeliveryOrder): DeliveryOrderEntity {
 
   entity.id = order.id;
   entity.organizationId = order.organizationId;
+  entity.customerId = order.customerId;
   entity.publicCode = order.publicCode;
+  entity.timeWindow = order.timeWindow;
   entity.recipientName = order.recipient.name;
   entity.recipientPhone = order.recipient.phone;
   entity.deliveryAddressLine = order.deliveryAddress.addressLine;
   entity.deliveryDistrict = order.deliveryAddress.district;
+  entity.googleMapsUrl = order.deliveryAddress.googleMapsUrl ?? null;
   entity.latitude = numberToNumeric(order.deliveryAddress.latitude);
   entity.longitude = numberToNumeric(order.deliveryAddress.longitude);
   entity.status = order.status;
@@ -66,7 +69,9 @@ export function toDomain(
   return DeliveryOrder.restore({
     id: orderEntity.id,
     organizationId: orderEntity.organizationId,
+    customerId: orderEntity.customerId,
     publicCode: orderEntity.publicCode,
+    timeWindow: orderEntity.timeWindow,
     recipient: Recipient.create({
       name: orderEntity.recipientName,
       phone: orderEntity.recipientPhone,
@@ -74,6 +79,7 @@ export function toDomain(
     deliveryAddress: DeliveryAddress.create({
       addressLine: orderEntity.deliveryAddressLine,
       district: orderEntity.deliveryDistrict,
+      googleMapsUrl: orderEntity.googleMapsUrl ?? undefined,
       latitude: numericToNumber(orderEntity.latitude, 'latitude') ?? undefined,
       longitude: numericToNumber(orderEntity.longitude, 'longitude') ?? undefined,
     }),

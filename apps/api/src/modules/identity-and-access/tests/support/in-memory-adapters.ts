@@ -14,7 +14,7 @@ import {
 } from '../../composition/composition-root.js';
 import type { SessionPolicy } from '../../domain/policies/session-policy.js';
 import type { Organization } from '../../domain/entities/Organization.js';
-import type { User } from '../../domain/entities/User.js';
+import type { User, UserRole } from '../../domain/entities/User.js';
 
 /**
  * In-memory adapters for tests.
@@ -65,6 +65,12 @@ export class InMemoryUserRepository implements UserRepository {
     }
 
     return null;
+  }
+
+  async listByOrganizationAndRole(organizationId: string, role: UserRole): Promise<User[]> {
+    return [...this.users.values()]
+      .filter((user) => user.organizationId === organizationId && user.role === role)
+      .sort((left, right) => left.email.localeCompare(right.email) || left.id.localeCompare(right.id));
   }
 }
 

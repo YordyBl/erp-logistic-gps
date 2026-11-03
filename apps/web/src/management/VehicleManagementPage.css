@@ -1,0 +1,42 @@
+.vehicle-management { width: 100%; color: var(--ink); }
+.vehicle-management__header,
+.vehicle-management__section-heading,
+.vehicle-management__identity,
+.vehicle-management__form-actions,
+.vehicle-management__row-actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.vehicle-management__header { max-width: 1180px; margin: 0 auto 1.4rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--line); }
+.vehicle-management__header h1 { margin: 0 0 .35rem; color: var(--brand-deep); font-size: 1.75rem; font-weight: 730; letter-spacing: -.04em; }
+.vehicle-management__header p:not(.vehicle-management__context),
+.vehicle-management__section-heading p { margin: 0; color: var(--muted); font-size: .87rem; line-height: 1.5; }
+.vehicle-management__context { margin: 0 0 .35rem; color: var(--brand); font-family: ui-monospace, SFMono-Regular, monospace; font-size: .67rem; font-weight: 700; letter-spacing: .08em; }
+.vehicle-management__count { flex: 0 0 auto; color: var(--brand); font-family: ui-monospace, SFMono-Regular, monospace; font-size: .75rem; font-weight: 700; }
+.vehicle-management__layout { display: grid; grid-template-columns: minmax(290px, .72fr) minmax(0, 1.28fr); align-items: start; gap: 1rem; max-width: 1180px; margin: 0 auto; }
+.vehicle-management__form-surface,
+.vehicle-management__list-surface { min-width: 0; padding: clamp(1rem, 2vw, 1.5rem); }
+.vehicle-management__section-heading { align-items: flex-start; margin-bottom: 1.1rem; }
+.vehicle-management__section-heading h2 { margin: 0 0 .3rem; color: var(--brand-deep); font-size: 1.05rem; font-weight: 700; }
+.vehicle-management__form,
+.vehicle-management__edit-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: .85rem 1rem; }
+.vehicle-management__field { display: grid; min-width: 0; gap: .38rem; color: var(--ink); font-size: .79rem; font-weight: 650; }
+.vehicle-management__field input,
+.vehicle-management__field select { width: 100%; min-height: 43px; padding: .6rem .72rem; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: .84rem; }
+.vehicle-management__field input:focus,
+.vehicle-management__field select:focus { border-color: var(--brand); outline: 3px solid oklch(0.39 0.075 232 / .14); outline-offset: 1px; }
+.vehicle-management__form-actions { justify-content: flex-end; }
+.vehicle-management__list { margin: 0; padding: 0; list-style: none; }
+.vehicle-management__row { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; padding: 1rem 0; border-top: 1px solid var(--line); }
+.vehicle-management__identity { align-items: flex-start; }
+.vehicle-management__identity h3 { margin: 0 0 .65rem; color: var(--brand-deep); font-family: ui-monospace, SFMono-Regular, monospace; font-size: .98rem; font-weight: 700; }
+.vehicle-management__identity p { display: flex; gap: .55rem; margin: 0 0 .3rem; color: var(--ink); font-size: .81rem; }
+.vehicle-management__identity p span { min-width: 5rem; color: var(--muted); }
+.vehicle-management__row-actions { justify-content: flex-start; flex-wrap: wrap; }
+.vehicle-management__alert,
+.vehicle-management__success { max-width: 1180px; margin: 0 auto .85rem; padding: .7rem .85rem; border: 1px solid var(--line); border-radius: 7px; font-size: .82rem; line-height: 1.45; }
+.vehicle-management__alert { background: var(--danger-wash); color: var(--danger); }
+.vehicle-management__success { background: var(--success-wash); color: var(--success); }
+.vehicle-management__loading,
+.vehicle-management__empty { padding: 1.2rem .25rem; color: var(--muted); font-size: .88rem; }
+.vehicle-management__empty h3 { margin: 0 0 .35rem; color: var(--ink); font-size: .95rem; }
+.vehicle-management__empty p { margin: 0 0 .8rem; }
+@media (max-width: 900px) { .vehicle-management__layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) { .vehicle-management__header { align-items: flex-start; flex-direction: column; } }

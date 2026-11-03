@@ -1,4 +1,4 @@
-import type { User } from '../../domain/entities/User.js';
+import type { User, UserRole } from '../../domain/entities/User.js';
 
 /**
  * Persistence contract for users.
@@ -15,4 +15,5 @@ export interface UserRepository {
   save(user: User): Promise<void>;
   findById(userId: string): Promise<User | null>;
   findByEmail(organizationId: string, email: string): Promise<User | null>;
+  listByOrganizationAndRole(organizationId: string, role: UserRole): Promise<User[]>;
 }

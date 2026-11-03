@@ -18,6 +18,7 @@ import { UserEntity } from '../../modules/identity-and-access/infrastructure/per
 import { VehicleEntity } from '../../modules/vehicles/infrastructure/persistence/entities/VehicleEntity.js';
 import { DeliveryAttemptEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryAttemptEntity.js';
 import { DeliveryEvidenceEntity } from '../../modules/delivery-execution/infrastructure/persistence/entities/DeliveryEvidenceEntity.js';
+import { RoutePositionEntity } from '../../modules/delivery-tracking/infrastructure/persistence/RoutePositionEntity.js';
 
 /**
  * Process-wide TypeORM data source.
@@ -79,6 +80,7 @@ function commonOptions() {
       VehicleEntity,
       DeliveryAttemptEntity,
       DeliveryEvidenceEntity,
+      RoutePositionEntity,
     ],
     migrations: [MIGRATIONS_GLOB],
     migrationsTableName: 'migrations',

@@ -19,6 +19,7 @@ import { getAuthenticatedUser } from '../request-context.js';
 import { parseIdentityOrThrow } from '../validation.js';
 
 export interface AuthRouterDependencies {
+  readonly loginOrganizationId?: string;
   readonly login: LoginUseCase;
   readonly refreshSession: RefreshSessionUseCase;
   readonly logout: LogoutUseCase;
@@ -40,11 +41,12 @@ export function createAuthRouter(dependencies: AuthRouterDependencies): Router {
   const router = Router();
 
   router.post('/login', async (request, response) => {
-    const command = parseIdentityOrThrow(
-      loginCommandSchema,
-      request.body,
-      'Login request body is invalid',
-    );
+    const command = dependencies.loginOrganizationId === undefined
+      ? parseIdentityOrThrow(loginCommandSchema, request.body, 'Login request body is invalid')
+      : {
+        ...parseIdentityOrThrow(loginCommandSchema.omit({ organizationId: true }), request.body, 'Login request body is invalid'),
+        organizationId: dependencies.loginOrganizationId,
+      };
 
     const rateLimitKey = loginRateLimitKey(
       request.ip ?? request.socket.remoteAddress ?? 'unknown',

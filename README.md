@@ -4,22 +4,23 @@ Monorepo for a multi-tenant last-mile delivery ERP covering Lima Metropolitana a
 Dispatchers plan routes with multiple stops and orders, drivers confirm deliveries with
 photo evidence, and recipients follow a single order through a limited public link.
 
-**Status (2026-10-29):** Phases 0–3 are closed in the feature logs. Phase 4 is in progress:
-driver/account binding, authenticated route start, private photo evidence, delivery outcomes,
-incident reporting, and explicit route completion are implemented locally. The React driver
-and admin evidence views remain pending; the web client is still a placeholder, so `apps/web`
-keeps serving the static page.
+**Status (2026-10-30):** Phases 0–3 are closed in the feature logs. Phase 4 delivery execution
+is implemented locally: drivers can start assigned routes, confirm deliveries with private
+photo evidence, report incidents, and explicitly complete routes. The React web client includes
+driver and dispatcher/admin workflows; native review and live MinIO integration verification
+remain pending.
 
 ## Quick path
 
 Prerequisites: Node.js 22.13+ (`.nvmrc` provided), Docker Engine and Docker Compose. The
-demo overlay needs Compose >= 2.20. No Docker is required for the unit and HTTP suites.
+demo overlay needs Compose >= 2.20. Docker Compose builds the API and React web images and runs
+PostgreSQL and MinIO for a local end-to-end test. No Docker is required for unit and HTTP suites.
 
 ### Development stack
 
 ```bash
 cp .env.example .env
-docker compose up -d postgres
+docker compose up -d postgres minio
 docker compose run --rm --build migrations
 docker compose up --build
 ```
@@ -28,11 +29,37 @@ docker compose up --build
 |---|---|
 | API liveness | http://localhost:3000/healthz |
 | API readiness (PostgreSQL) | http://localhost:3000/readyz |
-| Web placeholder | http://localhost:8080 |
+| Web app | http://localhost:8080 |
+| MinIO console | http://localhost:9001 |
 
-Migrations are a one-shot job, not part of API boot. The API does not wait for that job, so
-the sequence above makes the schema deterministic before the API starts. `docker compose up`
-alone runs the same job, but a request can arrive first.
+Migrations are a one-shot job, not part of API boot. Run them before starting the full stack so
+the API does not receive requests before its schema is ready. The web app proxies `/api` to the
+API in the same origin, so sign-in and evidence requests work through `http://localhost:8080`
+without browser CORS configuration. MinIO is private to the Compose network; its console is
+exposed only for local development. Compose stores database and object data in named volumes.
+To stop the stack without deleting that data, run `docker compose down`.
+
+If the default host ports are already in use, set alternate values in `.env` before starting:
+`POSTGRES_PORT`, `MINIO_API_PORT`, `MINIO_CONSOLE_PORT`, `API_PORT`, and `WEB_PORT`.
+
+### Optional local route geometry
+
+To enable the locally hosted Valhalla router, place the public Peru OSM extract in the
+ignored `infra/valhalla/data/` directory and use the Compose override:
+
+```bash
+mkdir -p infra/valhalla/data
+curl --fail --location --output infra/valhalla/data/peru-latest.osm.pbf \
+  https://download.geofabrik.de/south-america/peru-latest.osm.pbf
+docker compose -f docker-compose.yml -f docker-compose.valhalla.yml up --build
+```
+
+The first startup builds Peru routing tiles and can take several minutes; subsequent runs reuse
+the local graph. Valhalla is exposed on loopback port `8002` by default (`VALHALLA_PORT` changes
+it), and the API container uses the internal Compose address. The web route-planning form
+accepts an optional Google Maps link per stop; the API resolves permitted Google Maps links
+to coordinates used by Valhalla and GPS simulation. See
+[`docs/operations/gps-tracking.md`](docs/operations/gps-tracking.md) for details.
 
 ### Demo data
 
@@ -55,9 +82,41 @@ npm run seed:demo -w apps/api
 
 These credentials are **documented demo values, not production credentials**: they are
 published on purpose so anyone can sign in to a local demo. The script refuses to run when
-`NODE_ENV=production`, and its output also prints the demo `organizationId`, which
-`POST /api/v1/auth/login` requires. Never reuse this seed or these passwords in a deployed
+`NODE_ENV=production`, and its output also prints the demo `organizationId`, which the
+single-company deployment needs as server configuration. Never reuse this seed or these passwords in a deployed
 environment.
+
+### Sign in to the local app
+
+After the stack is healthy, create the documented demo organization and users from the host.
+The example below assumes the default PostgreSQL port; use the configured `POSTGRES_PORT` if
+you changed it.
+
+```bash
+export DATABASE_URL=postgres://erp_logistic:change-me-local-only@localhost:5432/erp_logistic
+export JWT_SECRET=dev-only-throwaway-secret-change-me-32-bytes
+npm run seed:demo -w apps/api
+```
+
+Set the organization printed by the seed in the server configuration, then recreate the API:
+
+```bash
+export LOGIN_ORGANIZATION_ID=<organization-id-printed-by-seed>
+docker compose up -d api
+```
+
+Open http://localhost:8080 and sign in with one of these local-only accounts:
+
+| Role | Email | Password |
+|---|---|---|
+| ADMIN | `admin@demo.lima` | `Admin-demo-1` |
+| DISPATCHER | `dispatcher@demo.lima` | `Dispatcher-demo-1` |
+| DRIVER | `driver@demo.lima` | `Driver-demo-1` |
+
+When `LOGIN_ORGANIZATION_ID` is configured, the server resolves the organization and the login
+request accepts only email and password. Without it, the existing API contract requires an
+explicit `organizationId`; the web form requires the single-company setting. These public demo credentials are for a local environment only—never use them in a
+deployed environment. The seed refuses to run with `NODE_ENV=production`.
 
 ### Demo stack
 
@@ -119,10 +178,10 @@ is a defect.
 | `apps/api` | Express 5 API: HTTP layer, configuration, TypeORM data source, migrations, middleware and routers. |
 | `apps/api/src/modules/identity-and-access` | Users, organizations, Argon2id hashing, JWT/refresh sessions, RBAC context, tests and docs. |
 | `apps/api/src/modules/delivery-orders` | Pilot module: domain, use cases, ports, persistence adapter, HTTP adapter, tests and docs. |
-| `apps/api/src/modules/delivery-execution` | Delivery attempts and private photo evidence; confirmation and incident outcomes remain pending. |
+| `apps/api/src/modules/delivery-execution` | Delivery attempts, private photo evidence, delivery confirmation and incident outcomes. |
 | `apps/api/src/modules/customers`, `drivers`, `vehicles` | Org-scoped catalogs: domain, use cases, TypeORM persistence, HTTP routes and module docs. |
 | `apps/api/src/scripts/seed-demo.ts` | Demo seed: demo organization plus ADMIN/DISPATCHER/DRIVER users with documented demo credentials. |
-| `apps/web` | Static placeholder served by nginx; the React client arrives in a later phase. |
+| `apps/web` | React + TypeScript driver and dispatcher/admin client, built with Vite and served by nginx in Compose. |
 | `packages/api-contracts` | Shared HTTP contracts between API and web client (reserved). |
 | `docs/api/openapi.yaml` | OpenAPI 3.1 contract for the current HTTP surface. |
 | `docs/architecture` | ADRs and the conceptual data model. |

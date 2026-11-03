@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
-import type { DriverAccountBindingStore } from '../../modules/drivers/application/ports/DriverAccountBindingStore.js';
+import type { DriverAccountBindingStore, DriverAccountOption } from '../../modules/drivers/application/ports/DriverAccountBindingStore.js';
 import { DriverInvariantError, DriverNotFoundError } from '../../modules/drivers/domain/errors/DriverError.js';
 import { DriverEntity } from '../../modules/drivers/infrastructure/persistence/entities/DriverEntity.js';
 import { UserEntity } from '../../modules/identity-and-access/infrastructure/persistence/entities/UserEntity.js';
 import { readPostgresDriverError } from '../../modules/drivers/infrastructure/persistence/postgres-error.js';
 
 interface BindingRow { readonly driver_id: string; readonly user_id: string }
+interface DriverAccountOptionRow {
+  readonly userId: string;
+  readonly email: string;
+  readonly status: 'active' | 'disabled';
+  readonly driverId: string | null;
+}
 
 /** Database-owned binding and audit; tenant, account role and uniqueness share one transaction. */
 export class DriverAccountTypeOrmStore implements DriverAccountBindingStore {
@@ -22,6 +28,20 @@ export class DriverAccountTypeOrmStore implements DriverAccountBindingStore {
       `SELECT user_id FROM driver_accounts WHERE organization_id=$1 AND driver_id=$2`,
       [organizationId, driverId]);
     return { driverId, userId: rows[0]?.user_id ?? null };
+  }
+
+  async listAccounts(organizationId: string): Promise<DriverAccountOption[]> {
+    return this.source.query<DriverAccountOptionRow[]>(
+      `SELECT users.id AS "userId", users.email AS email, users.status AS status,
+        driver_accounts.driver_id AS "driverId"
+       FROM users
+       LEFT JOIN driver_accounts
+         ON driver_accounts.organization_id=users.organization_id
+        AND driver_accounts.user_id=users.id
+       WHERE users.organization_id=$1 AND users.role='DRIVER'
+         AND (users.status='active' OR driver_accounts.driver_id IS NOT NULL)
+       ORDER BY users.email ASC, users.id ASC`,
+      [organizationId]);
   }
 
   async findDriverId(organizationId: string, userId: string): Promise<string | null> {

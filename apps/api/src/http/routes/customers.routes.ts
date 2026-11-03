@@ -13,8 +13,8 @@ import { parseCustomerOrThrow } from '../validation.js';
  * HTTP adapters for the customer catalog.
  *
  * The organization always comes from the verified JWT request context, never
- * from the body, path or query. Reads are available to every authenticated
- * role; writes require ADMIN or DISPATCHER. There is no delete or update route:
+ * from the body, path or query. All catalog access requires ADMIN or DISPATCHER;
+ * DRIVER remains limited to assigned-route operations. There is no delete or update route:
  * customers are catalog records and the ratified CRUD surface stops at create,
  * list and get.
  */
@@ -34,9 +34,9 @@ export function createCustomersRouter(
 ): Router {
   const router = Router();
 
-  router.use(authenticate);
+  router.use(authenticate, requireRole('ADMIN', 'DISPATCHER'));
 
-  router.post('/', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
+  router.post('/', async (request, response) => {
     const body = parseCustomerOrThrow(
       createCustomerBodySchema,
       request.body,

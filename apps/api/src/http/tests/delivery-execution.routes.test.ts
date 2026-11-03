@@ -117,6 +117,17 @@ describe('delivery execution evidence HTTP', () => {
     expect(unsupported.status).toBe(400);
   });
 
+  it('returns a validation response for malformed image bytes', async () => {
+    const malformedPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const response = await request(testApp()).post(`/api/v1/delivery-orders/${ORDER}/evidence`)
+      .set('Content-Type', 'image/png')
+      .set('Idempotency-Key', 'attempt-malformed-png')
+      .send(malformedPng);
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('DELIVERY_EVIDENCE_INVALID_INPUT');
+  });
+
   it('rejects uploads over the transport limit before application handling', async () => {
     const oversized = Buffer.alloc(5_000_001);
     oversized.set([0xff, 0xd8, 0xff, 0xd9]);

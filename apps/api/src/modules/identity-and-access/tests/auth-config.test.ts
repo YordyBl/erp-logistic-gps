@@ -5,6 +5,13 @@ import { loadAuthConfig } from '../../../config/config.js';
 const SECRET = 'a'.repeat(32);
 
 describe('loadAuthConfig', () => {
+  it('validates the optional deployment login organization', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    expect(loadAuthConfig({ JWT_SECRET: SECRET, LOGIN_ORGANIZATION_ID: id }).loginOrganizationId).toBe(id);
+    expect(() => loadAuthConfig({ JWT_SECRET: SECRET, LOGIN_ORGANIZATION_ID: 'invalid' }))
+      .toThrow('LOGIN_ORGANIZATION_ID must be a UUID');
+  });
+
   it('reads the JWT, cookie and rate-limit configuration with ratified defaults', () => {
     expect(loadAuthConfig({ JWT_SECRET: SECRET })).toEqual({
       jwtSecret: SECRET,

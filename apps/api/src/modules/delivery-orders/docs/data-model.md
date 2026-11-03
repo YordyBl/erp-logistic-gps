@@ -20,6 +20,7 @@ classDiagram
     class DeliveryOrder {
         +UUID id
         +UUID organizationId
+        +UUID customerId
         +string publicCode
         +Recipient recipient
         +DeliveryAddress deliveryAddress
@@ -49,6 +50,7 @@ classDiagram
     }
 
     DeliveryOrder "1" *-- "1" Recipient
+    Customer "1" --> "0..*" DeliveryOrder
     DeliveryOrder "1" *-- "1" DeliveryAddress
     DeliveryOrder "1" *-- "1..100" Package
 ```
@@ -66,6 +68,7 @@ returns the same sequence, but that identity is not part of the domain contract.
 |---|---|---|---|
 | `id` | UUID string | No | Internal identifier; never a URL/public credential |
 | `organizationId` | UUID string | No | Tenant root; every read checks it |
+| `customerId` | UUID string | No | Active customer in the same organization; enforced by application validation and a composite tenant foreign key |
 | `publicCode` | string | No | 3–32 uppercase letters/digits/hyphens; unique per organization; display/lookup aid only |
 | `recipient` | `Recipient` | No | Value object |
 | `deliveryAddress` | `DeliveryAddress` | No | Value object |
@@ -122,6 +125,7 @@ ratified incident rule and [decisions.md](decisions.md) for the rationale.
 |---|---|---|
 | `id` | string | Internal UUID |
 | `organizationId` | string | UUID |
+| `customerId` | string | UUID of the associated tenant customer |
 | `publicCode` | string | Normalized uppercase |
 | `status` | `DeliveryOrderStatus` | Canonical enum |
 | `recipient` | `{ name, phone }` | Personal data; redact in logs |
@@ -135,9 +139,13 @@ distinguish “absent key” from “unknown value”.
 
 ## Persistence schema
 
-Implemented by migration `apps/api/migrations/1793073274116-InitialDeliveryOrders.ts` and mapped
+Implemented by migrations `apps/api/migrations/1793073274116-InitialDeliveryOrders.ts` and `apps/api/migrations/1793577600000-DeliveryOrderCustomer.ts`, and mapped
 by the TypeORM entities under `infrastructure/persistence/entities`. `synchronize` is `false`
 in every environment (ADR-002 §3): the migration, not the entity metadata, creates the schema.
+The customer migration refuses to proceed when any delivery orders exist, so no legacy
+customer association is guessed or order data changed. Its composite foreign key enforces
+that order and customer share the same organization; inactive customers are rejected at
+order creation.
 
 The package rows cascade with their parent order, so deleting an order also deletes its
 packages. The order row and its package rows are written in one transaction by the repository

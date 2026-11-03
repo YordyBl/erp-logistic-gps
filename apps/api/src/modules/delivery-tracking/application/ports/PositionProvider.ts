@@ -17,7 +17,10 @@ export interface RoutePositionContext {
   readonly organizationId: string;
   readonly routeId: string;
   readonly driverId: string;
+  readonly driverUserId?: string;
+  readonly simulatedCompletionEnabled?: boolean;
   readonly startedAt: string;
+  readonly origin?: { readonly latitude: number; readonly longitude: number };
   readonly stops: readonly {
     readonly latitude: number | null;
     readonly longitude: number | null;
@@ -35,7 +38,10 @@ export interface RouteGeometry {
 }
 
 export interface RouteGeometryProvider {
-  getGeometry(stops: RoutePositionContext['stops']): Promise<RouteGeometry | null>;
+  getGeometry(
+    stops: RoutePositionContext['stops'],
+    origin?: RoutePositionContext['origin'],
+  ): Promise<RouteGeometry | null>;
 }
 
 /** Source adapter that samples a position for an active route at a given instant. */

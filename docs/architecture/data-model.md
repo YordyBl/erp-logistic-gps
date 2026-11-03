@@ -63,7 +63,8 @@ erDiagram
 
     DRIVER ||--o{ DELIVERY_ROUTE : drives
     VEHICLE ||--o{ DELIVERY_ROUTE : serves
-    VEHICLE ||--o{ VEHICLE_POSITION : reports
+    DELIVERY_ROUTE ||--o{ ROUTE_POSITION : records
+    DRIVER ||--o{ ROUTE_POSITION : reports
     DRIVER ||--o{ DELIVERY_ATTEMPT : performs
 
     DELIVERY_ATTEMPT ||--o| PROOF_OF_DELIVERY : produces
@@ -192,14 +193,16 @@ are not part of the §5 business list.
   exists so a stop can carry multiple orders; the assignment is transactional with
   `DeliveryOrder.activeRouteId`.
 
-**VehiclePosition** — GPS reading with capture and reception timestamps.
+**RoutePosition** — driver GPS reading associated with an active delivery route.
 
-- Key fields: `id`, `organizationId`, `vehicleId`, `recordedAt`, `receivedAt`,
-  `latitude`, `longitude`, `accuracyMeters` (nullable), `speedKph` (nullable), `source`
-  (`simulated`, `device`).
-- Invariants: append-only; `recordedAt` and `receivedAt` are distinct; a stale position
-  is displayed as last known, never as current (invariant 7); GPS never confirms a
-  delivery (invariant 4); retention policy is pending (plan §11.17).
+- Key fields: `id`, `organizationId`, `routeId`, `driverId`, `recordedAt`, `receivedAt`,
+  `latitude`, `longitude`, `accuracyMeters`, `speedMetersPerSecond`, `source`
+  (`simulated`, `mobile`).
+- Invariants: append-only while the route has an in-progress delivery attempt;
+  `recordedAt` and `receivedAt` are distinct; simulated and future mobile sources use the
+  same normalized contract; a stale position is displayed as last known, never as current
+  (invariant 7); GPS never confirms a delivery (invariant 4); retention is configurable
+  with a 30-day initial default.
 
 ### Execution and evidence
 

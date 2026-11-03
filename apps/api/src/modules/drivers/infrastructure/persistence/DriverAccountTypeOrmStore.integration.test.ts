@@ -82,6 +82,32 @@ describe.skipIf(url === null)('Driver-account binding (PostgreSQL)', () => {
       `SELECT id FROM driver_account_binding_history WHERE driver_id=$1`, [ctx.driverId]))).toHaveLength(2);
   });
 
+  it('lists same-tenant DRIVER accounts with binding state and without password hashes', async () => {
+    const own = await seed();
+    const other = await seed();
+    const unboundId = randomUUID();
+    const disabledId = randomUUID();
+    const disabledDriverId = randomUUID();
+    await own.addUser(unboundId, 'DRIVER');
+    await own.addUser(disabledId, 'DRIVER', 'disabled');
+    await own.addDriver(disabledDriverId);
+    await store.bind(own.organizationId, own.driverId, own.userId, own.adminId,
+      '2026-10-27T16:00:00.000Z');
+    await source.query(`INSERT INTO driver_accounts (organization_id, driver_id, user_id)
+      VALUES ($1,$2,$3)`, [own.organizationId, disabledDriverId, disabledId]);
+
+    const accounts = await store.listAccounts(own.organizationId);
+
+    expect(accounts).toEqual([
+      { userId: unboundId, email: `${unboundId}@example.test`, status: 'active', driverId: null },
+      { userId: own.userId, email: `${own.userId}@example.test`, status: 'active', driverId: own.driverId },
+      { userId: disabledId, email: `${disabledId}@example.test`, status: 'disabled', driverId: disabledDriverId },
+    ].sort((left, right) => left.email.localeCompare(right.email)));
+    expect(accounts).not.toContainEqual(expect.objectContaining({ userId: other.userId }));
+    expect(JSON.stringify(accounts)).not.toContain('test-only-hash');
+    expect(accounts.every((account) => !('passwordHash' in account))).toBe(true);
+  });
+
   it('rejects foreign, inactive and non-DRIVER accounts with no writes', async () => {
     const own = await seed();
     const other = await seed();

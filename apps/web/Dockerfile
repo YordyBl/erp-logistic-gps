@@ -1,14 +1,14 @@
 # syntax=docker/dockerfile:1
 
-# Web image for the static placeholder client.
-#
-# nginx:alpine starts a root master process by default. To honour the non-root
-# requirement the default configuration is replaced by a minimal one that runs
-# entirely as the unprivileged `nginx` user: it listens on 8080 (ports below
-# 1024 need privileges), keeps runtime state under /tmp and logs to the
-# container streams. The container port is 8080; Compose publishes it as 8080
-# on the host.
+# Build the React client and serve only its static output from the runtime image.
+FROM node:22-alpine AS build
 
+WORKDIR /workspace
+COPY . .
+RUN npm ci --workspace=@erp-logistic/web --include-workspace-root=true
+RUN npm run build --workspace=@erp-logistic/web
+
+# nginx:alpine runs as the unprivileged nginx user and listens on 8080.
 FROM nginx:alpine AS runtime
 
 RUN cat > /etc/nginx/nginx.conf <<'NGINX_CONF'
@@ -23,6 +23,11 @@ events {
 http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
 
     access_log /dev/stdout;
 
@@ -40,12 +45,24 @@ http {
         server_name _;
         root /usr/share/nginx/html;
         index index.html;
+        client_max_body_size 5000000;
 
         # Container-local liveness probe; the public API health endpoints live
         # in the API image.
         location = /healthz {
             access_log off;
             return 200 "ok\n";
+        }
+
+        location /api/ {
+            proxy_pass http://api:3000/api/;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
         }
 
         location / {
@@ -55,7 +72,7 @@ http {
 }
 NGINX_CONF
 
-COPY apps/web/public /usr/share/nginx/html
+COPY --from=build /workspace/apps/web/dist /usr/share/nginx/html
 
 # nginx:alpine ships tzdata, so access and error log timestamps follow the
 # America/Lima decision (plan §2) without an extra package.

@@ -10,7 +10,10 @@ import type {
   EvidenceUploadReservation,
 } from '../application/ports/DeliveryEvidenceStore.js';
 import type { EvidenceObjectStorage } from '../application/ports/EvidenceObjectStorage.js';
-import { DeliveryEvidenceUnavailableError } from '../domain/errors/DeliveryExecutionError.js';
+import {
+  DeliveryEvidenceUnavailableError,
+  DeliveryEvidenceValidationError,
+} from '../domain/errors/DeliveryExecutionError.js';
 import { VALID_JPEG } from './evidence-fixtures.js';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
@@ -68,6 +71,21 @@ function storeDouble(): DeliveryEvidenceStore & {
 }
 
 describe('delivery evidence use cases', () => {
+  it('maps malformed image containers to a validation error before reserving evidence', async () => {
+    const store = storeDouble();
+    const objectStorage: EvidenceObjectStorage = { put: vi.fn(), get: vi.fn() };
+    const useCase = new UploadDeliveryEvidenceUseCase(store, objectStorage, { now: () => AT });
+
+    await expect(useCase.execute({
+      organizationId: ORG, orderId: ORDER, actorUserId: DRIVER,
+      idempotencyKey: 'photo-malformed-png', declaredMimeType: 'image/png',
+      bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    })).rejects.toBeInstanceOf(DeliveryEvidenceValidationError);
+
+    expect(store.reserve).not.toHaveBeenCalled();
+    expect(objectStorage.put).not.toHaveBeenCalled();
+  });
+
   it('reserves metadata, writes private bytes, then marks the evidence available', async () => {
     const store = storeDouble();
     const objectStorage: EvidenceObjectStorage = { put: vi.fn(), get: vi.fn() };

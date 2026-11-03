@@ -36,7 +36,7 @@ import {
 } from '../../../modules/identity-and-access/tests/support/in-memory-adapters.js';
 import { FakePasswordHasher } from '../../../modules/identity-and-access/tests/support/test-doubles.js';
 import { SystemClock } from '../../../shared/clock.js';
-import { buildApp } from '../../app.js';
+import { buildApp, type AppDependencies } from '../../app.js';
 import type { ReadinessCheck } from '../../routes/health.routes.js';
 import type { IdentityModule } from '../../../modules/identity-and-access/composition/composition-root.js';
 import { Organization } from '../../../modules/identity-and-access/domain/entities/Organization.js';
@@ -47,6 +47,8 @@ export const ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
 export const OTHER_ORGANIZATION_ID = '22222222-2222-4222-8222-222222222222';
 export const CREATED_AT = '2026-10-26T15:00:00.000Z';
 export const FIRST_ORDER_ID = '00000000-0000-4000-8000-000000000001';
+export const CUSTOMER_ID = '55555555-5555-4555-8555-000000000001';
+export const OTHER_CUSTOMER_ID = '55555555-5555-4555-8555-000000000002';
 
 export const ADMIN_ID = '33333333-3333-4333-8333-333333333331';
 export const DISPATCHER_ID = '33333333-3333-4333-8333-333333333332';
@@ -82,6 +84,8 @@ export function validOrderBody(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
+    customerId: CUSTOMER_ID,
+    timeWindow: 'AM',
     publicCode: 'ord-2026-0001',
     recipient: { name: 'Ana Torres', phone: '+51 987 654 321' },
     deliveryAddress: {
@@ -99,11 +103,16 @@ export function validOrderBody(
 }
 
 export interface TestAppOptions {
+  readonly loginOrganizationId?: string;
+  readonly seedTestCustomer?: boolean;
+  readonly testCustomerStatus?: 'active' | 'inactive';
   readonly repository?: DeliveryOrderRepository;
   readonly readiness?: ReadinessCheck;
   readonly logger?: Logger;
   readonly cookieSecure?: boolean;
   readonly loginRateLimit?: LoginRateLimitConfig;
+  readonly trackingHub?: AppDependencies['trackingHub'];
+  readonly deliveryExecution?: AppDependencies['deliveryExecution'];
 }
 
 export interface SeedTestUserOptions {
@@ -161,6 +170,11 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     eventPublisher: new InMemoryEventPublisher(),
     ...(options.repository === undefined ? {} : { repository: options.repository }),
   });
+  let customerSequence = 0;
+  const customers = buildCustomersModule({ idGenerator: { nextId: () => {
+    customerSequence += 1;
+    return `55555555-5555-4555-8555-${String(customerSequence).padStart(12, '0')}`;
+  } } });
   const drivers = buildDriversModule({ userRepository: identity.users });
   const vehicles = buildVehiclesModule();
   const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
@@ -178,6 +192,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
   const app = buildApp({
     deliveryOrders: module,
     ...(deliveryRoutes === undefined ? {} : { deliveryRoutes }),
+    ...(options.deliveryExecution === undefined ? {} : { deliveryExecution: options.deliveryExecution }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,
@@ -190,14 +205,16 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
         maxAgeSeconds: identity.sessionPolicy.refreshTokenTtlSeconds,
       },
       loginRateLimit: options.loginRateLimit ?? DEFAULT_LOGIN_RATE_LIMIT,
+      ...(options.loginOrganizationId === undefined ? {} : { loginOrganizationId: options.loginOrganizationId }),
     },
     catalogs: {
-      customers: buildCustomersModule(),
+      customers,
       drivers,
       vehicles,
     },
     readiness: options.readiness ?? (async () => undefined),
     logger,
+    ...(options.trackingHub === undefined ? {} : { trackingHub: options.trackingHub }),
   });
 
   async function seedOrganization(
@@ -210,6 +227,17 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     });
 
     await identity.organizations.save(organization);
+    const existingCustomer = organization.id === OTHER_ORGANIZATION_ID
+      ? customerSequence >= 2 : customerSequence >= 1;
+    if (options.seedTestCustomer === true && !existingCustomer) await customers.createCustomer.execute({
+      organizationId: organization.id,
+      publicCode: 'TEST-CUSTOMER',
+      name: `${organization.name} Customer`,
+      contactName: 'Test Contact',
+      contactEmail: organization.id === OTHER_ORGANIZATION_ID ? 'other@example.test' : 'customer@example.test',
+      contactPhone: '+51 900 000 001',
+      ...(options.testCustomerStatus === undefined ? {} : { status: options.testCustomerStatus }),
+    });
     return organization;
   }
 
@@ -265,6 +293,7 @@ export function createFailingRepository(
   };
 
   return {
+    nextCodes: fail,
     save: fail,
     findById: fail,
     findByPublicCode: fail,

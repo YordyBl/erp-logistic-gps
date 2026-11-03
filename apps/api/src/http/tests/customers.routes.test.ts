@@ -206,7 +206,7 @@ describe('POST /api/v1/customers', () => {
 });
 
 describe('GET /api/v1/customers', () => {
-  it('lists only the caller organization customers for a DRIVER', async () => {
+  it('denies DRIVER access to the customer catalog', async () => {
     const { testApp, adminToken, otherAdminToken, driverToken } =
       await seedActors();
 
@@ -222,14 +222,8 @@ describe('GET /api/v1/customers', () => {
       .get(CUSTOMERS_PATH)
       .set(bearer(driverToken));
 
-    expect(response.status).toBe(200);
-    expect(response.body.data).toHaveLength(2);
-    expect(
-      response.body.data.every(
-        (customer: { organizationId: string }) =>
-          customer.organizationId === ORGANIZATION_ID,
-      ),
-    ).toBe(true);
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe('AUTH_FORBIDDEN');
   });
 
   it('returns 401 without a token', async () => {
@@ -243,7 +237,7 @@ describe('GET /api/v1/customers', () => {
 });
 
 describe('GET /api/v1/customers/:customerId', () => {
-  it('returns one customer to a DRIVER and hides it from another organization', async () => {
+  it('denies DRIVER access and hides customers from another organization', async () => {
     const { testApp, adminToken, otherAdminToken, driverToken } =
       await seedActors();
     const created = await createCustomer(testApp, adminToken);
@@ -253,8 +247,8 @@ describe('GET /api/v1/customers/:customerId', () => {
       .get(`${CUSTOMERS_PATH}/${customerId}`)
       .set(bearer(driverToken));
 
-    expect(own.status).toBe(200);
-    expect(own.body.data.id).toBe(customerId);
+    expect(own.status).toBe(403);
+    expect(own.body.error.code).toBe('AUTH_FORBIDDEN');
 
     const crossOrganization = await request(testApp.app)
       .get(`${CUSTOMERS_PATH}/${customerId}`)

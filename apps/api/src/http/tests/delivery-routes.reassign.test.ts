@@ -1,13 +1,13 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
-import { bearer, buildTestApp, OTHER_ORGANIZATION_ID, validOrderBody } from './support/test-app.js';
+import { bearer, buildTestApp, OTHER_CUSTOMER_ID, OTHER_ORGANIZATION_ID, validOrderBody } from './support/test-app.js';
 
 const ROUTES = '/api/v1/delivery-routes';
 const ORDERS = '/api/v1/delivery-orders';
 
 async function setup() {
-  const testApp = buildTestApp();
+  const testApp = buildTestApp({ seedTestCustomer: true });
   await testApp.seedOrganization();
   await testApp.seedOrganization({ id: OTHER_ORGANIZATION_ID, name: 'Callao Express' });
   const admin = await testApp.seedUser();
@@ -98,7 +98,7 @@ describe('PATCH /api/v1/delivery-routes/:routeId (regression probes)', () => {
       .set(bearer(ctx.otherToken)).send({ plate: 'CLL-001', type: 'van', capacityKg: 800 });
     expect(foreignVehicle.status).toBe(201);
     const foreignOrder = await request(ctx.testApp.app).post(ORDERS)
-      .set(bearer(ctx.otherToken)).send(validOrderBody({ publicCode: 'CLL-ORDER-1' }));
+      .set(bearer(ctx.otherToken)).send(validOrderBody({ customerId: OTHER_CUSTOMER_ID, publicCode: 'CLL-ORDER-1' }));
     expect(foreignOrder.status).toBe(201);
     const foreignRoute = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.otherToken)).send({
       publicCode: 'CLL-ROUTE', plannedDate: '2026-10-27',

@@ -25,6 +25,18 @@ import { DeliveryOrderForbiddenError, DeliveryOrderInvariantError, DeliveryOrder
 export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository {
   private readonly orders = new Map<string, DeliveryOrder>();
   private readonly statusHistory = new Map<string, DeliveryOrderStatusHistory[]>();
+  private nextOrderNumber = 1;
+  private nextPackageNumber = 1;
+
+  async nextCodes(packageCount: number): Promise<{
+    readonly publicCode: string;
+    readonly packageCodes: readonly string[];
+  }> {
+    const publicCode = formatGeneratedCode('ORD', this.nextOrderNumber++);
+    const packageCodes = Array.from({ length: packageCount }, () =>
+      formatGeneratedCode('PKG', this.nextPackageNumber++));
+    return { publicCode, packageCodes };
+  }
 
   async save(order: DeliveryOrder): Promise<void> {
     const existing = this.orders.get(order.id);
@@ -128,6 +140,10 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     if (order.organizationId !== organizationId) throw new DeliveryOrderForbiddenError(orderId, organizationId);
     return this.statusHistory.get(orderId) ?? [];
   }
+}
+
+function formatGeneratedCode(prefix: string, value: number): string {
+  return `${prefix}-${String(value).padStart(8, '0')}`;
 }
 
 export class CryptoIdGenerator implements IdGenerator {

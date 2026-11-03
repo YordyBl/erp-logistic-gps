@@ -28,6 +28,7 @@ x-api-environment: &api-environment
   # The local stack serves plain HTTP, so the refresh cookie cannot be Secure
   # here; production over TLS must set COOKIE_SECURE=true.
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  LOGIN_ORGANIZATION_ID: ${LOGIN_ORGANIZATION_ID:-}
   # Derived from the POSTGRES_* values so the connection string cannot drift
   # from the database credentials. Override DATABASE_URL only for one-off
   # tooling that needs a different host (for example, a tool on the host).
@@ -37,6 +38,8 @@ x-api-environment: &api-environment
   EVIDENCE_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
   EVIDENCE_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change-me-local-only}
   EVIDENCE_S3_REGION: ${EVIDENCE_S3_REGION:-us-east-1}
+  # Optional local routing service; enable it with docker-compose.valhalla.yml.
+  VALHALLA_URL: ${VALHALLA_URL:-}
 
 services:
   postgres:

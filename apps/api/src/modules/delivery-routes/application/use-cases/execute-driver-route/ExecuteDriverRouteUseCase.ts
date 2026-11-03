@@ -20,6 +20,9 @@ const incident = z.strictObject({
   description: z.string().trim().min(3).max(1000), evidenceIds,
 });
 const completeCommand = query.extend({ routeId: z.uuid() });
+const completeSimulatedCommand = query.extend({
+  routeId: z.uuid(), driverId: z.uuid(), occurredAt: z.iso.datetime().optional(),
+});
 
 export class ExecuteDriverRouteUseCase {
   constructor(private readonly store: DriverRouteExecutionStore,
@@ -68,5 +71,15 @@ export class ExecuteDriverRouteUseCase {
     }
     return { route: await this.store.complete(parsed.data.organizationId, parsed.data.routeId,
       parsed.data.actorUserId, this.clock.now()) };
+  }
+
+  async completeSimulated(input: unknown) {
+    const parsed = completeSimulatedCommand.safeParse(input);
+    if (!parsed.success) throw new DeliveryRouteValidationError('Simulated route completion command is invalid');
+    if (this.store.completeSimulated === undefined) {
+      throw new DeliveryRouteConflictError('Simulated delivery completion requires persistent execution storage');
+    }
+    return { route: await this.store.completeSimulated(parsed.data.organizationId, parsed.data.routeId,
+      parsed.data.driverId, parsed.data.actorUserId, parsed.data.occurredAt ?? this.clock.now()) };
   }
 }

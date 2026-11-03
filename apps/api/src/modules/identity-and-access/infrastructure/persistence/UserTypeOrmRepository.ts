@@ -1,7 +1,7 @@
 import type { DataSource } from 'typeorm';
 
 import type { UserRepository } from '../../application/ports/UserRepository.js';
-import type { User } from '../../domain/entities/User.js';
+import type { User, UserRole } from '../../domain/entities/User.js';
 import { EmailAlreadyInUseError } from '../../domain/errors/IdentityError.js';
 import { UserEntity } from './entities/UserEntity.js';
 import { toUserDomain, toUserEntity } from './mappers/UserMapper.js';
@@ -40,6 +40,15 @@ export class UserTypeOrmRepository implements UserRepository {
       .findOne({ where: { organizationId, email } });
 
     return entity === null ? null : toUserDomain(entity);
+  }
+
+  async listByOrganizationAndRole(organizationId: string, role: UserRole): Promise<User[]> {
+    const entities = await this.dataSource.getRepository(UserEntity).find({
+      where: { organizationId, role },
+      order: { email: 'ASC', id: 'ASC' },
+    });
+
+    return entities.map(toUserDomain);
   }
 }
 

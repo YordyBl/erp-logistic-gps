@@ -7,11 +7,19 @@ import { Recipient } from '../../../domain/value-objects/Recipient.js';
 import { toDeliveryOrderDto } from '../../dto/DeliveryOrderDto.js';
 import type { Clock } from '../../ports/Clock.js';
 import type { DeliveryOrderRepository } from '../../ports/DeliveryOrderRepository.js';
-import { createDeliveryOrderCommandSchema } from '../create-delivery-order/CreateDeliveryOrderCommand.js';
+import { deliveryOrderPackageSchema } from '../create-delivery-order/CreateDeliveryOrderCommand.js';
 
-export const editOrderBodySchema = createDeliveryOrderCommandSchema
-  .pick({ recipient: true, deliveryAddress: true, packages: true })
-  .partial()
+export const editOrderBodySchema = z.strictObject({
+  recipient: z.strictObject({ name: z.string().trim().min(1).max(120), phone: z.string().trim().min(6).max(20).regex(/^\+?[0-9][0-9 ()-]*$/) }).optional(),
+  deliveryAddress: z.strictObject({
+    addressLine: z.string().trim().min(5).max(200), district: z.string().trim().min(2).max(80),
+    googleMapsUrl: z.string().trim().url().max(2048).optional(),
+    latitude: z.number().finite().min(-90).max(90).optional(), longitude: z.number().finite().min(-180).max(180).optional(),
+  }).refine((value) => (value.latitude === undefined) === (value.longitude === undefined), {
+    message: 'latitude and longitude must be provided together', path: ['latitude'],
+  }).optional(),
+  packages: z.array(deliveryOrderPackageSchema).min(1).max(100).optional(),
+})
   .refine((value) => Object.keys(value).length > 0, 'At least one detail must be provided');
 
 const editOrderCommandSchema = z.strictObject({

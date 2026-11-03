@@ -21,13 +21,18 @@ const ISO_TIMESTAMP_PATTERN =
 export interface DeliveryOrderCreateProps {
   readonly id: string;
   readonly organizationId: string;
+  readonly customerId: string;
   readonly publicCode: string;
+  readonly timeWindow: DeliveryTimeWindow;
   readonly recipient: Recipient;
   readonly deliveryAddress: DeliveryAddress;
   readonly packages: readonly Package[];
   readonly createdAt: string;
   readonly activeRouteId?: string | null;
 }
+
+export const DELIVERY_TIME_WINDOWS = ['AM', 'PM'] as const;
+export type DeliveryTimeWindow = (typeof DELIVERY_TIME_WINDOWS)[number];
 
 /**
  * Aggregate root for a customer order to be transported.
@@ -42,6 +47,8 @@ export interface DeliveryOrderCreateProps {
 export class DeliveryOrder {
   readonly id: string;
   readonly organizationId: string;
+  readonly customerId: string;
+  readonly timeWindow: DeliveryTimeWindow;
   readonly publicCode: string;
   readonly recipient: Recipient;
   readonly deliveryAddress: DeliveryAddress;
@@ -55,6 +62,8 @@ export class DeliveryOrder {
   private constructor(
     id: string,
     organizationId: string,
+    customerId: string,
+    timeWindow: DeliveryTimeWindow,
     publicCode: string,
     recipient: Recipient,
     deliveryAddress: DeliveryAddress,
@@ -66,6 +75,8 @@ export class DeliveryOrder {
   ) {
     this.id = id;
     this.organizationId = organizationId;
+    this.customerId = customerId;
+    this.timeWindow = timeWindow;
     this.publicCode = publicCode;
     this.recipient = recipient;
     this.deliveryAddress = deliveryAddress;
@@ -85,6 +96,12 @@ export class DeliveryOrder {
       throw new DeliveryOrderValidationError('organizationId must be a UUID', {
         field: 'organizationId',
       });
+    }
+    if (!isUuid(props.customerId)) {
+      throw new DeliveryOrderValidationError('customerId must be a UUID', { field: 'customerId' });
+    }
+    if (!(DELIVERY_TIME_WINDOWS as readonly unknown[]).includes(props.timeWindow)) {
+      throw new DeliveryOrderValidationError('timeWindow must be AM or PM', { field: 'timeWindow' });
     }
 
     const publicCode = normalizePublicCode(props.publicCode);
@@ -108,6 +125,8 @@ export class DeliveryOrder {
     return new DeliveryOrder(
       props.id,
       props.organizationId,
+      props.customerId,
+      props.timeWindow,
       publicCode,
       props.recipient,
       props.deliveryAddress,
@@ -137,7 +156,7 @@ export class DeliveryOrder {
       throw new DeliveryOrderInvariantError('updatedAt cannot precede createdAt');
     }
     return new DeliveryOrder(
-      initial.id, initial.organizationId, initial.publicCode,
+      initial.id, initial.organizationId, initial.customerId, initial.timeWindow, initial.publicCode,
       initial.recipient, initial.deliveryAddress, initial.packages,
       initial.createdAt, props.status, updatedAt, props.activeRouteId ?? null,
     );
@@ -151,7 +170,7 @@ export class DeliveryOrder {
       );
     }
     return DeliveryOrder.restore({
-      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      id: this.id, organizationId: this.organizationId, customerId: this.customerId, timeWindow: this.timeWindow, publicCode: this.publicCode,
       recipient: this.recipient, deliveryAddress: this.deliveryAddress,
       packages: this.packages, createdAt: this.createdAt,
       status: 'cancelled', updatedAt: occurredAt,
@@ -172,7 +191,7 @@ export class DeliveryOrder {
       );
     }
     return DeliveryOrder.restore({
-      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      id: this.id, organizationId: this.organizationId, customerId: this.customerId, timeWindow: this.timeWindow, publicCode: this.publicCode,
       recipient: changes.recipient ?? this.recipient,
       deliveryAddress: changes.deliveryAddress ?? this.deliveryAddress,
       packages: changes.packages ?? this.packages,
@@ -202,7 +221,7 @@ export class DeliveryOrder {
       ? new Date(Math.max(Date.parse(assignedAt), Date.parse(effectivePlannedAt) + 1)).toISOString()
       : assignedAt;
     const planned = DeliveryOrder.restore({
-      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      id: this.id, organizationId: this.organizationId, customerId: this.customerId, timeWindow: this.timeWindow, publicCode: this.publicCode,
       recipient: this.recipient, deliveryAddress: this.deliveryAddress,
       packages: this.packages, createdAt: this.createdAt,
       status: 'planned', updatedAt: effectivePlannedAt, activeRouteId: routeId,
@@ -211,7 +230,7 @@ export class DeliveryOrder {
       throw new DeliveryOrderInvariantError('Planned order cannot be assigned');
     }
     const assigned = DeliveryOrder.restore({
-      id: planned.id, organizationId: planned.organizationId, publicCode: planned.publicCode,
+      id: planned.id, organizationId: planned.organizationId, customerId: planned.customerId, timeWindow: planned.timeWindow, publicCode: planned.publicCode,
       recipient: planned.recipient, deliveryAddress: planned.deliveryAddress,
       packages: planned.packages, createdAt: planned.createdAt,
       status: 'assigned', updatedAt: effectiveAssignedAt, activeRouteId: routeId,
@@ -226,7 +245,7 @@ export class DeliveryOrder {
       throw new DeliveryOrderInvariantError('Only an order assigned to this route can enter transit');
     }
     return DeliveryOrder.restore({
-      id: this.id, organizationId: this.organizationId, publicCode: this.publicCode,
+      id: this.id, organizationId: this.organizationId, customerId: this.customerId, timeWindow: this.timeWindow, publicCode: this.publicCode,
       recipient: this.recipient, deliveryAddress: this.deliveryAddress,
       packages: this.packages, createdAt: this.createdAt,
       status: 'in_transit', updatedAt: occurredAt, activeRouteId: routeId,

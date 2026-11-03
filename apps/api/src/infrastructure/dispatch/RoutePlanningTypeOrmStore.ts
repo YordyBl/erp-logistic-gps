@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DataSource, EntityManager } from 'typeorm';
+import { In, type DataSource, type EntityManager } from 'typeorm';
 
 import type { PlannedRoute, RoutePlanningStore } from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
@@ -82,6 +82,10 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         persistedRoute.driverId = route.driverId;
         persistedRoute.vehicleId = route.vehicleId;
         persistedRoute.status = route.status;
+        persistedRoute.originAddressLine = route.origin?.addressLine ?? null;
+        persistedRoute.originLatitude = route.origin === undefined ? null : String(route.origin.latitude);
+        persistedRoute.originLongitude = route.origin === undefined ? null : String(route.origin.longitude);
+        persistedRoute.simulatedCompletionEnabled = route.simulatedCompletionEnabled ?? false;
         persistedRoute.createdAt = new Date(route.createdAt);
         persistedRoute.startedAt = null;
         persistedRoute.completedAt = null;
@@ -146,6 +150,19 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
     return this.readPlannedRoute(this.dataSource.manager, organizationId, routeId);
   }
 
+  async list(organizationId: string): Promise<readonly PlannedRoute[]> {
+    const routes = await this.dataSource.manager.find(DeliveryRouteEntity, {
+      where: { organizationId, status: In(['planned', 'in_progress', 'completed']) },
+      order: { plannedDate: 'ASC', createdAt: 'ASC' },
+    });
+    const result: PlannedRoute[] = [];
+    for (const route of routes) {
+      const planned = await this.readPlannedRoute(this.dataSource.manager, organizationId, route.id);
+      if (planned !== null) result.push(planned);
+    }
+    return result;
+  }
+
   /**
    * Reads one planned route through the given manager. Transactional writers
    * must pass their transaction manager: a separate pooled connection cannot
@@ -158,7 +175,7 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       where: { id: routeId, organizationId },
     });
     if (route === null) return null;
-    if (route.status !== 'planned' && route.status !== 'in_progress') {
+    if (route.status !== 'planned' && route.status !== 'in_progress' && route.status !== 'completed') {
       throw new DeliveryRouteConflictError('Persisted route status is not supported by this planner');
     }
     const stops = await manager.find(DeliveryStopEntity, {
@@ -171,9 +188,14 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       id: route.id, organizationId: route.organizationId,
       publicCode: route.publicCode, plannedDate: route.plannedDate,
       driverId: route.driverId, vehicleId: route.vehicleId,
+      ...(route.originAddressLine === null || route.originLatitude === null || route.originLongitude === null
+        ? {} : { origin: { addressLine: route.originAddressLine,
+          latitude: Number(route.originLatitude), longitude: Number(route.originLongitude) } }),
+      ...(route.simulatedCompletionEnabled ? { simulatedCompletionEnabled: true } : {}),
       status: route.status as PlannedRoute['status'],
       createdAt: route.createdAt.toISOString(),
       ...(route.startedAt === null ? {} : { startedAt: route.startedAt.toISOString() }),
+      ...(route.completedAt === null ? {} : { completedAt: route.completedAt.toISOString() }),
       stops: stops.map((stop) => ({
         id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
         latitude: stop.latitude === null ? null : Number(stop.latitude),

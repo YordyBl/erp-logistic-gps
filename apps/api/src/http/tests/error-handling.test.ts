@@ -17,7 +17,7 @@ import {
 } from './support/log-capture.js';
 
 async function buildSeededApp(options: TestAppOptions = {}) {
-  const testApp = buildTestApp(options);
+  const testApp = buildTestApp({ ...options, seedTestCustomer: true });
 
   await testApp.seedOrganization();
   const admin = await testApp.seedUser({ id: ADMIN_ID, email: ADMIN_EMAIL });

@@ -17,6 +17,11 @@ import type { DeliveryOrderStatusHistory } from './DeliveryOrderStatusHistory.js
  * (ADR-001 rule 6).
  */
 export interface DeliveryOrderRepository {
+  /** Reserve globally unique readable codes for a new order and its parcels. */
+  nextCodes(packageCount: number): Promise<{
+    readonly publicCode: string;
+    readonly packageCodes: readonly string[];
+  }>;
   save(order: DeliveryOrder): Promise<void>;
   findById(orderId: string): Promise<DeliveryOrder | null>;
   findByPublicCode(

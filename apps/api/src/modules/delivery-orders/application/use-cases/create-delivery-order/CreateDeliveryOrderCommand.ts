@@ -20,6 +20,7 @@ const deliveryAddressSchema = z
   .strictObject({
     addressLine: z.string().trim().min(5).max(200),
     district: z.string().trim().min(2).max(80),
+    googleMapsUrl: z.string().trim().url().max(2048).optional(),
     latitude: z.number().finite().min(-90).max(90).optional(),
     longitude: z.number().finite().min(-180).max(180).optional(),
   })
@@ -28,7 +29,7 @@ const deliveryAddressSchema = z
     path: ['latitude'],
   });
 
-const packageSchema = z.strictObject({
+export const deliveryOrderPackageSchema = z.strictObject({
   code: z
     .string()
     .trim()
@@ -51,6 +52,8 @@ const packageSchema = z.strictObject({
  */
 export const createDeliveryOrderCommandSchema = z.strictObject({
   organizationId: z.uuid(),
+  customerId: z.uuid(),
+  timeWindow: z.enum(['AM', 'PM']),
   publicCode: z
     .string()
     .trim()
@@ -64,10 +67,13 @@ export const createDeliveryOrderCommandSchema = z.strictObject({
           PUBLIC_CODE_PATTERN,
           'publicCode must contain letters, digits and separating hyphens',
         ),
-    ),
+    )
+    .optional(),
   recipient: recipientSchema,
   deliveryAddress: deliveryAddressSchema,
-  packages: z.array(packageSchema).min(1).max(100),
+  packages: z.array(deliveryOrderPackageSchema.extend({
+    code: deliveryOrderPackageSchema.shape.code.optional(),
+  })).min(1).max(100),
 });
 
 export type CreateDeliveryOrderCommand = z.infer<typeof createDeliveryOrderCommandSchema>;

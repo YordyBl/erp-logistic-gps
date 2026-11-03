@@ -24,6 +24,8 @@ function orderProps(overrides: Partial<Parameters<typeof DeliveryOrder.create>[0
   return {
     id: ORDER_ID,
     organizationId: ORGANIZATION_ID,
+    customerId: '55555555-5555-4555-8555-555555555551',
+    timeWindow: 'AM' as const,
     publicCode: 'ORD-2026-0007',
     recipient,
     deliveryAddress,
@@ -41,6 +43,7 @@ describe('DeliveryOrder aggregate', () => {
     expect(order.createdAt).toBe(CREATED_AT);
     expect(order.updatedAt).toBe(CREATED_AT);
     expect(order.packages).toHaveLength(1);
+    expect(order.customerId).toBe('55555555-5555-4555-8555-555555555551');
   });
 
   it('requires at least one package', () => {

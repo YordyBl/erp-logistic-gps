@@ -32,6 +32,7 @@ import { DeliveryOrderPackageEntity } from './DeliveryOrderPackageEntity.js';
   'chk_delivery_orders_status',
   `"status" IN ('created', 'planned', 'assigned', 'in_transit', 'delivered', 'returned', 'cancelled')`,
 )
+@Check('chk_delivery_orders_time_window', `"time_window" IN ('AM', 'PM')`)
 @Check(
   'chk_delivery_orders_public_code',
   `"public_code" ~ '^[A-Z0-9]+(-[A-Z0-9]+)*$'`,
@@ -55,6 +56,9 @@ export class DeliveryOrderEntity {
   @Column({ name: 'organization_id', type: 'uuid' })
   organizationId!: string;
 
+  @Column({ name: 'customer_id', type: 'uuid' })
+  customerId!: string;
+
   /**
    * Infrastructure-only mirror of the FK created by migration 2.
    *
@@ -71,6 +75,9 @@ export class DeliveryOrderEntity {
   @Column({ name: 'public_code', type: 'varchar', length: 32 })
   publicCode!: string;
 
+  @Column({ name: 'time_window', type: 'varchar', length: 2 })
+  timeWindow!: 'AM' | 'PM';
+
   @Column({ name: 'recipient_name', type: 'varchar', length: 120 })
   recipientName!: string;
 
@@ -82,6 +89,9 @@ export class DeliveryOrderEntity {
 
   @Column({ name: 'delivery_district', type: 'varchar', length: 80 })
   deliveryDistrict!: string;
+
+  @Column({ name: 'google_maps_url', type: 'varchar', length: 2048, nullable: true })
+  googleMapsUrl!: string | null;
 
   @Column({
     name: 'latitude',

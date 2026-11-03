@@ -1,0 +1,25 @@
+services:
+  valhalla:
+    image: ghcr.io/valhalla/valhalla@sha256:eea27d6c84a307374da41736d082ec61182881f409b47fb67dfa76835049d5b3
+    command: ["bash", "/opt/valhalla/start.sh"]
+    environment:
+      VALHALLA_BUILD_CONCURRENCY: ${VALHALLA_BUILD_CONCURRENCY:-2}
+    volumes:
+      - ./infra/valhalla/data:/custom_files
+      - ./infra/valhalla/start.sh:/opt/valhalla/start.sh:ro
+    ports:
+      - "127.0.0.1:${VALHALLA_PORT:-8002}:8002"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8002/status >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30m
+    restart: unless-stopped
+
+  api:
+    environment:
+      VALHALLA_URL: http://valhalla:8002
+    depends_on:
+      valhalla:
+        condition: service_healthy

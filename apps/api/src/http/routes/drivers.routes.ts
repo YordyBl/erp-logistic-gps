@@ -16,9 +16,9 @@ import { getAuthenticatedUser } from '../request-context.js';
 /**
  * HTTP adapters for the driver catalog.
  *
- * Reads are available to every authenticated role (a DRIVER may read the
- * catalog); writes require ADMIN or DISPATCHER. The tenant is read only from the
- * verified JWT context.
+ * Catalog access requires ADMIN or DISPATCHER; DRIVER accounts are limited to
+ * assigned-route operations. Account selection and binding require ADMIN. The
+ * tenant is read only from verified JWT context.
  */
 export interface DriversHttpPorts {
   readonly createDriver: CreateDriverUseCase;
@@ -38,7 +38,7 @@ export function createDriversRouter(
 ): Router {
   const router = Router();
 
-  router.use(authenticate);
+  router.use(authenticate, requireRole('ADMIN', 'DISPATCHER'));
 
   router.post('/', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
     const body = parseDriverOrThrow(
@@ -64,6 +64,11 @@ export function createDriversRouter(
     });
 
     response.status(200).json({ data: result.drivers });
+  });
+
+  router.get('/accounts', requireRole('ADMIN'), async (_request, response) => {
+    const result = await ports.bindDriverAccount.listAccounts(requireOrganizationId(response));
+    response.status(200).json({ data: result.accounts });
   });
 
   router.get('/:driverId', async (request, response) => {

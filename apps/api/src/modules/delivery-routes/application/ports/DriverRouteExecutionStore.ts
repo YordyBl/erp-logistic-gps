@@ -31,4 +31,6 @@ export interface DriverRouteExecutionStore {
       } }>;
   complete?(organizationId: string, routeId: string, actorUserId: string,
     occurredAt: string): Promise<DriverRouteView>;
+  completeSimulated?(organizationId: string, routeId: string, driverId: string,
+    actorUserId: string, occurredAt: string): Promise<DriverRouteView>;
 }

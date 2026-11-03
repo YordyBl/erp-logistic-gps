@@ -19,6 +19,7 @@ import {
 import { createDeliveryRoutesModule } from '../../modules/delivery-routes/composition/composition-root.js';
 import { RoutePlanningTypeOrmStore } from '../dispatch/RoutePlanningTypeOrmStore.js';
 import { DriverRouteTypeOrmStore } from '../dispatch/DriverRouteTypeOrmStore.js';
+import { DispatchDashboardTypeOrmQuery } from '../dispatch/DispatchDashboardTypeOrmQuery.js';
 import {
   createDriversModuleFromDataSource,
   type DriversModule,
@@ -40,9 +41,10 @@ export interface ComposedApiModules {
   readonly customers: CustomersModule;
   readonly drivers: DriversModule;
   readonly vehicles: VehiclesModule;
+  readonly dispatchDashboard: DispatchDashboardTypeOrmQuery;
   readonly dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'auth' | 'catalogs'
   >;
 }
 
@@ -83,15 +85,18 @@ export async function composeApiModules(
     executionStore: new DriverRouteTypeOrmStore(dataSource),
     getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
   });
+  const dispatchDashboard = new DispatchDashboardTypeOrmQuery(dataSource);
 
   const dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'auth' | 'catalogs'
   > = {
     deliveryOrders,
     deliveryRoutes,
+    dispatchDashboard,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
     auth: {
+      ...(authConfig.loginOrganizationId === undefined ? {} : { loginOrganizationId: authConfig.loginOrganizationId }),
       login: identity.login,
       refreshSession: identity.refreshSession,
       logout: identity.logout,
@@ -110,6 +115,6 @@ export async function composeApiModules(
   return {
     deliveryOrders, deliveryRoutes,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
-    identity, customers, drivers, vehicles, dependencies,
+    identity, customers, drivers, vehicles, dispatchDashboard, dependencies,
   };
 }

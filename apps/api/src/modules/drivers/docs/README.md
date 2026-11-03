@@ -1,12 +1,12 @@
 # `drivers` module
 
 Driver catalog for one organization: the people who execute delivery routes.
-Route assignment and the link to a platform user belong to later modules; this
-module owns the master data only.
+The module also owns the audited one-to-one association between a driver profile
+and an authorized platform account; route assignment remains separate.
 
 **Status:** domain, application, TypeORM persistence, migration
-`1793232001000-Drivers`, HTTP routes, unit tests, route tests and gated
-PostgreSQL integration tests are implemented.
+`1793232001000-Drivers`, HTTP routes, unit tests, route tests, account binding,
+and gated PostgreSQL integration tests are implemented.
 
 ## Responsibility
 
@@ -14,7 +14,7 @@ PostgreSQL integration tests are implemented.
 |---|---|
 | `Driver` entity with per-organization document number | User account provisioning (`identity-and-access`) |
 | Create, list, get and partial update | Route assignment, availability and conflict checks |
-| ADMIN/DISPATCHER writes, every role reads | Driver document verification workflow |
+| ADMIN/DISPATCHER catalog access; ADMIN-only account selection and binding | Driver document verification workflow |
 | Per-organization uniqueness of `documentNumber` | Delete: deactivate through `status` instead |
 
 ## HTTP contract
@@ -22,14 +22,18 @@ PostgreSQL integration tests are implemented.
 | Method | Path | Roles | Result |
 |---|---|---|---|
 | `POST` | `/api/v1/drivers` | ADMIN, DISPATCHER | `201` with `Location`; `409 DRIVER_INVARIANT_VIOLATION` on a repeated document |
-| `GET` | `/api/v1/drivers` | ADMIN, DISPATCHER, DRIVER | `200` with the caller organization drivers, oldest first |
-| `GET` | `/api/v1/drivers/{driverId}` | ADMIN, DISPATCHER, DRIVER | `200`, or `404 DRIVER_NOT_FOUND` |
+| `GET` | `/api/v1/drivers` | ADMIN, DISPATCHER | `200` with the caller organization drivers, oldest first |
+| `GET` | `/api/v1/drivers/accounts` | ADMIN | Active and disabled same-tenant DRIVER accounts with binding state; never returns password hashes |
+| `GET` | `/api/v1/drivers/{driverId}` | ADMIN, DISPATCHER | `200`, or `404 DRIVER_NOT_FOUND` |
 | `PATCH` | `/api/v1/drivers/{driverId}` | ADMIN, DISPATCHER | `200`, `400 DRIVER_INVALID_INPUT`, or `404 DRIVER_NOT_FOUND` |
+| `GET` | `/api/v1/drivers/{driverId}/account` | ADMIN | Current account id or `null` |
+| `PUT` | `/api/v1/drivers/{driverId}/account` | ADMIN | Bind an active same-tenant DRIVER account, or explicitly unbind with `userId: null`; changes are audited atomically |
 
 The update is a `PATCH` with at least one mutable field. `documentNumber` and the
 tenant are not editable: the identity document requires an identity-verification
 workflow, not a catalog patch. Omitted fields keep their stored value and
-`updatedAt` is stamped by the use-case clock.
+`updatedAt` is stamped by the use-case clock. DRIVER users do not read the
+general driver catalog; their access remains limited to assigned-route flows.
 
 ## Fields and invariants
 

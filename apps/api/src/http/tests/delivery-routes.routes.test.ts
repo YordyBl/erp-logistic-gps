@@ -4,14 +4,49 @@ import { DeliveryOrder } from '../../modules/delivery-orders/domain/entities/Del
 
 import {
   ADMIN_ID, bearer, buildTestApp, DRIVER_EMAIL, DRIVER_ID,
-  ORGANIZATION_ID, OTHER_ORGANIZATION_ID, validOrderBody,
+  ORGANIZATION_ID, OTHER_ORGANIZATION_ID, OTHER_CUSTOMER_ID, validOrderBody,
 } from './support/test-app.js';
 
 const ROUTES = '/api/v1/delivery-routes';
 const ORDERS = '/api/v1/delivery-orders';
 
+describe('GET /api/v1/delivery-routes', () => {
+  it('lists only the authenticated organization routes for dispatch roles', async () => {
+    const ctx = await seededRouteApp();
+    const orderId = await ctx.createOrder('LIST-ROUTE-ORDER');
+    const created = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
+      publicCode: 'LIST-ROUTE-001', plannedDate: '2026-11-02',
+      driverId: ctx.driverId, vehicleId: ctx.vehicleId,
+      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 123', orderIds: [orderId] }],
+    });
+    expect(created.status).toBe(201);
+
+    const response = await request(ctx.testApp.app).get(ROUTES).set(bearer(ctx.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual([created.body.data]);
+    expect((await request(ctx.testApp.app).get(ROUTES).set(bearer(ctx.otherToken))).body.data).toEqual([]);
+  });
+
+  it('keeps route listing and route detail restricted to dispatch roles', async () => {
+    const ctx = await seededRouteApp();
+    const orderId = await ctx.createOrder('LIST-ROLE-ORDER');
+    const created = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
+      publicCode: 'LIST-ROLE-001', plannedDate: '2026-11-02',
+      driverId: ctx.driverId, vehicleId: ctx.vehicleId,
+      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 123', orderIds: [orderId] }],
+    });
+    const driver = await ctx.testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const driverToken = await ctx.testApp.signIn(driver);
+
+    expect((await request(ctx.testApp.app).get(ROUTES).set(bearer(driverToken))).status).toBe(403);
+    expect((await request(ctx.testApp.app).get(`${ROUTES}/${created.body.data.id}`)
+      .set(bearer(driverToken))).status).toBe(403);
+  });
+});
+
 async function seededRouteApp() {
-  const testApp = buildTestApp();
+  const testApp = buildTestApp({ seedTestCustomer: true });
   await testApp.seedOrganization();
   await testApp.seedOrganization({ id: OTHER_ORGANIZATION_ID, name: 'Callao Express' });
   const admin = await testApp.seedUser();
@@ -121,7 +156,7 @@ describe('POST /api/v1/delivery-routes', () => {
     const original = repository.orders.get(id);
     expect(original).toBeDefined();
     repository.orders.set(id, DeliveryOrder.restore({
-      id, organizationId: ORGANIZATION_ID, publicCode: original!.publicCode,
+      id, organizationId: ORGANIZATION_ID, customerId: original!.customerId, publicCode: original!.publicCode, timeWindow: original!.timeWindow,
       recipient: original!.recipient, deliveryAddress: original!.deliveryAddress,
       packages: original!.packages, createdAt: original!.createdAt,
       activeRouteId: first.body.data.id as string,
@@ -236,7 +271,7 @@ describe('POST /api/v1/delivery-routes', () => {
       stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds }],
     });
     const foreignOrder = await request(testApp.app).post(ORDERS).set(bearer(otherToken))
-      .send(validOrderBody({ publicCode: 'FOREIGN-ROUTE-1' }));
+      .send(validOrderBody({ customerId: OTHER_CUSTOMER_ID, publicCode: 'FOREIGN-ROUTE-1' }));
     expect(foreignOrder.status).toBe(201);
     const foreign = await request(testApp.app).post(ROUTES).set(bearer(token))
       .send(requestBody([foreignOrder.body.data.id as string]));

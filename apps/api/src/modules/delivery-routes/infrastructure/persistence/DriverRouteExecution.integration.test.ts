@@ -7,6 +7,7 @@ import { DriverRouteTypeOrmStore } from '../../../../infrastructure/dispatch/Dri
 import { DriverAccountTypeOrmStore } from '../../../../infrastructure/dispatch/DriverAccountTypeOrmStore.js';
 import { RoutePlanningTypeOrmStore } from '../../../../infrastructure/dispatch/RoutePlanningTypeOrmStore.js';
 import { DeliveryEvidenceTypeOrmStore } from '../../../delivery-execution/infrastructure/persistence/DeliveryEvidenceTypeOrmStore.js';
+import { RoutePositionTypeOrmStore } from '../../../delivery-tracking/infrastructure/RoutePositionTypeOrmStore.js';
 import { DeliveryEvidenceConflictError, DeliveryEvidenceNotFoundError } from '../../../delivery-execution/domain/errors/DeliveryExecutionError.js';
 import { DeliveryOrder } from '../../../delivery-orders/domain/entities/DeliveryOrder.js';
 import { Recipient } from '../../../delivery-orders/domain/value-objects/Recipient.js';
@@ -46,16 +47,19 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       (SELECT id FROM delivery_orders WHERE organization_id = ANY($1::uuid[]))`, [organizations]);
     for (const table of ['delivery_evidence', 'delivery_incidents', 'delivery_attempts', 'driver_account_binding_history',
       'delivery_route_status_history', 'delivery_order_status_history',
+      'route_positions',
       'delivery_stop_orders', 'delivery_orders',
       'delivery_stops', 'delivery_routes', 'driver_accounts', 'drivers', 'vehicles', 'users']) {
       await source.query(`DELETE FROM "${table}" WHERE organization_id = ANY($1::uuid[])`, [organizations]);
     }
+    await source.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizations]);
     await source.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [organizations]);
     await source.destroy();
   });
 
   async function seed() {
     const organizationId = randomUUID();
+    const customerId = randomUUID();
     const driverId = randomUUID();
     const vehicleId = randomUUID();
     const actorId = randomUUID();
@@ -64,6 +68,10 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await new OrganizationTypeOrmRepository(source).save(Organization.create({
       id: organizationId, name: 'Driver execution integration', createdAt: AT,
     }));
+    await source.query(`INSERT INTO customers
+      (id, organization_id, public_code, name, contact_name, contact_email, contact_phone, status, created_at)
+      VALUES ($1,$2,'TEST-CUSTOMER','Integration Customer','Test Contact','execution@example.test','+51 900 000 001','active',$3)`,
+    [customerId, organizationId, AT]);
     for (const [id, role] of [[actorId, 'DRIVER'], [adminId, 'ADMIN']]) {
       await source.query(`INSERT INTO users (id, organization_id, email, password_hash, role,
         status, created_at) VALUES ($1,$2,$3,'test-hash',$4,'active',$5)`,
@@ -79,7 +87,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     [vehicleId, organizationId, `V${vehicleId.slice(0, 6).toUpperCase()}`, AT]);
     const createOrder = async (code: string) => {
       const order = DeliveryOrder.create({
-        id: randomUUID(), organizationId, publicCode: code,
+        id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
         deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })], createdAt: AT,
@@ -87,11 +95,14 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       await orders.save(order);
       return order.id;
     };
-    const plan = async (ids: string[]) => {
+    const plan = async (ids: string[], origin?: PlannedRoute['origin'],
+      simulatedCompletionEnabled = false) => {
       const route: PlannedRoute = {
         id: randomUUID(), organizationId, driverId, vehicleId,
         publicCode: `EXEC-${randomUUID().slice(0, 8)}`,
         plannedDate: '2026-10-27', status: 'planned', createdAt: AT,
+        ...(origin === undefined ? {} : { origin }),
+        simulatedCompletionEnabled,
         stops: [{ id: randomUUID(), sequence: 1, addressLine: 'First stop',
           latitude: null, longitude: null, orderIds: ids }],
       };
@@ -114,7 +125,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   it('limits route reads to the linked account and starts all stop orders with audit once', async () => {
     const ctx = await seed();
     const ids = [await ctx.createOrder('EXEC-ORDER-1'), await ctx.createOrder('EXEC-ORDER-2')];
-    const route = await ctx.plan(ids);
+    const route = await ctx.plan(ids, undefined, true);
     const before = await hash(ctx.organizationId);
     await expect(execution.mine(ctx.organizationId, ctx.actorId)).rejects.toThrow();
     await expect(execution.start(ctx.organizationId, route.id, ctx.actorId, AT)).rejects.toThrow();
@@ -128,6 +139,35 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       stops: [{ orders: ids.map((id) => ({ id, status: 'in_transit' })) }] });
     expect((await execution.mine(ctx.organizationId, ctx.actorId)).startedAt).toBe(started.startedAt);
     expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
+    await source.query(`UPDATE delivery_stops SET latitude=-12.05, longitude=-77.03
+      WHERE organization_id=$1 AND route_id=$2`, [ctx.organizationId, route.id]);
+    const positions = new RoutePositionTypeOrmStore(source);
+    const activeRoutes = (await positions.findActiveRoutes())
+      .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId);
+    expect(activeRoutes).toHaveLength(1);
+    expect(activeRoutes[0]).toMatchObject({
+      organizationId: ctx.organizationId,
+      routeId: route.id,
+      driverId: ctx.driverId,
+      stops: [{ latitude: -12.05, longitude: -77.03 }],
+    });
+    const position = {
+      organizationId: ctx.organizationId, routeId: route.id, driverId: ctx.driverId,
+      latitude: -12.05, longitude: -77.03, accuracyMeters: 5,
+      speedMetersPerSecond: 0, source: 'simulated' as const,
+      recordedAt: AT, receivedAt: AT,
+    };
+    await expect(positions.record(position)).resolves.toBe(true);
+    await expect(positions.record({ ...position, organizationId: randomUUID() })).resolves.toBe(false);
+    expect(await source.query(`SELECT id FROM route_positions WHERE organization_id=$1`,
+      [ctx.organizationId])).toHaveLength(1);
+    await expect(positions.findLatestForRoutes(ctx.organizationId, [route.id])).resolves.toMatchObject([
+      { organizationId: ctx.organizationId, routeId: route.id,
+        latitude: -12.05, longitude: -77.03, source: 'simulated' },
+    ]);
+    await expect(positions.findLatestForRoutes(randomUUID(), [route.id])).resolves.toEqual([]);
+    await expect(positions.pruneReceivedBefore('2026-10-28T00:00:00.000Z')).resolves.toBe(1);
+    await expect(positions.pruneReceivedBefore('2026-10-28T00:00:00.000Z')).resolves.toBe(0);
     const attempts = await source.query<{ id: string; order_id: string; attempt_number: number; status: string }[]>(
       `SELECT id, order_id, attempt_number, status FROM delivery_attempts
         WHERE organization_id=$1 AND route_id=$2 ORDER BY order_id`,
@@ -186,6 +226,29 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await expect(planner.reassign(ctx.organizationId, route.id, { driverId: randomUUID() }))
       .rejects.toThrow();
     expect(await hash(ctx.organizationId)).toBe(after);
+    await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1 AND organization_id=$2`,
+      [route.id, ctx.organizationId]);
+    expect((await positions.findActiveRoutes())
+      .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId)).toEqual([]);
+    await expect(positions.record(position)).resolves.toBe(false);
+  });
+
+  it('persists the optional route origin and bound agent context for GPS simulation', async () => {
+    const ctx = await seed();
+    const origin = { addressLine: 'Starting location', latitude: -11.9740702, longitude: -77.0814464 };
+    const route = await ctx.plan([await ctx.createOrder('EXEC-ORIGIN-1')], origin, true);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+
+    const active = await new RoutePositionTypeOrmStore(source).findActiveRoutes();
+    expect(active.every((activeRoute) => activeRoute.simulatedCompletionEnabled)).toBe(true);
+    expect(active).toContainEqual(expect.objectContaining({
+      organizationId: ctx.organizationId, routeId: route.id, driverId: ctx.driverId,
+      driverUserId: ctx.actorId,
+      simulatedCompletionEnabled: true,
+      origin: { addressLine: origin.addressLine, latitude: -11.97407, longitude: -77.081446 },
+      stops: [{ latitude: null, longitude: null }],
+    }));
   });
 
   it('rolls back start when one linked order is no longer assigned', async () => {
@@ -428,6 +491,80 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       { evidenceIds: [pending.id], receiverName: null, notes: null }, AT)).rejects.toThrow();
     expect((await orders.findById(otherOrderId))?.status).toBe('in_transit');
     expect(otherAttempt.id).not.toBe(attempt.id);
+  });
+
+  it('atomically completes an arrived single-delivery simulation without fabricating photo evidence', async () => {
+    const ctx = await seed();
+    const orderId = await ctx.createOrder('EXEC-SIMULATED-1');
+    const route = await ctx.plan([orderId]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const beforeUnauthorized = await hash(ctx.organizationId);
+    await expect(execution.completeSimulated(ctx.organizationId, route.id, ctx.driverId,
+      ctx.adminId, AT)).rejects.toThrow();
+    expect(await hash(ctx.organizationId)).toBe(beforeUnauthorized);
+
+    const completed = await execution.completeSimulated(ctx.organizationId, route.id,
+      ctx.driverId, ctx.actorId, '2026-10-27T15:10:00.000Z');
+    expect(completed).toMatchObject({ id: route.id, status: 'completed' });
+    expect((await orders.findById(orderId))?.status).toBe('delivered');
+    const attempts = await source.query<{ status: string; receiver_name: string | null;
+      delivery_notes: string | null; completed_at: Date | null }[]>(
+      `SELECT status, receiver_name, delivery_notes, completed_at FROM delivery_attempts
+       WHERE organization_id=$1 AND route_id=$2`, [ctx.organizationId, route.id]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ status: 'delivered', receiver_name: null,
+      delivery_notes: expect.stringContaining('SIMULATED:') });
+    expect(attempts[0]?.completed_at).not.toBeNull();
+    expect(await source.query(`SELECT id FROM delivery_evidence WHERE organization_id=$1 AND order_id=$2`,
+      [ctx.organizationId, orderId])).toHaveLength(0);
+    expect((await orders.findStatusHistory(ctx.organizationId, orderId)).at(-1))
+      .toMatchObject({ fromStatus: 'in_transit', toStatus: 'delivered', actorUserId: ctx.actorId });
+    const historyCount = await source.query<{ count: string }[]>(
+      `SELECT count(*)::text AS count FROM delivery_route_status_history WHERE route_id=$1`, [route.id]);
+    await execution.completeSimulated(ctx.organizationId, route.id, ctx.driverId, ctx.actorId,
+      '2026-10-27T15:20:00.000Z');
+    expect(await source.query<{ count: string }[]>(
+      `SELECT count(*)::text AS count FROM delivery_route_status_history WHERE route_id=$1`, [route.id]))
+      .toEqual(historyCount);
+  });
+
+  it('denies private evidence download to another driver in the same organization', async () => {
+    const ctx = await seed();
+    const orderId = await ctx.createOrder('EXEC-EVIDENCE-PRIVATE-1');
+    const route = await ctx.plan([orderId]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
+    const upload = await evidence.reserveUpload({
+      id: randomUUID(), organizationId: ctx.organizationId, orderId,
+      actorUserId: ctx.actorId, idempotencyKey: 'private-download-photo',
+      mimeType: 'image/jpeg', byteSize: 16, checksum: 'a'.repeat(64), createdAt: AT,
+    });
+    await evidence.markAvailable(ctx.organizationId, upload.id, AT);
+
+    const otherUserId = randomUUID();
+    const otherDriverId = randomUUID();
+    await source.query(`INSERT INTO users (id, organization_id, email, password_hash, role,
+      status, created_at) VALUES ($1,$2,$3,'test-hash','DRIVER','active',$4)`,
+    [otherUserId, ctx.organizationId, `${otherUserId}@example.test`, AT]);
+    await source.query(`INSERT INTO drivers (id, organization_id, full_name, document_number,
+      phone, license_number, status, created_at, updated_at)
+      VALUES ($1,$2,'Other Driver',$3,'+51 911 222 335',$4,'active',$5,$5)`,
+    [otherDriverId, ctx.organizationId, `DNI-${otherDriverId.slice(0, 8).toUpperCase()}`,
+      `L-${otherDriverId.slice(0, 8).toUpperCase()}`, AT]);
+    await source.query(`INSERT INTO driver_accounts (organization_id, driver_id, user_id)
+      VALUES ($1,$2,$3)`, [ctx.organizationId, otherDriverId, otherUserId]);
+
+    const before = await source.query(
+      `SELECT id, status, available_at FROM delivery_evidence
+        WHERE organization_id=$1 ORDER BY id`, [ctx.organizationId]);
+    await expect(evidence.findForDownload(ctx.organizationId, upload.id, otherUserId))
+      .rejects.toBeInstanceOf(DeliveryEvidenceNotFoundError);
+    expect(await source.query(
+      `SELECT id, status, available_at FROM delivery_evidence
+        WHERE organization_id=$1 ORDER BY id`, [ctx.organizationId])).toEqual(before);
+    await expect(evidence.findForDownload(ctx.organizationId, upload.id, ctx.actorId))
+      .resolves.toMatchObject({ id: upload.id, status: 'available' });
   });
 
   it('atomically records a photographed incident, failed attempt, returned order and audit', async () => {

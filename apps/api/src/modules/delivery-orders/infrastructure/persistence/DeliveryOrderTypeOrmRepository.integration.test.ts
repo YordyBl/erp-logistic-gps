@@ -41,6 +41,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
   let repository: DeliveryOrderTypeOrmRepository | undefined;
   let organizations: OrganizationTypeOrmRepository | undefined;
   const organizationIds: string[] = [];
+  const customerIds = new Map<string, string>();
 
   beforeAll(async () => {
     if (databaseUrl === null) {
@@ -68,6 +69,7 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
       await dataSource
         .getRepository(DeliveryOrderEntity)
         .delete({ organizationId: In(organizationIds) });
+      await dataSource.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
       await dataSource
         .getRepository(OrganizationEntity)
         .delete({ id: In(organizationIds) });
@@ -116,6 +118,12 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
         createdAt: CREATED_AT,
       }),
     );
+    const customerId = randomUUID();
+    customerIds.set(organizationId, customerId);
+    await dataSourceOrThrow().query(`INSERT INTO customers
+      (id, organization_id, public_code, name, contact_name, contact_email, contact_phone, status, created_at)
+      VALUES ($1,$2,'TEST-CUSTOMER','Integration Customer','Test Contact','integration@example.test','+51 900 000 001','active',$3)`,
+    [customerId, organizationId, CREATED_AT]);
 
     return organizationId;
   }
@@ -124,6 +132,8 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     return DeliveryOrder.create({
       id: randomUUID(),
       organizationId,
+      customerId: customerIds.get(organizationId)!,
+      timeWindow: 'AM',
       publicCode,
       recipient: Recipient.create({
         name: 'Ana Quispe',

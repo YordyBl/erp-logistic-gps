@@ -8,6 +8,12 @@ export interface PlannedStop {
   readonly orderIds: readonly string[];
 }
 
+export interface PlannedRouteOrigin {
+  readonly addressLine: string;
+  readonly latitude: number;
+  readonly longitude: number;
+}
+
 export interface PlannedRoute {
   readonly id: string;
   readonly organizationId: string;
@@ -15,14 +21,19 @@ export interface PlannedRoute {
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;
-  readonly status: 'planned' | 'in_progress';
+  readonly origin?: PlannedRouteOrigin;
+  readonly simulatedCompletionEnabled?: boolean;
+  readonly status: 'planned' | 'in_progress' | 'completed';
   readonly stops: readonly PlannedStop[];
   readonly createdAt: string;
+  readonly startedAt?: string;
+  readonly completedAt?: string;
 }
 
 /** One atomic decision: route, links, and audited transitions commit together. */
 export interface RoutePlanningStore {
   plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute>;
+  list(organizationId: string): Promise<readonly PlannedRoute[]>;
   findById(organizationId: string, routeId: string): Promise<PlannedRoute | null>;
   /** Replace resources without touching stops, orders or their history. */
   reassign(organizationId: string, routeId: string, changes: {

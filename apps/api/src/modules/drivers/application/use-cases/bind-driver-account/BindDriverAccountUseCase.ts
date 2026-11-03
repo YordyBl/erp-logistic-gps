@@ -34,4 +34,10 @@ export class BindDriverAccountUseCase {
     if (!result.success) throw new DriverValidationError('Get driver account query is invalid');
     return { binding: await this.store.get(result.data.organizationId, result.data.driverId) };
   }
+
+  async listAccounts(organizationId: string) {
+    const result = z.uuid().safeParse(organizationId);
+    if (!result.success) throw new DriverValidationError('List driver accounts query is invalid');
+    return { accounts: await this.store.listAccounts(result.data) };
+  }
 }

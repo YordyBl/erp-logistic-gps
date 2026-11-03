@@ -276,6 +276,58 @@ export class DriverRouteTypeOrmStore implements DriverRouteExecutionStore {
     });
   }
 
+  async completeSimulated(organizationId: string, routeId: string, driverId: string,
+    actorUserId: string, occurredAt: string): Promise<DriverRouteView> {
+    return this.dataSource.transaction(async (manager) => {
+      const route = await manager.findOne(DeliveryRouteEntity, {
+        where: { id: routeId, organizationId }, lock: { mode: 'pessimistic_write' },
+      });
+      if (route === null || route.driverId !== driverId) throw new DeliveryRouteNotFoundError();
+      await this.requireDriver(manager, organizationId, driverId, actorUserId);
+      if (route.status === 'completed') return this.view(manager, route);
+      if (route.status !== 'in_progress') {
+        throw new DeliveryRouteConflictError('Only an in-progress simulated route can be completed');
+      }
+      const stops = await manager.find(DeliveryStopEntity, { where: { organizationId, routeId } });
+      const links = await manager.find(DeliveryStopOrderEntity, {
+        where: { organizationId, routeId, active: true },
+      });
+      if (stops.length !== 1 || links.length !== 1 || links[0]?.stopId !== stops[0]?.id) {
+        throw new DeliveryRouteConflictError('Automatic simulation completion requires one delivery stop and one order');
+      }
+      const activeLink = links[0];
+      if (activeLink === undefined) throw new DeliveryRouteConflictError('Simulated route has no active delivery order');
+      const orderId = activeLink.orderId;
+      const { order, attempt } = await this.lockActiveAttempt(manager, organizationId, orderId, actorUserId);
+      if (order.activeRouteId !== routeId || order.status !== 'in_transit') {
+        throw new DeliveryRouteConflictError('Simulated delivery order is not active on this route');
+      }
+      const timestamp = outcomeTimestamp(occurredAt, order.updatedAt, attempt.startedAt);
+      await manager.update(DeliveryOrderEntity, { id: orderId, organizationId }, {
+        status: 'delivered', updatedAt: timestamp,
+      });
+      await manager.update(DeliveryAttemptEntity, { id: attempt.id, organizationId }, {
+        status: 'delivered', completedAt: timestamp, receiverName: null,
+        deliveryNotes: 'SIMULATED: GPS route reached the delivery destination; no physical confirmation or photo was collected.',
+      });
+      await insertOrderHistory(manager, organizationId, orderId, actorUserId,
+        'in_transit', 'delivered', timestamp);
+
+      const routeCompletedAt = new Date(Math.max(timestamp.getTime(),
+        (route.startedAt?.getTime() ?? route.createdAt.getTime()) + 1));
+      await manager.update(DeliveryRouteEntity, { id: routeId, organizationId }, {
+        status: 'completed', completedAt: routeCompletedAt,
+      });
+      await manager.query(`INSERT INTO delivery_route_status_history
+        (id, organization_id, route_id, from_status, to_status, actor_user_id, occurred_at)
+        VALUES ($1,$2,$3,'in_progress','completed',$4,$5)`,
+      [randomUUID(), organizationId, routeId, actorUserId, routeCompletedAt]);
+      route.status = 'completed';
+      route.completedAt = routeCompletedAt;
+      return this.view(manager, route);
+    });
+  }
+
   private async lockActiveAttempt(manager: EntityManager, organizationId: string,
     orderId: string, actorUserId: string) {
     const candidates = await manager.query<{ routeId: string; driverId: string }[]>(`

@@ -4,6 +4,7 @@ import { requireFiniteNumber, requireTrimmedText } from './validation.js';
 export interface DeliveryAddressInput {
   readonly addressLine: string;
   readonly district: string;
+  readonly googleMapsUrl?: string | undefined;
   readonly latitude?: number | undefined;
   readonly longitude?: number | undefined;
 }
@@ -19,17 +20,20 @@ export interface DeliveryAddressInput {
 export class DeliveryAddress {
   readonly addressLine: string;
   readonly district: string;
+  readonly googleMapsUrl: string | undefined;
   readonly latitude: number | undefined;
   readonly longitude: number | undefined;
 
   private constructor(
     addressLine: string,
     district: string,
+    googleMapsUrl: string | undefined,
     latitude: number | undefined,
     longitude: number | undefined,
   ) {
     this.addressLine = addressLine;
     this.district = district;
+    this.googleMapsUrl = googleMapsUrl;
     this.latitude = latitude;
     this.longitude = longitude;
     Object.freeze(this);
@@ -43,6 +47,12 @@ export class DeliveryAddress {
       200,
     );
     const district = requireTrimmedText(input.district, 'deliveryAddress.district', 2, 80);
+    const googleMapsUrl = input.googleMapsUrl?.trim() || undefined;
+    if (googleMapsUrl !== undefined && (googleMapsUrl.length > 2048 || !/^https:\/\//i.test(googleMapsUrl))) {
+      throw new DeliveryOrderValidationError('deliveryAddress.googleMapsUrl must be an HTTPS URL', {
+        field: 'deliveryAddress.googleMapsUrl',
+      });
+    }
 
     const hasLatitude = input.latitude !== undefined;
     const hasLongitude = input.longitude !== undefined;
@@ -55,7 +65,7 @@ export class DeliveryAddress {
     }
 
     if (!hasLatitude || !hasLongitude) {
-      return new DeliveryAddress(addressLine, district, undefined, undefined);
+      return new DeliveryAddress(addressLine, district, googleMapsUrl, undefined, undefined);
     }
 
     const latitude = requireFiniteNumber(input.latitude, 'deliveryAddress.latitude');
@@ -75,6 +85,6 @@ export class DeliveryAddress {
       );
     }
 
-    return new DeliveryAddress(addressLine, district, latitude, longitude);
+    return new DeliveryAddress(addressLine, district, googleMapsUrl, latitude, longitude);
   }
 }

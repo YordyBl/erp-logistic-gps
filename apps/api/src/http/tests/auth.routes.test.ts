@@ -120,6 +120,27 @@ async function foreignAccessToken(
 }
 
 describe('POST /api/v1/auth/login', () => {
+  it('resolves the configured organization without trusting a caller-supplied tenant', async () => {
+    const testApp = await seededApp({ loginOrganizationId: ORGANIZATION_ID });
+    const response = await request(testApp.app).post(LOGIN_PATH).send({ email: ADMIN_EMAIL, password: TEST_PASSWORD });
+    expect(response.status).toBe(200);
+    expect(response.body.data.user.organizationId).toBe(ORGANIZATION_ID);
+    const spoofed = await login(testApp, { organizationId: OTHER_ORGANIZATION_ID });
+    expect(spoofed.status).toBe(400);
+    expect(spoofed.body.error.code).toBe('IDENTITY_INVALID_INPUT');
+    expect(setCookieHeaders(spoofed)).toEqual([]);
+  });
+
+  it('does not authenticate a user that exists only in another organization', async () => {
+    const testApp = buildTestApp({ loginOrganizationId: ORGANIZATION_ID });
+    await testApp.seedOrganization();
+    await testApp.seedOrganization({ id: OTHER_ORGANIZATION_ID, name: 'Other' });
+    await testApp.seedUser({ organizationId: OTHER_ORGANIZATION_ID, email: ADMIN_EMAIL });
+    const response = await request(testApp.app).post(LOGIN_PATH).send({ email: ADMIN_EMAIL, password: TEST_PASSWORD });
+    expect(response.status).toBe(401);
+    expect(setCookieHeaders(response)).toEqual([]);
+  });
+
   it('returns the access token in the body and the refresh token in a strict cookie', async () => {
     const testApp = await seededApp();
 

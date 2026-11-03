@@ -6,7 +6,10 @@ import {
   DeliveryEvidenceUnavailableError,
   DeliveryEvidenceValidationError,
 } from '../../domain/errors/DeliveryExecutionError.js';
-import { prepareEvidenceImage } from '../../domain/EvidenceImage.js';
+import {
+  EvidenceImageValidationError,
+  prepareEvidenceImage,
+} from '../../domain/EvidenceImage.js';
 import type {
   DeliveryEvidence,
   DeliveryEvidenceStore,
@@ -82,7 +85,15 @@ export class UploadDeliveryEvidenceUseCase {
       throw new DeliveryEvidenceValidationError('Upload delivery evidence command is invalid');
     }
 
-    const prepared = prepareEvidenceImage(input.bytes, input.declaredMimeType);
+    let prepared;
+    try {
+      prepared = prepareEvidenceImage(input.bytes, input.declaredMimeType);
+    } catch (error) {
+      if (error instanceof EvidenceImageValidationError) {
+        throw new DeliveryEvidenceValidationError(error.message);
+      }
+      throw error;
+    }
     const checksum = createHash('sha256').update(prepared.bytes).digest('hex');
     const reservation = await this.store.reserveUpload({
       id: randomUUID(),
