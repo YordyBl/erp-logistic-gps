@@ -20,3 +20,4 @@ coverage/
 infra/valhalla/data/*
 !infra/valhalla/data/.gitkeep
 brag-*
+videos*
