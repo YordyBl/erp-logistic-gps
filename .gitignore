@@ -19,3 +19,4 @@ coverage/
 # Local Valhalla OSM extract and generated routing graph; never commit map data.
 infra/valhalla/data/*
 !infra/valhalla/data/.gitkeep
+brag-*

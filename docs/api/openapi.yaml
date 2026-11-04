@@ -54,6 +54,10 @@ tags:
     description: Fleet catalog inside one organization
   - name: health
     description: Liveness and readiness probes
+  - name: tracking
+    description: Authenticated live delivery tracking
+  - name: dashboard
+    description: Organization-scoped dispatch dashboard
 paths:
   /healthz:
     get:
@@ -109,6 +113,103 @@ paths:
                     status: not_ready
                     checks:
                       database: down
+  /api/v1/dashboard:
+    get:
+      tags: [dashboard]
+      operationId: getDispatchDashboardSummary
+      summary: Get the dispatch dashboard summary
+      description: Returns organization-scoped order, route, delivery and incident counts, recent activity, and active-route positions. ADMIN and DISPATCHER roles are allowed.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Dashboard summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DispatchDashboardSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/tracking/ticket:
+    post:
+      tags: [tracking]
+      operationId: createTrackingTicket
+      summary: Issue a short-lived WebSocket ticket
+      description: Requires an authenticated user. The ticket is bound to that user's current identity and request Origin, expires after 30 seconds, and can be redeemed once at the tracking WebSocket endpoint. It is returned with Cache-Control private, no-store.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties: {}
+      responses:
+        '201':
+          description: One-use ticket issued.
+          headers:
+            Cache-Control:
+              schema: { type: string, example: private, no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [ticket, expiresAt]
+                    properties:
+                      ticket: { type: string, description: Opaque one-use credential; keep secret. }
+                      expiresAt: { type: string, format: date-time }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          description: Live tracking is unavailable.
+  /api/v1/tracking/socket:
+    get:
+      tags: [tracking]
+      operationId: connectTrackingWebSocket
+      summary: Open the authenticated live-tracking WebSocket
+      description: |
+        This is a WebSocket upgrade endpoint, not a conventional JSON REST call.
+        Obtain a ticket from `POST /api/v1/tracking/ticket`, then connect to this
+        path with `ticket` as a query parameter. The ticket is single-use, expires
+        after 30 seconds, and must be presented with the same Origin used when it
+        was issued. Invalid, expired, reused, or mismatched tickets are rejected
+        with HTTP 401 before upgrade.
+
+        On connection the server sends a JSON object with `type: "snapshot"`, a
+        sequence number, and `data`. A
+        client may request a fresh snapshot by sending the exact JSON message
+        `{"type":"snapshot"}`. Other client messages close the socket with code
+        1008. Server updates contain `type: "update"`, a sequence number, a
+        `kind`, and a `snapshot`;
+        `kind` is `route`, `order`, or `position`. The server revalidates identity
+        periodically and closes connections whose authorization is no longer valid.
+      x-websocket: true
+      security: []
+      parameters:
+        - in: query
+          name: ticket
+          required: true
+          schema: { type: string }
+          description: Single-use ticket from `POST /api/v1/tracking/ticket`.
+      responses:
+        '101':
+          description: WebSocket protocol upgrade accepted.
+        '401':
+          description: Ticket is absent, expired, already consumed, bound to another Origin, or no longer authorized.
+        '404':
+          description: The upgrade path does not match the tracking WebSocket endpoint.
   /api/v1/auth/login:
     post:
       tags: [auth]
@@ -3081,6 +3182,58 @@ components:
               type: string
               format: uuid
               description: Matches the `x-request-id` response header.
+    DispatchDashboardSummary:
+      type: object
+      required: [ordersAwaitingPlanning, routesInProgress, deliveriesToday, incidentsToday, orderStatusCounts, recentOrders, recentIncidents, activeRoutes]
+      properties:
+        ordersAwaitingPlanning: { type: integer, minimum: 0 }
+        routesInProgress: { type: integer, minimum: 0 }
+        deliveriesToday: { type: integer, minimum: 0 }
+        incidentsToday: { type: integer, minimum: 0 }
+        orderStatusCounts:
+          type: object
+          description: Count of orders by lifecycle status; all defined statuses are present.
+          additionalProperties: { type: integer, minimum: 0 }
+        recentOrders:
+          type: array
+          items:
+            type: object
+            required: [id, publicCode, status, createdAt]
+            properties:
+              id: { type: string, format: uuid }
+              publicCode: { type: string }
+              status: { $ref: '#/components/schemas/DeliveryOrderStatus' }
+              createdAt: { type: string, format: date-time }
+        recentIncidents:
+          type: array
+          items:
+            type: object
+            required: [id, orderId, publicCode, category, description, occurredAt]
+            properties:
+              id: { type: string, format: uuid }
+              orderId: { type: string, format: uuid }
+              publicCode: { type: string }
+              category: { type: string }
+              description: { type: string }
+              occurredAt: { type: string, format: date-time }
+        activeRoutes:
+          type: array
+          items:
+            type: object
+            required: [id, publicCode, plannedDate, lastPosition]
+            properties:
+              id: { type: string, format: uuid }
+              publicCode: { type: string }
+              plannedDate: { type: string, format: date }
+              lastPosition:
+                oneOf:
+                  - type: 'null'
+                  - type: object
+                    required: [latitude, longitude, receivedAt]
+                    properties:
+                      latitude: { type: number, minimum: -90, maximum: 90 }
+                      longitude: { type: number, minimum: -180, maximum: 180 }
+                      receivedAt: { type: string, format: date-time }
     LivenessStatus:
       type: object
       required: [status]

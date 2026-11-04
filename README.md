@@ -184,6 +184,7 @@ is a defect.
 | `apps/web` | React + TypeScript driver and dispatcher/admin client, built with Vite and served by nginx in Compose. |
 | `packages/api-contracts` | Shared HTTP contracts between API and web client (reserved). |
 | `docs/api/openapi.yaml` | OpenAPI 3.1 contract for the current HTTP surface. |
+| [`docs/architecture/application-services.md`](docs/architecture/application-services.md) | Application module and supporting-service responsibilities. |
 | `docs/architecture` | ADRs and the conceptual data model. |
 | `.github/workflows/ci.yml` | Lint/typecheck/tests, PostgreSQL integration and image builds. |
 | `ERP_LOGISTICO_LIMA_PLAN_ARQUITECTURA_v0.2.md` | Architecture plan (Spanish, source of truth for decisions). |
@@ -268,6 +269,7 @@ API code (`docker compose build`).
 | [ADR-008](docs/architecture/decisions/ADR-008-auth-implementation.md) | Auth implementation: HS256/jose, Argon2id parameters, refresh families, cookie flags, login rate limiting. |
 | [OpenAPI 3.1](docs/api/openapi.yaml) | HTTP source of truth for the current endpoints and errors. |
 | [Conceptual data model](docs/architecture/data-model.md) | Entities, Mermaid ER diagram, invariants, tenant and timezone conventions. |
+| [Application services](docs/architecture/application-services.md) | Module responsibilities and primary application operations. |
 | [`delivery-orders` docs](apps/api/src/modules/delivery-orders/docs/README.md) | Module business rules, architecture, data model and local decisions. |
 | [Architecture plan](ERP_LOGISTICO_LIMA_PLAN_ARQUITECTURA_v0.2.md) | Source of truth (Spanish): stack, rules, business model, security, phases. |
 
