@@ -1,3 +1,1 @@
-export function cn(...classes: readonly (string | false | null | undefined)[]): string {
-  return classes.filter(Boolean).join(' ');
-}
+export { cn } from "cn"
