@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { chooseOption, setupUser } from '../test/ui.js';
 
 import { OutcomeDialog } from './OutcomeDialog.js';
 import type { ApiClient, DeliveryOrder, DeliveryEvidence } from '../api/client.js';
@@ -52,7 +53,7 @@ function client(uploadEvidence: ApiClient['uploadEvidence']): ApiClient {
 
 describe('OutcomeDialog', () => {
   it('does not confirm from a local preview; it requires an available uploaded photo', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const uploadEvidence = vi.fn().mockResolvedValue(evidence);
     const api = client(uploadEvidence);
     const onComplete = vi.fn();
@@ -81,7 +82,7 @@ describe('OutcomeDialog', () => {
   });
 
   it('keeps confirmation unavailable when upload fails', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const uploadEvidence = vi.fn().mockRejectedValue(new Error('storage unavailable'));
     const api = client(uploadEvidence);
     render(<OutcomeDialog order={order} client={api} outcome="delivery" onComplete={vi.fn()} onClose={vi.fn()} />);
@@ -97,7 +98,7 @@ describe('OutcomeDialog', () => {
   });
 
   it('retries an incomplete upload with the same idempotency key', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const uploadEvidence = vi.fn()
       .mockRejectedValueOnce(new Error('storage unavailable'))
       .mockResolvedValueOnce(evidence);
@@ -117,13 +118,13 @@ describe('OutcomeDialog', () => {
   });
 
   it('records an incident only after its category, description, and photo are ready', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const api = client(vi.fn().mockResolvedValue(evidence));
     render(<OutcomeDialog order={order} client={api} outcome="incident" onComplete={vi.fn()} onClose={vi.fn()} />);
 
     const report = screen.getByRole('button', { name: 'Registrar incidencia' });
     expect((report as HTMLButtonElement).disabled).toBe(true);
-    await user.selectOptions(screen.getByLabelText('Categoría'), 'recipient_absent');
+    await chooseOption(user, screen.getByLabelText('Categoría'), 'Destinatario ausente');
     await user.type(screen.getByLabelText('Descripción'), 'No había nadie para recibir el pedido.');
     expect((report as HTMLButtonElement).disabled).toBe(true);
 
