@@ -1,23 +1,21 @@
-import type { ColumnDef } from '@tanstack/react-table';
-import { Check, CirclePause, Pencil, Plus, Truck } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Pencil, Plus, SearchX, Truck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
-import type { ApiClient, Vehicle, VehicleStatus } from '../api/client.js';
-import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
-import { DataTable } from '../components/data-table/DataTable.js';
+import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleStatus } from '../api/client.js';
 import { FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
-import { IconChip } from '../components/IconChip.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { Badge } from '../components/ui/badge.js';
+import { SearchInput } from '../components/SearchInput.js';
 import { Button } from '../components/ui/button.js';
-import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
 import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
+import { VehicleDetail } from './vehicles/VehicleDetail.js';
+import { VehicleListItem } from './vehicles/VehicleListItem.js';
+import { EMPTY_STATS, groupRoutesByVehicle, monthlyRoutes, summarizeVehicleRoutes, todayInLima } from './vehicles/vehicleStats.js';
 
-type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle'>;
+type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'listDispatchRoutes' | 'listDrivers'>;
 
 interface VehicleForm {
   plate: string;
@@ -34,6 +32,12 @@ const emptyForm = (): VehicleForm => ({ plate: '', type: '', capacityKg: '' });
 
 export function VehicleManagementPage({ client }: { readonly client: VehicleClient }) {
   const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
+  const [routes, setRoutes] = useState<readonly DispatchRoute[]>([]);
+  const [drivers, setDrivers] = useState<readonly Driver[]>([]);
+  const [routesError, setRoutesError] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const detailRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -51,7 +55,18 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     setLoading(true);
     setLoadError(null);
     try {
-      setVehicles(await client.listVehicles());
+      // El historial complementa la flota: si las rutas fallan, los vehículos se muestran igual.
+      const [loadedVehicles, activity] = await Promise.all([
+        client.listVehicles(),
+        Promise.all([client.listDispatchRoutes(), client.listDrivers()]).then(
+          ([loadedRoutes, loadedDrivers]) => ({ loadedRoutes, loadedDrivers }),
+          () => null,
+        ),
+      ]);
+      setVehicles(loadedVehicles);
+      setRoutes(activity?.loadedRoutes ?? []);
+      setDrivers(activity?.loadedDrivers ?? []);
+      setRoutesError(activity === null);
     } catch {
       setLoadError('No se pudieron cargar los vehículos. Comprueba la conexión e inténtalo de nuevo.');
     } finally {
@@ -104,54 +119,6 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     setNotice(null);
   }, []);
 
-  const columns = useMemo<readonly ColumnDef<Vehicle, unknown>[]>(() => [
-    {
-      accessorKey: 'plate',
-      header: ({ column }) => <SortableHeader column={column} title="Placa" />,
-      enableHiding: false,
-      cell: ({ row }) => (
-        <span className="flex items-center gap-3">
-          <IconChip icon={Truck} tone={row.original.status === 'active' ? 'primary' : 'neutral'} />
-          <span className="font-medium tabular-nums">{row.original.plate}</span>
-        </span>
-      ),
-    },
-    {
-      accessorKey: 'type',
-      header: ({ column }) => <SortableHeader column={column} title="Tipo" />,
-      meta: { title: 'Tipo' },
-    },
-    {
-      accessorKey: 'capacityKg',
-      header: ({ column }) => <SortableHeader column={column} title="Capacidad" />,
-      enableGlobalFilter: false,
-      meta: { title: 'Capacidad' },
-      cell: ({ row }) => <span className="tabular-nums">{capacityLabel(row.original.capacityKg)}</span>,
-    },
-    {
-      accessorKey: 'status',
-      header: 'Disponibilidad',
-      filterFn: 'arrIncludesSome',
-      enableGlobalFilter: false,
-      meta: { title: 'Disponibilidad' },
-      cell: ({ row }) => (
-        <Badge variant={row.original.status === 'active' ? 'success' : 'secondary'}>
-          {row.original.status === 'active' ? 'Activo' : 'Inactivo'}
-          {row.original.status === 'active' ? <Check data-icon="inline-end" aria-hidden="true" /> : <CirclePause data-icon="inline-end" aria-hidden="true" />}
-        </Badge>
-      ),
-    },
-    {
-      id: 'actions',
-      enableHiding: false,
-      cell: ({ row }) => (
-        <RowActions label={`Acciones de ${row.original.plate}`}>
-          <DropdownMenuItem onSelect={() => startEditing(row.original)}><Pencil aria-hidden="true" /> Editar vehículo</DropdownMenuItem>
-        </RowActions>
-      ),
-    },
-  ], [startEditing]);
-
   async function saveVehicle(event: FormEvent<HTMLFormElement>, vehicle: Vehicle) {
     event.preventDefault();
     setActionError(null);
@@ -183,6 +150,28 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   const activeCapacity = activeVehicles.reduce((total, vehicle) => total + (vehicle.capacityKg ?? 0), 0);
   const ready = !loading && loadError === null;
 
+  const routesByVehicle = useMemo(() => groupRoutesByVehicle(routes), [routes]);
+  const statsByVehicle = useMemo(() => new Map(
+    [...routesByVehicle].map(([vehicleId, list]) => [vehicleId, summarizeVehicleRoutes(list)] as const),
+  ), [routesByVehicle]);
+  const driversById = useMemo(() => new Map(drivers.map((driver) => [driver.id, driver] as const)), [drivers]);
+  const visibleVehicles = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase('es-PE');
+    return needle === '' ? vehicles : vehicles.filter((vehicle) =>
+      `${vehicle.plate} ${vehicle.type}`.toLocaleLowerCase('es-PE').includes(needle));
+  }, [query, vehicles]);
+  const selectedVehicle = visibleVehicles.find((vehicle) => vehicle.id === selectedId) ?? visibleVehicles[0];
+  const selectedRoutes = selectedVehicle === undefined ? [] : routesByVehicle.get(selectedVehicle.id) ?? [];
+
+  function selectVehicle(vehicle: Vehicle) {
+    setSelectedId(vehicle.id);
+    // En una sola columna el detalle queda debajo de la lista: se lleva la vista hasta él.
+    if (window.matchMedia('(max-width: 1023px)').matches) {
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      detailRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
+  }
+
   return (
     <section className="flex flex-col gap-6">
       <PageHeader title="Vehículos" description={ready && vehicles.length > 0 ? `${activeVehicles.length} de ${vehicles.length} vehículos activos · ${new Intl.NumberFormat('es-PE').format(activeCapacity)} kg de capacidad activa.` : 'Registra la flota y marca cada vehículo activo o inactivo para la operación.'}>
@@ -206,10 +195,35 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         </Empty>
       )}
       {ready && vehicles.length > 0 && (
-        <>
-          <DataTable label="Flota registrada" columns={columns} data={vehicles} searchPlaceholder="Buscar placa o tipo"
-            filters={[{ columnId: 'status', title: 'Disponibilidad', options: STATUS_OPTIONS }]} onRowClick={startEditing} />
-        </>
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-3 lg:sticky lg:top-4">
+            <SearchInput value={query} onChange={setQuery} label="Buscar vehículos" placeholder="Buscar placa o tipo" className="w-full" />
+            {visibleVehicles.length === 0 ? (
+              <Empty className="border">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
+                  <EmptyTitle>Ningún vehículo coincide</EmptyTitle>
+                  <EmptyDescription>Prueba con otra placa o tipo de vehículo.</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent><Button variant="outline" onClick={() => setQuery('')}>Ver todos</Button></EmptyContent>
+              </Empty>
+            ) : (
+              <ul aria-label="Flota registrada" className="flex flex-col gap-3 lg:max-h-[calc(100svh-12rem)] lg:overflow-y-auto lg:p-1">
+                {visibleVehicles.map((vehicle) => (
+                  <VehicleListItem key={vehicle.id} vehicle={vehicle} stats={statsByVehicle.get(vehicle.id) ?? EMPTY_STATS}
+                    selected={vehicle.id === selectedVehicle?.id} onSelect={() => selectVehicle(vehicle)} />
+                ))}
+              </ul>
+            )}
+          </div>
+          <div ref={detailRef} className="scroll-mt-4">
+            {selectedVehicle !== undefined && (
+              <VehicleDetail vehicle={selectedVehicle} stats={statsByVehicle.get(selectedVehicle.id) ?? EMPTY_STATS}
+                monthly={monthlyRoutes(selectedRoutes, todayInLima())} routes={selectedRoutes} drivers={driversById}
+                routesError={routesError} onEdit={() => startEditing(selectedVehicle)} />
+            )}
+          </div>
+        </div>
       )}
 
       <FormSheet open={creating} onOpenChange={setCreating} icon={Truck} title="Registrar vehículo"
@@ -267,9 +281,6 @@ function compareVehicles(left: Vehicle, right: Vehicle): number {
   return left.plate.localeCompare(right.plate) || left.id.localeCompare(right.id);
 }
 
-function capacityLabel(capacityKg: number | null): string {
-  return capacityKg === null ? 'No especificada' : `${new Intl.NumberFormat('es-PE').format(capacityKg)} kg`;
-}
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? `${fallback} ${error.message}` : fallback;

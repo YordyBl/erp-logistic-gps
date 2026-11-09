@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Moto">
+  <ellipse cx="164" cy="158" rx="110" ry="8" fill="#0f172a" opacity="0.08"/>
+  <path d="M224 70l14 64" stroke="#374151" stroke-width="7" stroke-linecap="round"/>
+  <rect x="104" y="110" width="104" height="14" rx="7" fill="#374151"/>
+  <path d="M62 120c0-22 14-34 34-34h56a10 10 0 0 1 10 10v24z" fill="#0c7a4b"/>
+  <rect x="78" y="74" width="80" height="13" rx="6.5" fill="#1f2937"/>
+  <rect x="52" y="30" width="62" height="44" rx="8" fill="#0a6a41"/>
+  <path d="M66 50h34" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.85"/>
+  <path d="M196 124l18-66h14l-8 66z" fill="#0c7a4b"/>
+  <path d="M220 58l-6-18" stroke="#1f2937" stroke-width="6" stroke-linecap="round"/>
+  <path d="M200 38h28" stroke="#1f2937" stroke-width="7" stroke-linecap="round"/>
+  <rect x="226" y="62" width="12" height="10" rx="3" fill="#f5c451"/>
+  <circle cx="92" cy="134" r="22" fill="#1f2937"/><circle cx="92" cy="134" r="10" fill="#d1d5db"/><circle cx="92" cy="134" r="3" fill="#6b7280"/>
+  <circle cx="238" cy="134" r="22" fill="#1f2937"/><circle cx="238" cy="134" r="10" fill="#d1d5db"/><circle cx="238" cy="134" r="3" fill="#6b7280"/>
+</svg>
