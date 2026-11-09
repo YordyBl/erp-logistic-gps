@@ -1,22 +1,18 @@
-import type { ColumnDef } from '@tanstack/react-table';
-import { Check, CircleAlert, CirclePause, IdCard, KeyRound, Pencil, Plus } from 'lucide-react';
+import { IdCard, KeyRound, Pencil, Plus, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
-import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
-import { DataTable } from '../components/data-table/DataTable.js';
 import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
-import { Avatar, AvatarFallback } from '../components/ui/avatar.js';
+import { SearchInput } from '../components/SearchInput.js';
 import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
-import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
-import { initials } from '../lib/format.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
+import { DriverCard } from './drivers/DriverCard.js';
 
 type DriverClient = Pick<ApiClient,
   'listDrivers' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
@@ -32,6 +28,15 @@ interface DriverForm {
 const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: string }[] = [
   { value: 'active', label: 'Activo' },
   { value: 'inactive', label: 'Inactivo' },
+];
+
+type DriverFilter = 'all' | 'active' | 'inactive' | 'unlinked';
+
+const FILTERS: readonly { readonly value: DriverFilter; readonly label: string }[] = [
+  { value: 'all', label: 'Todos' },
+  { value: 'active', label: 'Activos' },
+  { value: 'inactive', label: 'Inactivos' },
+  { value: 'unlinked', label: 'Sin cuenta' },
 ];
 
 const newDriverForm = (): DriverForm => ({
@@ -56,6 +61,8 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const [form, setForm] = useState<DriverForm>(newDriverForm);
   const [editForm, setEditForm] = useState<DriverForm>(newDriverForm);
   const [selectedAccounts, setSelectedAccounts] = useState<Readonly<Record<string, string>>>({});
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<DriverFilter>('all');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -183,62 +190,28 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const linkedCount = accounts.filter((account) => account.driverId !== null).length;
   const ready = !loading && loadError === null;
 
-  const columns = useMemo<readonly ColumnDef<Driver, unknown>[]>(() => [
-    {
-      accessorKey: 'fullName',
-      header: ({ column }) => <SortableHeader column={column} title="Conductor" />,
-      enableHiding: false,
-      cell: ({ row }) => (
-        <span className="flex items-center gap-3">
-          <Avatar><AvatarFallback>{initials(row.original.fullName)}</AvatarFallback></Avatar>
-          <span className="font-medium">{row.original.fullName}</span>
-        </span>
-      ),
-    },
-    { accessorKey: 'documentNumber', header: 'Documento', meta: { title: 'Documento', className: 'tabular-nums' } },
-    { accessorKey: 'phone', header: 'Teléfono', meta: { title: 'Teléfono', className: 'tabular-nums' } },
-    { accessorKey: 'licenseNumber', header: 'Licencia', meta: { title: 'Licencia', className: 'tabular-nums' } },
-    {
-      id: 'account',
-      accessorFn: (driver) => accounts.find((account) => account.driverId === driver.id)?.email ?? '',
-      header: 'Cuenta',
-      meta: { title: 'Cuenta' },
-      cell: ({ row }) => {
-        if (!canBindAccounts) return <span className="text-muted-foreground">Vinculación reservada a ADMIN</span>;
-        const linked = accounts.find((account) => account.driverId === row.original.id);
-        return linked === undefined
-          ? <Badge variant="warning">Sin cuenta<CircleAlert data-icon="inline-end" aria-hidden="true" /></Badge>
-          : <span>{linked.email}</span>;
-      },
-    },
-    {
-      accessorKey: 'status',
-      header: 'Estado',
-      filterFn: 'arrIncludesSome',
-      enableGlobalFilter: false,
-      meta: { title: 'Estado' },
-      cell: ({ row }) => (
-        <Badge variant={row.original.status === 'active' ? 'success' : 'secondary'}>
-          {row.original.status === 'active' ? 'Activo' : 'Inactivo'}
-          {row.original.status === 'active' ? <Check data-icon="inline-end" aria-hidden="true" /> : <CirclePause data-icon="inline-end" aria-hidden="true" />}
-        </Badge>
-      ),
-    },
-    {
-      id: 'actions',
-      enableHiding: false,
-      cell: ({ row }) => (
-        <RowActions label={`Acciones de ${row.original.fullName}`}>
-          <DropdownMenuItem onSelect={() => startEditing(row.original)}><Pencil aria-hidden="true" /> Editar conductor</DropdownMenuItem>
-          {canBindAccounts && (
-            <DropdownMenuItem onSelect={() => { setActionError(null); setNotice(null); setAccountDriverId(row.original.id); }}>
-              <KeyRound aria-hidden="true" /> Cuenta de acceso
-            </DropdownMenuItem>
-          )}
-        </RowActions>
-      ),
-    },
-  ], [accounts, canBindAccounts, startEditing]);
+  const accountByDriver = useMemo(() => new Map(
+    accounts.flatMap((account) => account.driverId === null ? [] : [[account.driverId, account] as const]),
+  ), [accounts]);
+  const filterCounts: Readonly<Record<DriverFilter, number>> = {
+    all: drivers.length,
+    active: activeCount,
+    inactive: drivers.length - activeCount,
+    unlinked: drivers.filter((driver) => !accountByDriver.has(driver.id)).length,
+  };
+  const visibleDrivers = useMemo(() => {
+    const needle = normalize(query.trim());
+    return drivers.filter((driver) => matchesFilter(driver, filter, accountByDriver) &&
+      (needle === '' || [driver.fullName, driver.documentNumber, driver.licenseNumber, driver.phone]
+        .some((value) => normalize(value).includes(needle))));
+  }, [accountByDriver, drivers, filter, query]);
+  const filterOptions = FILTERS.filter((option) => canBindAccounts || option.value !== 'unlinked');
+
+  function openAccount(driver: Driver) {
+    setActionError(null);
+    setNotice(null);
+    setAccountDriverId(driver.id);
+  }
 
   return (
     <section className="flex flex-col gap-6">
@@ -264,10 +237,40 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         </Empty>
       )}
       {ready && drivers.length > 0 && (
-        <>
-          <DataTable label="Personal registrado" columns={columns} data={drivers} searchPlaceholder="Buscar nombre, documento o licencia"
-            filters={[{ columnId: 'status', title: 'Estado', options: STATUS_OPTIONS }]} onRowClick={startEditing} />
-        </>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap" role="group" aria-label="Filtrar conductores">
+              {filterOptions.map((option) => (
+                <Button key={option.value} type="button" variant={filter === option.value ? 'secondary' : 'ghost'}
+                  aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}>
+                  {option.label}
+                  <span className="text-muted-foreground tabular-nums">{filterCounts[option.value]}</span>
+                </Button>
+              ))}
+            </div>
+            <SearchInput value={query} onChange={setQuery} label="Buscar conductores" placeholder="Buscar nombre, documento o licencia" className="w-full lg:w-96" />
+          </div>
+
+          {visibleDrivers.length === 0 ? (
+            <Empty className="border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
+                <EmptyTitle>Ningún conductor coincide</EmptyTitle>
+                <EmptyDescription>Prueba con otro nombre, documento o licencia, o muestra todos los conductores.</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <ul aria-label="Personal registrado" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+              {visibleDrivers.map((driver) => (
+                <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts}
+                  onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
 
       <FormSheet open={createOpen} onOpenChange={setCreateOpen} icon={IdCard} title="Registrar conductor"
@@ -361,6 +364,20 @@ function AccountSection({ canBindAccounts, driver, linkedAccount, choices, selec
       <Button type="button" disabled={selectedUserId === '' || busy} onClick={onLink}>Vincular cuenta</Button>
     </div>
   );
+}
+
+function matchesFilter(driver: Driver, filter: DriverFilter, accountByDriver: ReadonlyMap<string, DriverAccountOption>): boolean {
+  switch (filter) {
+    case 'all': return true;
+    case 'active': return driver.status === 'active';
+    case 'inactive': return driver.status === 'inactive';
+    case 'unlinked': return !accountByDriver.has(driver.id);
+  }
+}
+
+/** Minúsculas y sin tildes, para que "Gomez" encuentre "Gómez". */
+function normalize(value: string): string {
+  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('es-PE');
 }
 
 function compareDrivers(left: Driver, right: Driver): number {

@@ -40,7 +40,7 @@ describe('DriverManagementPage', () => {
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     expect(within(row).getByText('DNI-123456')).toBeTruthy();
     expect(within(row).getByText('A-123456')).toBeTruthy();
 
@@ -63,7 +63,7 @@ describe('DriverManagementPage', () => {
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Editar conductor');
     const sheet = screen.getByRole('dialog', { name: 'Editar Valeria Gomez' });
     expect(within(sheet).queryByLabelText('Documento de identidad')).toBeNull();
@@ -88,7 +88,7 @@ describe('DriverManagementPage', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
     await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
     await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
@@ -107,7 +107,7 @@ describe('DriverManagementPage', () => {
     vi.stubGlobal('confirm', confirm);
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    await screen.findByRole('row', { name: /Valeria Gomez/ });
+    await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
     await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
     await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
@@ -120,7 +120,7 @@ describe('DriverManagementPage', () => {
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts={false} />);
 
-    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     expect(client.listDriverAccounts).not.toHaveBeenCalled();
     expect(within(row).queryByLabelText('Cuenta para Valeria Gomez')).toBeNull();
     expect(within(row).queryByText('valeria@example.test')).toBeNull();
