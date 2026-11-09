@@ -285,8 +285,33 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Marca sin datos sensibles: la cookie de refresco es httpOnly y no se puede leer, así que
+ * este indicador evita un 401 seguro en cada visita de quien nunca inició sesión.
+ */
+const SESSION_HINT_KEY = 'erp-logistic.has-session';
+
+function hasSessionHint(): boolean {
+  try {
+    return window.localStorage.getItem(SESSION_HINT_KEY) === '1';
+  } catch {
+    // Sin almacenamiento disponible se consulta la cookie: es el comportamiento seguro.
+    return true;
+  }
+}
+
+function rememberSessionHint(active: boolean): void {
+  try {
+    if (active) window.localStorage.setItem(SESSION_HINT_KEY, '1');
+    else window.localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // La marca solo evita una petición; sin ella la sesión sigue funcionando.
+  }
+}
+
 export class ApiClient {
   private accessToken: string | null = null;
+  private sessionRestore: Promise<AuthSession | null> | null = null;
 
   constructor(
     private readonly options: {
@@ -305,10 +330,24 @@ export class ApiClient {
       body: JSON.stringify({ email, password }),
     }, false);
     this.accessToken = session.accessToken;
+    rememberSessionHint(true);
     return session;
   }
 
-  async restoreSession(): Promise<AuthSession | null> {
+  /**
+   * El refresco rota la cookie: dos peticiones simultáneas harían que la segunda reciba 401 y
+   * cierre una sesión válida. Por eso quienes lleguen mientras hay una en curso la comparten.
+   */
+  restoreSession(): Promise<AuthSession | null> {
+    return hasSessionHint() ? this.refreshOnce() : Promise.resolve(null);
+  }
+
+  private refreshOnce(): Promise<AuthSession | null> {
+    this.sessionRestore ??= this.refreshSession().finally(() => { this.sessionRestore = null; });
+    return this.sessionRestore;
+  }
+
+  private async refreshSession(): Promise<AuthSession | null> {
     try {
       const session = await this.requestData<AuthSession>('/auth/refresh', {
         method: 'POST',
@@ -317,7 +356,10 @@ export class ApiClient {
       return session;
     } catch (error) {
       this.accessToken = null;
-      if (error instanceof ApiError && error.status === 401) return null;
+      if (error instanceof ApiError && error.status === 401) {
+        rememberSessionHint(false);
+        return null;
+      }
       throw error;
     }
   }
@@ -327,6 +369,7 @@ export class ApiClient {
       await this.send('/auth/logout', { method: 'POST' }, false);
     } finally {
       this.accessToken = null;
+      rememberSessionHint(false);
     }
   }
 
@@ -561,7 +604,7 @@ export class ApiClient {
 
     if (response.status === 401 && allowRefresh && this.accessToken !== null &&
         !path.startsWith('/auth/')) {
-      const session = await this.restoreSession();
+      const session = await this.refreshOnce();
       if (session === null) throw await this.toApiError(response);
       return this.send(path, init, false);
     }

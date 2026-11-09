@@ -32,6 +32,33 @@ describe('ApiClient dispatch planning', () => {
   });
 });
 
+describe('ApiClient session restore', () => {
+  const session = { accessToken: 'token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+
+  it('shares one refresh between concurrent callers because the cookie rotates', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({ data: session }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    const [first, second] = await Promise.all([client.restoreSession(), client.restoreSession()]);
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(first).toEqual(second);
+  });
+
+  it('skips the refresh request when this browser never signed in', async () => {
+    vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() } });
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    await expect(client.restoreSession()).resolves.toBeNull();
+
+    expect(fetcher).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe('ApiClient tracking connection', () => {
   it('requests an authenticated one-use ticket over HTTP', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(

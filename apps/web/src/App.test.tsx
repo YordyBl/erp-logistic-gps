@@ -70,6 +70,42 @@ describe('role-specific delivery workspace', () => {
     expect(api.login).toHaveBeenCalledWith('driver@example.test', 'password');
   });
 
+  it('validates the sign-in form before calling the API', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(null);
+    const login = vi.spyOn(api, 'login');
+
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /Ingresar/ }));
+    expect(await screen.findByText('Ingresa tu correo.')).toBeTruthy();
+    expect(screen.getByText('Ingresa tu contraseña.')).toBeTruthy();
+
+    await user.type(screen.getByLabelText('Correo operativo'), 'sin-arroba');
+    await user.type(screen.getByLabelText('Contraseña'), 'password');
+    await user.click(screen.getByRole('button', { name: /Ingresar/ }));
+    expect(await screen.findByText('Ingresa un correo válido.')).toBeTruthy();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the Pedidos submenu each time it opens to include new orders', async () => {
+    const user = userEvent.setup();
+    const listOrders = vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order]);
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+
+    render(<App />);
+    const toggle = await screen.findByRole('button', { name: 'Pedidos' });
+    await user.click(toggle);
+    await screen.findByRole('button', { name: 'Pedido LIM-2041' });
+    const callsAfterFirstOpen = listOrders.mock.calls.length;
+
+    listOrders.mockResolvedValue([order, { ...order, id: 'order-3', publicCode: 'LIM-2043' }]);
+    await user.click(toggle);
+    await user.click(toggle);
+
+    expect(await screen.findByRole('button', { name: 'Pedido LIM-2043' })).toBeTruthy();
+    expect(listOrders.mock.calls.length).toBeGreaterThan(callsAfterFirstOpen);
+  });
+
   it('shows the assigned driver route and start action without exposing operator evidence search', async () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
@@ -101,8 +137,39 @@ describe('role-specific delivery workspace', () => {
     expect(await screen.findByText('Lima Supply')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Pedidos' }));
-    expect(await screen.findByRole('heading', { name: 'Pedidos de entrega' })).toBeTruthy();
-    expect(await screen.findByText('LIM-2041')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
+    expect((await screen.findAllByText('LIM-2041')).length).toBeGreaterThan(0);
+  });
+
+  it('lists order codes in the Pedidos submenu and opens the selected order detail', async () => {
+    const user = userEvent.setup();
+    const secondOrder: DeliveryOrder = {
+      ...order,
+      id: 'order-2',
+      publicCode: 'LIM-2042',
+      status: 'in_transit',
+      recipient: { name: 'Luis Soto', phone: '999 222 333' },
+      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores', latitude: null, longitude: null },
+    };
+    const listOrders = vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order, secondOrder]);
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Estado del reparto' });
+    // El Resumen pide los pedidos para su tabla; el menú no los lista hasta que se abre.
+    await waitFor(() => expect(listOrders).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'Pedido LIM-2041' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
+    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
+    await waitFor(() => expect(listOrders.mock.calls.length).toBeGreaterThan(1));
+
+    const secondCode = await screen.findByRole('button', { name: 'Pedido LIM-2042' });
+    expect(screen.getByRole('button', { name: 'Pedido LIM-2041' })).toBeTruthy();
+    await user.click(secondCode);
+
+    expect(await screen.findByRole('heading', { name: 'LIM-2042' })).toBeTruthy();
+    expect(screen.getByText('999 222 333')).toBeTruthy();
   });
 
   it('opens the control tower for dispatchers while keeping it out of the driver workspace', async () => {
@@ -176,7 +243,6 @@ describe('role-specific delivery workspace', () => {
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'Evidencias' }));
     await user.type(await screen.findByLabelText('Código del pedido'), 'LIM-2041');
-    await user.click(screen.getByRole('button', { name: /Buscar pedido/ }));
 
     expect(await screen.findByText('Foto 1')).toBeTruthy();
     expect(listEvidence).toHaveBeenCalledWith(order.id);
