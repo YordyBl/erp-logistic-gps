@@ -3,7 +3,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
+import { chooseOption, setupUser } from '../test/ui.js';
 
 import type { ApiClient, Driver, DriverAccountOption } from '../api/client.js';
 import { DriverManagementPage } from './DriverManagementPage.js';
@@ -64,7 +64,7 @@ describe('DriverManagementPage', () => {
     render(<DriverManagementPage client={client} canBindAccounts />);
 
     const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Editar conductor');
+    await user.click(within(row).getByRole('button', { name: 'Editar a Valeria Gomez' }));
     const sheet = screen.getByRole('dialog', { name: 'Editar Valeria Gomez' });
     expect(within(sheet).queryByLabelText('Documento de identidad')).toBeNull();
     const phone = within(sheet).getByLabelText('Teléfono');
@@ -89,13 +89,13 @@ describe('DriverManagementPage', () => {
     render(<DriverManagementPage client={client} canBindAccounts />);
 
     const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    await user.click(within(row).getByRole('button', { name: 'Vincular cuenta de Valeria Gomez' }));
     await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
     await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
     await waitFor(() => expect(client.bindDriverAccount).toHaveBeenCalledWith(driver.id, account.userId));
     expect(await within(row).findByText('valeria@example.test')).toBeTruthy();
 
-    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    await user.click(within(row).getByRole('button', { name: 'Cuenta de Valeria Gomez' }));
     await user.click(await screen.findByRole('button', { name: 'Desvincular cuenta' }));
     await waitFor(() => expect(client.bindDriverAccount).toHaveBeenLastCalledWith(driver.id, null));
   });
@@ -107,8 +107,8 @@ describe('DriverManagementPage', () => {
     vi.stubGlobal('confirm', confirm);
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    await user.click(within(row).getByRole('button', { name: 'Vincular cuenta de Valeria Gomez' }));
     await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
     await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
 
@@ -125,5 +125,34 @@ describe('DriverManagementPage', () => {
     expect(within(row).queryByLabelText('Cuenta para Valeria Gomez')).toBeNull();
     expect(within(row).queryByText('valeria@example.test')).toBeNull();
     expect(within(row).getByText('Vinculación reservada a ADMIN')).toBeTruthy();
+  });
+
+  it('filters drivers by status and account, and searches ignoring accents', async () => {
+    const user = setupUser();
+    const client = buildClient();
+    const inactive: Driver = { ...driver, id: 'driver-2', fullName: 'Luis Peña', documentNumber: 'DNI-999999', status: 'inactive' };
+    client.listDrivers.mockResolvedValue([driver, inactive]);
+    client.listDriverAccounts.mockResolvedValue([{ ...account, driverId: driver.id }]);
+    render(<DriverManagementPage client={client} canBindAccounts />);
+
+    await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    await user.click(screen.getByRole('button', { name: /Inactivos/ }));
+    expect(screen.queryByRole('listitem', { name: /Valeria Gomez/ })).toBeNull();
+    expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Sin cuenta/ }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: /Todos/ }));
+    await user.type(screen.getByLabelText('Buscar conductores'), 'pena');
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
+
+    await user.clear(screen.getByLabelText('Buscar conductores'));
+    await user.type(screen.getByLabelText('Buscar conductores'), 'zzz');
+    expect(screen.getByText('Ningún conductor coincide')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Ver todos' }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 });

@@ -13,6 +13,7 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { FieldGroup } from '../components/ui/field.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
 import { DriverCard } from './drivers/DriverCard.js';
+import { countByFilter, DRIVER_FILTERS, filterDrivers, indexAccountsByDriver, type DriverFilter } from './drivers/driverFilters.js';
 
 type DriverClient = Pick<ApiClient,
   'listDrivers' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
@@ -28,15 +29,6 @@ interface DriverForm {
 const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: string }[] = [
   { value: 'active', label: 'Activo' },
   { value: 'inactive', label: 'Inactivo' },
-];
-
-type DriverFilter = 'all' | 'active' | 'inactive' | 'unlinked';
-
-const FILTERS: readonly { readonly value: DriverFilter; readonly label: string }[] = [
-  { value: 'all', label: 'Todos' },
-  { value: 'active', label: 'Activos' },
-  { value: 'inactive', label: 'Inactivos' },
-  { value: 'unlinked', label: 'Sin cuenta' },
 ];
 
 const newDriverForm = (): DriverForm => ({
@@ -190,22 +182,10 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const linkedCount = accounts.filter((account) => account.driverId !== null).length;
   const ready = !loading && loadError === null;
 
-  const accountByDriver = useMemo(() => new Map(
-    accounts.flatMap((account) => account.driverId === null ? [] : [[account.driverId, account] as const]),
-  ), [accounts]);
-  const filterCounts: Readonly<Record<DriverFilter, number>> = {
-    all: drivers.length,
-    active: activeCount,
-    inactive: drivers.length - activeCount,
-    unlinked: drivers.filter((driver) => !accountByDriver.has(driver.id)).length,
-  };
-  const visibleDrivers = useMemo(() => {
-    const needle = normalize(query.trim());
-    return drivers.filter((driver) => matchesFilter(driver, filter, accountByDriver) &&
-      (needle === '' || [driver.fullName, driver.documentNumber, driver.licenseNumber, driver.phone]
-        .some((value) => normalize(value).includes(needle))));
-  }, [accountByDriver, drivers, filter, query]);
-  const filterOptions = FILTERS.filter((option) => canBindAccounts || option.value !== 'unlinked');
+  const accountByDriver = useMemo(() => indexAccountsByDriver(accounts), [accounts]);
+  const filterCounts = useMemo(() => countByFilter(drivers, accountByDriver), [accountByDriver, drivers]);
+  const visibleDrivers = useMemo(() => filterDrivers(drivers, filter, query, accountByDriver), [accountByDriver, drivers, filter, query]);
+  const filterOptions = DRIVER_FILTERS.filter((option) => canBindAccounts || option.value !== 'unlinked');
 
   function openAccount(driver: Driver) {
     setActionError(null);
@@ -255,8 +235,12 @@ export function DriverManagementPage({ client, canBindAccounts }: {
             <Empty className="border">
               <EmptyHeader>
                 <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
-                <EmptyTitle>Ningún conductor coincide</EmptyTitle>
-                <EmptyDescription>Prueba con otro nombre, documento o licencia, o muestra todos los conductores.</EmptyDescription>
+                <EmptyTitle>{query.trim() === '' ? 'No hay conductores en este grupo' : 'Ningún conductor coincide'}</EmptyTitle>
+                <EmptyDescription>
+                  {query.trim() === ''
+                    ? 'Elige otro filtro o muestra todos los conductores.'
+                    : 'Prueba con otro nombre, documento o licencia, o muestra todos los conductores.'}
+                </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
                 <Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button>
@@ -364,20 +348,6 @@ function AccountSection({ canBindAccounts, driver, linkedAccount, choices, selec
       <Button type="button" disabled={selectedUserId === '' || busy} onClick={onLink}>Vincular cuenta</Button>
     </div>
   );
-}
-
-function matchesFilter(driver: Driver, filter: DriverFilter, accountByDriver: ReadonlyMap<string, DriverAccountOption>): boolean {
-  switch (filter) {
-    case 'all': return true;
-    case 'active': return driver.status === 'active';
-    case 'inactive': return driver.status === 'inactive';
-    case 'unlinked': return !accountByDriver.has(driver.id);
-  }
-}
-
-/** Minúsculas y sin tildes, para que "Gomez" encuentre "Gómez". */
-function normalize(value: string): string {
-  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('es-PE');
 }
 
 function compareDrivers(left: Driver, right: Driver): number {

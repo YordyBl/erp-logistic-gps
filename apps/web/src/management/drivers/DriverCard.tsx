@@ -2,12 +2,10 @@ import { CalendarDays, CarFront, Check, CircleAlert, CirclePause, IdCard, KeyRou
 import { useId, type ReactNode } from 'react';
 
 import type { Driver, DriverAccountOption } from '../../api/client.js';
-import { RowActions } from '../../components/data-table/columnHelpers.js';
 import { Avatar, AvatarFallback } from '../../components/ui/avatar.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../../components/ui/card.js';
-import { DropdownMenuItem } from '../../components/ui/dropdown-menu.js';
 import { initials } from '../../lib/format.js';
 
 const SINCE_FORMAT = new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric', timeZone: 'America/Lima' });
@@ -32,7 +30,7 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
               <AvatarFallback className={active ? 'bg-primary/10 font-semibold text-primary' : 'font-semibold'}>{initials(driver.fullName)}</AvatarFallback>
             </Avatar>
             <div className="flex min-w-0 flex-col gap-1">
-              <CardTitle id={nameId} className="truncate">{driver.fullName}</CardTitle>
+              <CardTitle id={nameId} className="truncate" title={driver.fullName}>{driver.fullName}</CardTitle>
               <CardDescription>
                 <Badge variant={active ? 'success' : 'secondary'}>
                   {active ? 'Activo' : 'Inactivo'}
@@ -42,12 +40,9 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
             </div>
           </div>
           <CardAction>
-            <RowActions label={`Acciones de ${driver.fullName}`}>
-              <DropdownMenuItem onSelect={onEdit}><Pencil aria-hidden="true" /> Editar conductor</DropdownMenuItem>
-              {canBindAccounts && (
-                <DropdownMenuItem onSelect={onManageAccount}><KeyRound aria-hidden="true" /> Cuenta de acceso</DropdownMenuItem>
-              )}
-            </RowActions>
+            <Button type="button" variant="ghost" size="icon" onClick={onEdit} aria-label={`Editar a ${driver.fullName}`} title="Editar conductor">
+              <Pencil aria-hidden="true" />
+            </Button>
           </CardAction>
         </CardHeader>
 
@@ -70,11 +65,6 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
           {canBindAccounts && (
             <Button type="button" variant="outline" onClick={onManageAccount} aria-label={`${account === undefined ? 'Vincular cuenta de' : 'Cuenta de'} ${driver.fullName}`}>
               <KeyRound data-icon="inline-start" aria-hidden="true" />{account === undefined ? 'Vincular' : 'Cuenta'}
-            </Button>
-          )}
-          {!canBindAccounts && (
-            <Button type="button" variant="outline" onClick={onEdit} aria-label={`Editar a ${driver.fullName}`}>
-              <Pencil data-icon="inline-start" aria-hidden="true" />Editar
             </Button>
           )}
         </CardFooter>
