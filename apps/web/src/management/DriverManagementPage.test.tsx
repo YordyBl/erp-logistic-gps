@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
 
 import type { ApiClient, Driver, DriverAccountOption } from '../api/client.js';
 import { DriverManagementPage } from './DriverManagementPage.js';
@@ -35,14 +36,15 @@ afterEach(() => {
 
 describe('DriverManagementPage', () => {
   it('lists driver details and registers a driver through the catalog API', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
     expect(within(row).getByText('DNI-123456')).toBeTruthy();
     expect(within(row).getByText('A-123456')).toBeTruthy();
 
+    await user.click(screen.getByRole('button', { name: 'Registrar conductor' }));
     await user.type(screen.getByLabelText('Nombre completo'), 'Luis Paredes');
     await user.type(screen.getByLabelText('Documento de identidad'), 'DNI-654321');
     await user.type(screen.getByLabelText('Teléfono'), '+51 900 111 222');
@@ -57,27 +59,28 @@ describe('DriverManagementPage', () => {
   });
 
   it('updates editable profile fields without allowing identity-document changes', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await user.click(within(row).getByRole('button', { name: 'Editar Valeria Gomez' }));
-    const phone = within(row).getByLabelText('Teléfono');
+    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Editar conductor');
+    const sheet = screen.getByRole('dialog', { name: 'Editar Valeria Gomez' });
+    expect(within(sheet).queryByLabelText('Documento de identidad')).toBeNull();
+    const phone = within(sheet).getByLabelText('Teléfono');
     await user.clear(phone);
     await user.type(phone, '+51 900 111 222');
-    await user.click(within(row).getByRole('button', { name: 'Guardar cambios' }));
+    await user.click(within(sheet).getByRole('button', { name: 'Guardar cambios' }));
 
     await waitFor(() => expect(client.updateDriver).toHaveBeenCalledWith(driver.id, {
       fullName: driver.fullName, phone: '+51 900 111 222', licenseNumber: driver.licenseNumber,
       status: driver.status,
     }));
     expect(within(row).getByText('DNI-123456')).toBeTruthy();
-    expect(within(row).queryByLabelText('Documento de identidad')).toBeNull();
   });
 
   it('lets an ADMIN link and unlink only an active account that is available or already assigned here', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = buildClient();
     client.listDriverAccounts
       .mockResolvedValueOnce([account])
@@ -85,26 +88,29 @@ describe('DriverManagementPage', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await user.selectOptions(within(row).getByLabelText('Cuenta para Valeria Gomez'), account.userId);
-    await user.click(within(row).getByRole('button', { name: 'Vincular cuenta' }));
+    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
+    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
+    await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
     await waitFor(() => expect(client.bindDriverAccount).toHaveBeenCalledWith(driver.id, account.userId));
     expect(await within(row).findByText('valeria@example.test')).toBeTruthy();
 
-    await user.click(within(row).getByRole('button', { name: 'Desvincular cuenta' }));
+    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    await user.click(await screen.findByRole('button', { name: 'Desvincular cuenta' }));
     await waitFor(() => expect(client.bindDriverAccount).toHaveBeenLastCalledWith(driver.id, null));
   });
 
   it('requires confirmation before linking an account', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = buildClient();
     const confirm = vi.fn().mockReturnValue(false);
     vi.stubGlobal('confirm', confirm);
     render(<DriverManagementPage client={client} canBindAccounts />);
 
-    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await user.selectOptions(within(row).getByLabelText('Cuenta para Valeria Gomez'), account.userId);
-    await user.click(within(row).getByRole('button', { name: 'Vincular cuenta' }));
+    await screen.findByRole('row', { name: /Valeria Gomez/ });
+    await chooseRowAction(user, 'Acciones de Valeria Gomez', 'Cuenta de acceso');
+    await chooseOption(user, screen.getByLabelText('Cuenta para Valeria Gomez'), account.email);
+    await user.click(screen.getByRole('button', { name: 'Vincular cuenta' }));
 
     expect(confirm).toHaveBeenCalledWith('¿Vincular valeria@example.test con Valeria Gomez?');
     expect(client.bindDriverAccount).not.toHaveBeenCalled();
@@ -114,7 +120,7 @@ describe('DriverManagementPage', () => {
     const client = buildClient();
     render(<DriverManagementPage client={client} canBindAccounts={false} />);
 
-    const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    const row = await screen.findByRole('row', { name: /Valeria Gomez/ });
     expect(client.listDriverAccounts).not.toHaveBeenCalled();
     expect(within(row).queryByLabelText('Cuenta para Valeria Gomez')).toBeNull();
     expect(within(row).queryByText('valeria@example.test')).toBeNull();

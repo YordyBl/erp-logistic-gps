@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
 
 import type { Customer, DeliveryOrder, DeliveryOrderImportResult, DeliveryOrderStatusHistory } from '../api/client.js';
 import { DeliveryOrderManagementPage } from './DeliveryOrderManagementPage.js';
@@ -62,18 +63,24 @@ describe('DeliveryOrderManagementPage', () => {
     expect(screen.getByText(/María Pérez/)).toBeTruthy();
     expect(screen.getByText(/Av\. Arequipa 123/)).toBeTruthy();
     expect(screen.getByText(/1\s+bulto/)).toBeTruthy();
-    expect(screen.queryByRole('option', { name: /Cliente antiguo/ })).toBeNull();
     expect(screen.getByText('Franja AM')).toBeTruthy();
+
+    const user = setupUser();
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await user.click(screen.getByLabelText(/Cliente activo/));
+    expect(await screen.findByRole('option', { name: /Acme Logística/ })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: /Cliente antiguo/ })).toBeNull();
   });
 
   it('creates an order using the active customer and only supported optional fields', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient();
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.selectOptions(screen.getByLabelText(/Cliente activo/), customer.id);
-    await user.selectOptions(screen.getByLabelText(/Franja de entrega/), 'PM');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^PM/);
     await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/Dirección/), 'Jr. Los Olivos 55');
@@ -93,20 +100,21 @@ describe('DeliveryOrderManagementPage', () => {
   });
 
   it('fills editable coordinates from a Google Maps link and keeps the link on create', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient();
     render(<DeliveryOrderManagementPage client={client} />);
     await screen.findByText('LIM-2041');
     const link = 'https://maps.app.goo.gl/place';
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
     await user.type(screen.getByLabelText(/Enlace de Google Maps/), link);
     await user.click(screen.getByRole('button', { name: 'Obtener coordenadas' }));
     await waitFor(() => expect(client.resolveGoogleMapsLink).toHaveBeenCalledWith(link));
-    expect((screen.getByLabelText('Latitud') as HTMLInputElement).value).toBe('-12.1');
+    await waitFor(() => expect((screen.getByLabelText('Latitud') as HTMLInputElement).value).toBe('-12.1'));
     expect((screen.getByLabelText('Longitud') as HTMLInputElement).value).toBe('-77.02');
     await user.clear(screen.getByLabelText('Latitud'));
     await user.type(screen.getByLabelText('Latitud'), '-12.2');
-    await user.selectOptions(screen.getByLabelText(/Cliente activo/), customer.id);
-    await user.selectOptions(screen.getByLabelText(/Franja de entrega/), 'PM');
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^PM/);
     await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/^Dirección/), 'Jr. Los Olivos 55');
@@ -121,12 +129,13 @@ describe('DeliveryOrderManagementPage', () => {
   it('offers CSV/XLSX import and the Excel template', async () => {
     render(<DeliveryOrderManagementPage client={makeClient()} />);
 
+    await setupUser().click(await screen.findByRole('button', { name: 'Importar pedidos' }));
     expect(await screen.findByLabelText(/archivo de pedidos/i)).toBeTruthy();
     expect(screen.getByRole('button', { name: /descargar plantilla excel/i })).toBeTruthy();
   });
 
   it('uploads a file and reports imported and rejected order groups', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const file = new File(['csv'], 'orders.csv', { type: 'text/csv' });
     const imported = { ...order, id: 'order-imported', publicCode: 'IMP-2' };
     const client = makeClient({
@@ -141,6 +150,7 @@ describe('DeliveryOrderManagementPage', () => {
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Importar pedidos' }));
     await user.upload(screen.getByLabelText(/archivo de pedidos/i), file);
     await user.click(screen.getByRole('button', { name: 'Importar pedidos' }));
 
@@ -152,7 +162,7 @@ describe('DeliveryOrderManagementPage', () => {
   });
 
   it('loads and shows tenant-scoped status history on demand', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({
       listDeliveryOrderStatusHistory: vi.fn().mockResolvedValue([
         { fromStatus: 'created', toStatus: 'cancelled', actorUserId: 'admin-1', occurredAt: '2026-10-29T12:30:00.000Z' },
@@ -161,14 +171,14 @@ describe('DeliveryOrderManagementPage', () => {
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.click(screen.getByRole('button', { name: 'Ver historial LIM-2041' }));
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
 
     expect(await screen.findByText(/Creado → Cancelado/)).toBeTruthy();
     expect(client.listDeliveryOrderStatusHistory).toHaveBeenCalledWith(order.id);
   });
 
   it('marks the returned status-history event as a reported incident', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({
       listDeliveryOrderStatusHistory: vi.fn().mockResolvedValue([
         { fromStatus: 'in_transit', toStatus: 'returned', actorUserId: 'driver-1', occurredAt: '2026-10-29T12:30:00.000Z' },
@@ -177,13 +187,13 @@ describe('DeliveryOrderManagementPage', () => {
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.click(screen.getByRole('button', { name: 'Ver historial LIM-2041' }));
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
 
     expect(await screen.findByText(/Incidencia reportada/)).toBeTruthy();
   });
 
   it('shows status-history loading and the empty-history state', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     let finishHistory!: (events: readonly DeliveryOrderStatusHistory[]) => void;
     const client = makeClient({
       listDeliveryOrderStatusHistory: vi.fn().mockReturnValue(new Promise((resolve) => { finishHistory = resolve; })),
@@ -191,15 +201,15 @@ describe('DeliveryOrderManagementPage', () => {
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.click(screen.getByRole('button', { name: 'Ver historial LIM-2041' }));
-    expect(screen.getByRole('button', { name: 'Ver historial LIM-2041' }).textContent).toBe('Cargando historial…');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+    expect(await screen.findByText('Cargando historial…')).toBeTruthy();
     finishHistory([]);
 
     expect(await screen.findByText('Sin cambios de estado registrados.')).toBeTruthy();
   });
 
   it('shows history errors and allows retrying the request', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({
       listDeliveryOrderStatusHistory: vi.fn().mockRejectedValueOnce(new Error('network error')).mockResolvedValue([
         { fromStatus: 'created', toStatus: 'cancelled', actorUserId: 'admin-1', occurredAt: '2026-10-29T12:30:00.000Z' },
@@ -208,16 +218,16 @@ describe('DeliveryOrderManagementPage', () => {
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.click(screen.getByRole('button', { name: 'Ver historial LIM-2041' }));
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
     expect(await screen.findByText('No se pudo cargar el historial. Inténtalo de nuevo.')).toBeTruthy();
-    await user.click(screen.getByRole('button', { name: 'Ver historial LIM-2041' }));
+    await user.click(screen.getByRole('button', { name: 'Reintentar' }));
 
     expect(await screen.findByText(/Creado → Cancelado/)).toBeTruthy();
     expect(client.listDeliveryOrderStatusHistory).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces inactive customer conflict and allows retrying failed list loads', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({
       listDeliveryOrders: vi.fn().mockRejectedValueOnce(new Error('fallo de red')).mockResolvedValue([order]),
       createDeliveryOrder: vi.fn().mockRejectedValue(Object.assign(new Error('Cliente inactivo'), {
@@ -229,8 +239,9 @@ describe('DeliveryOrderManagementPage', () => {
     expect(await screen.findByText('No se pudieron cargar los pedidos y clientes. Revisa la conexión e inténtalo de nuevo.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Reintentar' }));
     await screen.findByText('LIM-2041');
-    await user.selectOptions(screen.getByLabelText(/Cliente activo/), customer.id);
-    await user.selectOptions(screen.getByLabelText(/Franja de entrega/), 'AM');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^AM/);
     await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/Dirección/), 'Jr. Los Olivos 55');
@@ -241,19 +252,58 @@ describe('DeliveryOrderManagementPage', () => {
     expect((await screen.findByText(/El cliente seleccionado ya no está activo/)).textContent).toContain('El cliente seleccionado ya no está activo');
   });
 
+  it('requires customer and time window with Spanish messages before calling the API', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
+    await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
+    await user.type(screen.getByLabelText(/^Dirección/), 'Jr. Los Olivos 55');
+    await user.type(screen.getByLabelText(/Distrito/), 'Miraflores');
+    await user.type(screen.getByLabelText(/Descripción del bulto 1/), 'Caja pequeña');
+    await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
+
+    expect(await screen.findByText('Selecciona un cliente.')).toBeTruthy();
+    expect(screen.getByText('Selecciona una franja.')).toBeTruthy();
+    expect(client.createDeliveryOrder).not.toHaveBeenCalled();
+
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    expect(screen.queryByText('Selecciona un cliente.')).toBeNull();
+  });
+
+  it('keeps native validation for phone pattern and required inputs', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^PM/);
+    await user.type(screen.getByLabelText(/Teléfono del destinatario/), 'no es un teléfono');
+    await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
+
+    expect((screen.getByLabelText(/Teléfono del destinatario/) as HTMLInputElement).validity.patternMismatch).toBe(true);
+    expect((screen.getByLabelText(/Nombre del destinatario/) as HTMLInputElement).validity.valueMissing).toBe(true);
+    expect(client.createDeliveryOrder).not.toHaveBeenCalled();
+  });
+
   it('asks for confirmation before cancelling and refreshes the order list', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     const client = makeClient();
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    await user.click(screen.getByRole('button', { name: 'Cancelar pedido LIM-2041' }));
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Cancelar pedido');
     expect(confirm).toHaveBeenCalledOnce();
     expect(client.cancelDeliveryOrder).not.toHaveBeenCalled();
 
     confirm.mockReturnValue(true);
-    await user.click(screen.getByRole('button', { name: 'Cancelar pedido LIM-2041' }));
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Cancelar pedido');
     await waitFor(() => expect(client.cancelDeliveryOrder).toHaveBeenCalledWith(order.id));
     expect(await screen.findByText('Cancelado')).toBeTruthy();
   });

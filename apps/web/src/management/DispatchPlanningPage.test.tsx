@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { chooseOption, chooseRowAction, pickDay, setupUser } from '../test/ui.js';
 
 import { DispatchPlanningPage } from './DispatchPlanningPage.js';
 import type { DeliveryOrder } from '../api/client.js';
@@ -42,15 +43,16 @@ function makeClient(overrides: Record<string, unknown> = {}) {
 
 describe('DispatchPlanningPage', () => {
   it('creates a manual route with multiple orders grouped in one stop', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient();
     render(<DispatchPlanningPage client={client} />);
 
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-001/);
     await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-001');
-    await user.type(screen.getByLabelText('Fecha planificada'), '2026-11-02');
-    await user.selectOptions(screen.getByLabelText('Conductor'), 'driver-1');
-    await user.selectOptions(screen.getByLabelText('Vehículo'), 'vehicle-1');
+    const plannedDate = await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
+    await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
+    await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
     await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
     await user.click(screen.getByLabelText(/PED-001/));
     await user.click(screen.getByLabelText(/PED-002/));
@@ -58,21 +60,23 @@ describe('DispatchPlanningPage', () => {
 
     await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
       publicCode: 'RUTA-001',
+      plannedDate,
       stops: [expect.objectContaining({ sequence: 1, orderIds: ['order-1', 'order-2'] })],
     })));
     expect((await screen.findByRole('status')).textContent).toContain('Ruta RUTA-001 creada.');
   });
 
   it('submits an optional Google Maps link with the scheduled stop', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient();
     render(<DispatchPlanningPage client={client} />);
 
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-001/);
     await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-MAPS');
-    await user.type(screen.getByLabelText('Fecha planificada'), '2026-11-02');
-    await user.selectOptions(screen.getByLabelText('Conductor'), 'driver-1');
-    await user.selectOptions(screen.getByLabelText('Vehículo'), 'vehicle-1');
+    const plannedDate = await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
+    await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
+    await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
     await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
     await user.type(screen.getByLabelText(/Enlace de Google Maps de parada 1/),
       'https://maps.app.goo.gl/ykdoXKrKCx7B8APFA');
@@ -80,17 +84,44 @@ describe('DispatchPlanningPage', () => {
     await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
 
     await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
+      plannedDate,
       stops: [expect.objectContaining({
         sequence: 1, googleMapsUrl: 'https://maps.app.goo.gl/ykdoXKrKCx7B8APFA',
       })],
     })));
   });
 
-  it('shows the recorded returned-order status history before redispatch', async () => {
-    const user = userEvent.setup();
+  it('asks for date, driver and vehicle with Spanish messages before calling the API', async () => {
+    const user = setupUser();
     const client = makeClient();
     render(<DispatchPlanningPage client={client} />);
 
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
+    await screen.findByText(/PED-001/);
+    await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-001');
+    await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
+    await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
+
+    expect(await screen.findByText('Elige la fecha planificada.')).toBeTruthy();
+    expect(screen.getByText('Selecciona un conductor.')).toBeTruthy();
+    expect(screen.getByText('Selecciona un vehículo.')).toBeTruthy();
+    expect(client.createDispatchRoute).not.toHaveBeenCalled();
+  });
+
+  it('does not present a failed load as an empty route list', async () => {
+    const client = makeClient({ listDispatchRoutes: vi.fn().mockRejectedValue(new Error('offline')) });
+    render(<DispatchPlanningPage client={client} />);
+
+    expect(await screen.findByText(/No se pudo cargar la información de despacho/)).toBeTruthy();
+    expect(screen.queryByText('No hay rutas para mostrar.')).toBeNull();
+  });
+
+  it('shows the recorded returned-order status history before redispatch', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DispatchPlanningPage client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-002/);
     expect(screen.getByText('Devuelto · incidencia registrada')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Ver historial' }));
@@ -100,7 +131,7 @@ describe('DispatchPlanningPage', () => {
   });
 
   it('submits only changed resources when reassigning a planned route', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const route = {
       id: 'route-1', organizationId: 'org-1', publicCode: 'RUTA-OLD', plannedDate: '2026-11-02',
       driverId: 'driver-1', vehicleId: 'vehicle-1', status: 'planned', createdAt: '2026-11-01T10:00:00.000Z',
@@ -117,10 +148,12 @@ describe('DispatchPlanningPage', () => {
     render(<DispatchPlanningPage client={client} />);
 
     await screen.findByText('RUTA-OLD');
+    await chooseRowAction(user, 'Acciones de RUTA-OLD', 'Reasignar');
     await user.click(screen.getByRole('button', { name: 'Guardar reasignación' }));
     expect(client.reassignDispatchRoute).not.toHaveBeenCalled();
     expect(await screen.findByRole('status')).toBeTruthy();
-    await user.selectOptions(screen.getByLabelText('Reasignar conductor'), 'driver-2');
+    await chooseRowAction(user, 'Acciones de RUTA-OLD', 'Reasignar');
+    await chooseOption(user, screen.getByLabelText('Reasignar conductor'), 'Luis Driver');
     await user.click(screen.getByRole('button', { name: 'Guardar reasignación' }));
 
     await waitFor(() => expect(client.reassignDispatchRoute).toHaveBeenCalledWith('route-1', { driverId: 'driver-2' }));
@@ -135,10 +168,13 @@ describe('DispatchPlanningPage', () => {
       stops: [{ id: 'stop-1', sequence: 1, addressLine: 'Av. Arequipa 100', latitude: null, longitude: null, orderIds: ['order-1'] }],
     } as const;
     const client = makeClient({ listDispatchRoutes: vi.fn().mockResolvedValue([route]) });
+    const user = setupUser();
     render(<DispatchPlanningPage client={client} />);
 
     await screen.findByText('RUTA-DONE');
     expect(screen.getByText(/Completada/)).toBeTruthy();
-    expect(screen.getByText('Av. Arequipa 100 · PED-001 (Creado)')).toBeTruthy();
+    await chooseRowAction(user, 'Acciones de RUTA-DONE', 'Ver detalle');
+    expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
+    expect(screen.getByText('PED-001 (Creado)')).toBeTruthy();
   });
 });

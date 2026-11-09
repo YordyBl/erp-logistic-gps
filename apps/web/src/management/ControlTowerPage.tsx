@@ -1,12 +1,21 @@
+import { Route } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 
 import type { DispatchRoute } from '../api/client.js';
+import { ErrorNotice, LoadingRows } from '../components/Notices.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { Badge } from '../components/ui/badge.js';
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from '../components/ui/card.js';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
+import { ActiveRouteItem } from './routes/ActiveRouteItem.js';
+import { loadRouteDetails, NO_ROUTE_DETAILS, type RouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 export const OPENFREEMAP_STYLE = import.meta.env.VITE_MAP_STYLE_URL?.trim() ||
   'https://tiles.openfreemap.org/styles/bright';
 const DATA_SOURCE = 'control-tower-data';
+const MAP_STOP_COLOR = '#ef8b36';
 
 export interface TrackingPosition {
   readonly routeId: string;
@@ -36,11 +45,12 @@ interface TrackingSnapshot {
 
 interface TrackingSocketMessage {
   readonly type: 'snapshot' | 'update';
+  readonly kind?: string;
   readonly data?: unknown;
   readonly snapshot?: unknown;
 }
 
-interface TicketClient {
+interface TicketClient extends RouteDetailsClient {
   createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }>;
 }
 
@@ -55,6 +65,10 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const [snapshot, setSnapshot] = useState<TrackingSnapshot>({ routes: [], positions: [] });
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
   const [error, setError] = useState<string | null>(null);
+  const [details, setDetails] = useState<RouteDetails>(NO_ROUTE_DETAILS);
+
+  const refreshDetails = useCallback(async () => setDetails(await loadRouteDetails(client)), [client]);
+  useEffect(() => { void refreshDetails(); }, [refreshDetails]);
 
   const geoJson = useMemo(() => toFeatureCollection(snapshot), [snapshot]);
   const geoJsonRef = useRef(geoJson);
@@ -81,7 +95,7 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
         map?.addLayer({
           id: 'control-tower-stops', type: 'circle', source: DATA_SOURCE,
           filter: ['==', ['get', 'kind'], 'stop'],
-          paint: { 'circle-radius': 7, 'circle-color': '#ef8b36', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
+          paint: { 'circle-radius': 7, 'circle-color': MAP_STOP_COLOR, 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2 },
         });
         map?.addLayer({
           id: 'control-tower-stop-labels', type: 'symbol', source: DATA_SOURCE,
@@ -124,11 +138,13 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
         setSnapshot(raw);
         setConnection('connected');
         setError(null);
+        // Una posición no cambia los pedidos; otras novedades pueden cambiar el avance.
+        if (message.type === 'update' && message.kind !== 'position') void refreshDetails();
       }
     } catch {
       setError('Se recibió una actualización de seguimiento inválida.');
     }
-  }, []);
+  }, [refreshDetails]);
 
   useEffect(() => {
     let active = true;
@@ -178,49 +194,56 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
     };
   }, [client, receiveMessage, socketFactory]);
 
-  const routes = snapshot.routes.filter((route) => route.status !== 'completed');
+  // Primero las rutas en curso: son las que se están siguiendo.
+  const routes = snapshot.routes.filter((route) => route.status !== 'completed')
+    .sort((left, right) => Number(right.status === 'in_progress') - Number(left.status === 'in_progress'));
   const latestPositionByRoute = new Map(snapshot.positions.map((position) => [position.routeId, position]));
 
   return (
-    <section className="control-tower" aria-labelledby="control-tower-title">
-      <header className="control-tower__heading">
-        <div>
-          <p className="order-management__context">OPERACIÓN · DESPACHO EN VIVO</p>
-          <h1 id="control-tower-title">Torre de control</h1>
-          <p>Consulta paradas planificadas y la última posición recibida de cada ruta en curso.</p>
-        </div>
-        <span className={`control-tower__connection control-tower__connection--${connection}`} role="status">
-          <i />{connection === 'connected' ? 'Seguimiento conectado' : connection === 'connecting' ? 'Conectando…' : 'Reconectando…'}
-        </span>
-      </header>
-      {error !== null && <p className="order-management__alert" role="alert">{error}</p>}
-      <div className="control-tower__layout">
-        <div className="control-tower__map-wrap">
-          <div className="control-tower__map" ref={mapContainer} role="img" aria-label="Mapa de rutas y últimas posiciones recibidas" />
-          <div className="control-tower__legend" aria-label="Leyenda del mapa">
-            <span><i className="control-tower__legend-stop" />Parada planificada</span>
-            <span><i className="control-tower__legend-position" />Última posición recibida</span>
+    <section className="flex flex-col gap-6" aria-labelledby="control-tower-title">
+      <PageHeader title="Torre de control" titleId="control-tower-title"
+        description="Consulta paradas planificadas y la última posición recibida de cada ruta en curso.">
+        <Badge variant={connection === 'connected' ? 'success' : 'secondary'} role="status">
+          {connection === 'connected' ? 'Seguimiento conectado' : connection === 'connecting' ? 'Conectando…' : 'Reconectando…'}
+        </Badge>
+      </PageHeader>
+      {error !== null && <ErrorNotice>{error}</ErrorNotice>}
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+        <Card className="overflow-hidden p-0">
+          <div className="relative h-96 md:h-[36rem]">
+            <div className="size-full" ref={mapContainer} role="img" aria-label="Mapa de rutas y últimas posiciones recibidas" />
+            <div className="absolute top-4 left-4 flex flex-col gap-2 rounded-lg border bg-background p-3 text-xs" aria-label="Leyenda del mapa">
+              <span className="flex items-center gap-2"><span className="size-2.5 rounded-full" style={{ background: MAP_STOP_COLOR }} />Parada planificada</span>
+              <span className="flex items-center gap-2"><img src="/motorcycle-marker.svg" alt="" className="size-4" />Última posición recibida</span>
+            </div>
           </div>
-        </div>
-        <aside className="control-tower__routes" aria-label="Rutas activas">
-          <div className="control-tower__routes-heading">
-            <h2>Rutas activas</h2><span>{routes.length}</span>
-          </div>
-          {routes.length === 0 ? <p className="control-tower__empty">No hay rutas activas para mostrar.</p> : routes.map((route) => {
-            const position = latestPositionByRoute.get(route.id);
-            return <article className="control-tower__route" key={route.id}>
-              <header><h3>{route.publicCode}</h3><span className={`control-tower__route-status control-tower__route-status--${route.status}`}>
-                {route.status === 'in_progress' ? 'En curso' : 'Planificada'}
-              </span></header>
-              <p>{route.stops.length} {route.stops.length === 1 ? 'parada' : 'paradas'} · {route.plannedDate}</p>
-              {position === undefined ? <p className="control-tower__position-note">Aún no hay una posición recibida.</p> :
-                <p className="control-tower__position-note">Última posición recibida · {formatReceivedTime(position.receivedAt)}</p>}
-              <ol>{route.stops.map((stop) => <li key={stop.id}>{stop.addressLine}</li>)}</ol>
-            </article>;
-          })}
-        </aside>
+        </Card>
+        <Card className="xl:h-[36rem]">
+          <CardHeader>
+            <CardTitle><h2>Rutas activas</h2></CardTitle>
+            <CardAction><Badge variant="outline">{routes.length}</Badge></CardAction>
+          </CardHeader>
+          <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+            {routes.length === 0 && connection !== 'connected' && <LoadingRows label="Conectando con el seguimiento…" rows={2} />}
+            {routes.length === 0 && connection === 'connected' && (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><Route aria-hidden="true" /></EmptyMedia>
+                  <EmptyDescription>No hay rutas activas para mostrar.</EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            )}
+            {routes.length > 0 && (
+              <ul className="flex flex-col gap-3">
+                {routes.map((route) => (
+                  <ActiveRouteItem key={route.id} route={route} position={latestPositionByRoute.get(route.id)} details={details} />
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
-      <p className="control-tower__disclaimer">La posición mostrada es la última recibida; no garantiza que el conductor esté allí ahora. ETA no disponible.</p>
+      <p className="text-sm text-muted-foreground">La posición mostrada es la última recibida; no garantiza que el conductor esté allí ahora. ETA no disponible.</p>
     </section>
   );
 }
@@ -291,10 +314,4 @@ function toFeatureCollection(snapshot: TrackingSnapshot): GeoJSON.FeatureCollect
 function isCoordinate(longitude: number | null, latitude: number | null): longitude is number {
   return longitude !== null && latitude !== null && Number.isFinite(longitude) && Number.isFinite(latitude) &&
     longitude >= -180 && longitude <= 180 && latitude >= -90 && latitude <= 90;
-}
-
-function formatReceivedTime(value: string): string {
-  return new Intl.DateTimeFormat('es-PE', {
-    hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'America/Lima',
-  }).format(new Date(value));
 }

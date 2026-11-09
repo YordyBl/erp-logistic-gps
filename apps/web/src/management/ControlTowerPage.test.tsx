@@ -98,6 +98,42 @@ describe('ControlTowerPage', () => {
       .toContainEqual(expect.objectContaining({ id: 'control-tower-positions', type: 'symbol', layout: expect.objectContaining({ 'icon-image': 'control-tower-motorcycle' }) }));
   });
 
+  it('shows who runs each active route, its real progress and its stops', async () => {
+    const harness = createSocketHarness();
+    const client = {
+      createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
+      listDispatchRoutes: vi.fn().mockResolvedValue([{ ...snapshot.routes[0], organizationId: 'org-1', createdAt: '2026-11-01T10:00:00.000Z' }]),
+      listDeliveryOrders: vi.fn().mockResolvedValue([{ id: 'order-1', publicCode: 'PED-001', status: 'delivered' }]),
+      listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
+      listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
+    };
+    render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
+    await waitFor(() => expect(mapMock.options).toBeDefined());
+    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
+
+    expect(await screen.findByText('Ana Quispe')).toBeTruthy();
+    expect(screen.getByText('ABC-123')).toBeTruthy();
+    expect(screen.getByText('1 de 1 pedido cerrado')).toBeTruthy();
+    expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
+    expect(screen.getByText('PED-001 · Entregado')).toBeTruthy();
+  });
+
+  it('keeps tracking usable and refreshes progress only when something other than a position changes', async () => {
+    const harness = createSocketHarness();
+    const listDeliveryOrders = vi.fn().mockRejectedValue(new Error('offline'));
+    const client = { createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }), listDeliveryOrders };
+    render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
+    await waitFor(() => expect(mapMock.options).toBeDefined());
+    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
+
+    expect(await screen.findByText('Av. Arequipa 100')).toBeTruthy();
+    await waitFor(() => expect(listDeliveryOrders).toHaveBeenCalledOnce());
+    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot }));
+    expect(listDeliveryOrders).toHaveBeenCalledOnce();
+    act(() => harness.emit({ type: 'update', sequence: 2, kind: 'route', snapshot }));
+    await waitFor(() => expect(listDeliveryOrders).toHaveBeenCalledTimes(2));
+  });
+
   it('requests a fresh snapshot after a live position update', async () => {
     const harness = createSocketHarness();
     render(<ControlTowerPage client={{ createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }) }}

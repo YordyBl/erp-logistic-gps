@@ -1,8 +1,9 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { chooseOption, setupUser } from '../test/ui.js';
 
 import type { ApiClient, Customer } from '../api/client.js';
 import { CustomerCatalogPage } from './CustomerCatalogPage.js';
@@ -45,7 +46,7 @@ describe('CustomerCatalogPage', () => {
   });
 
   it('shows loading feedback and lets the operator retry after a list error', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const listCustomers = vi.fn()
       .mockRejectedValueOnce(new Error('Sin conexión'))
       .mockResolvedValueOnce([firstCustomer]);
@@ -61,7 +62,7 @@ describe('CustomerCatalogPage', () => {
   });
 
   it('explains an empty catalog and opens the inline creation form', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
 
     render(<CustomerCatalogPage client={makeClient({ listCustomers: vi.fn().mockResolvedValue([]) })} />);
 
@@ -74,7 +75,7 @@ describe('CustomerCatalogPage', () => {
   });
 
   it('submits exactly the customer API fields, reports success, and adds the customer to the list', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient();
 
     render(<CustomerCatalogPage client={client} />);
@@ -84,7 +85,7 @@ describe('CustomerCatalogPage', () => {
     await user.type(screen.getByLabelText('Nombre de contacto'), 'Mario Salas');
     await user.type(screen.getByLabelText('Correo de contacto'), 'mario@norte.example');
     await user.type(screen.getByLabelText('Teléfono de contacto'), '01 555 1234');
-    await user.selectOptions(screen.getByLabelText('Estado'), 'inactive');
+    await chooseOption(user, screen.getByLabelText('Estado'), 'Inactivo');
     await user.click(screen.getByRole('button', { name: 'Guardar cliente' }));
 
     await waitFor(() => expect(client.createCustomer).toHaveBeenCalledWith({
@@ -102,7 +103,7 @@ describe('CustomerCatalogPage', () => {
   });
 
   it('keeps the form open and gives actionable feedback when creation fails', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({ createCustomer: vi.fn().mockRejectedValue(new Error('Código duplicado')) });
 
     render(<CustomerCatalogPage client={client} />);

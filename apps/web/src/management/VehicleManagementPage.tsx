@@ -1,8 +1,21 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import type { ColumnDef } from '@tanstack/react-table';
+import { Check, CirclePause, Pencil, Plus, Truck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type { ApiClient, Vehicle, VehicleStatus } from '../api/client.js';
-import { Button, StatusPill, Surface } from '../components/Primitives.js';
-import './VehicleManagementPage.css';
+import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
+import { DataTable } from '../components/data-table/DataTable.js';
+import { FormSheet } from '../components/FormSheet.js';
+import { SelectField, TextField } from '../components/FormFields.js';
+import { IconChip } from '../components/IconChip.js';
+import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { Badge } from '../components/ui/badge.js';
+import { Button } from '../components/ui/button.js';
+import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
+import { FieldGroup } from '../components/ui/field.js';
+import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
 
 type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle'>;
 
@@ -11,6 +24,11 @@ interface VehicleForm {
   type: string;
   capacityKg: string;
 }
+
+const STATUS_OPTIONS: readonly { readonly value: VehicleStatus; readonly label: string }[] = [
+  { value: 'active', label: 'Activo' },
+  { value: 'inactive', label: 'Inactivo' },
+];
 
 const emptyForm = (): VehicleForm => ({ plate: '', type: '', capacityKg: '' });
 
@@ -21,6 +39,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [busyVehicleId, setBusyVehicleId] = useState<string | null>(null);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [form, setForm] = useState<VehicleForm>(emptyForm);
@@ -42,6 +61,12 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
 
   useEffect(() => { void loadVehicles(); }, [loadVehicles]);
 
+  function openCreate() {
+    setActionError(null);
+    setNotice(null);
+    setCreating(true);
+  }
+
   async function createVehicle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionError(null);
@@ -59,6 +84,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
       });
       setVehicles((current) => [...current, created].sort(compareVehicles));
       setForm(emptyForm());
+      setCreating(false);
       setNotice(`Vehículo ${created.plate} registrado.`);
     } catch (cause) {
       setActionError(errorMessage(cause, 'No se pudo registrar el vehículo.'));
@@ -67,7 +93,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     }
   }
 
-  function startEditing(vehicle: Vehicle) {
+  const startEditing = useCallback((vehicle: Vehicle) => {
     setEditingVehicleId(vehicle.id);
     setEditForm({
       type: vehicle.type,
@@ -76,7 +102,55 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     });
     setActionError(null);
     setNotice(null);
-  }
+  }, []);
+
+  const columns = useMemo<readonly ColumnDef<Vehicle, unknown>[]>(() => [
+    {
+      accessorKey: 'plate',
+      header: ({ column }) => <SortableHeader column={column} title="Placa" />,
+      enableHiding: false,
+      cell: ({ row }) => (
+        <span className="flex items-center gap-3">
+          <IconChip icon={Truck} tone={row.original.status === 'active' ? 'primary' : 'neutral'} />
+          <span className="font-medium tabular-nums">{row.original.plate}</span>
+        </span>
+      ),
+    },
+    {
+      accessorKey: 'type',
+      header: ({ column }) => <SortableHeader column={column} title="Tipo" />,
+      meta: { title: 'Tipo' },
+    },
+    {
+      accessorKey: 'capacityKg',
+      header: ({ column }) => <SortableHeader column={column} title="Capacidad" />,
+      enableGlobalFilter: false,
+      meta: { title: 'Capacidad' },
+      cell: ({ row }) => <span className="tabular-nums">{capacityLabel(row.original.capacityKg)}</span>,
+    },
+    {
+      accessorKey: 'status',
+      header: 'Disponibilidad',
+      filterFn: 'arrIncludesSome',
+      enableGlobalFilter: false,
+      meta: { title: 'Disponibilidad' },
+      cell: ({ row }) => (
+        <Badge variant={row.original.status === 'active' ? 'success' : 'secondary'}>
+          {row.original.status === 'active' ? 'Activo' : 'Inactivo'}
+          {row.original.status === 'active' ? <Check data-icon="inline-end" aria-hidden="true" /> : <CirclePause data-icon="inline-end" aria-hidden="true" />}
+        </Badge>
+      ),
+    },
+    {
+      id: 'actions',
+      enableHiding: false,
+      cell: ({ row }) => (
+        <RowActions label={`Acciones de ${row.original.plate}`}>
+          <DropdownMenuItem onSelect={() => startEditing(row.original)}><Pencil aria-hidden="true" /> Editar vehículo</DropdownMenuItem>
+        </RowActions>
+      ),
+    },
+  ], [startEditing]);
 
   async function saveVehicle(event: FormEvent<HTMLFormElement>, vehicle: Vehicle) {
     event.preventDefault();
@@ -104,103 +178,80 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     }
   }
 
+  const editingVehicle = vehicles.find((vehicle) => vehicle.id === editingVehicleId);
+  const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
+  const activeCapacity = activeVehicles.reduce((total, vehicle) => total + (vehicle.capacityKg ?? 0), 0);
+  const ready = !loading && loadError === null;
+
   return (
-    <section className="vehicle-management">
-      <header className="vehicle-management__header">
-        <div>
-          <p className="vehicle-management__context">OPERACIÓN · FLOTA</p>
-          <h1>Vehículos</h1>
-          <p>Registra la flota y marca cada vehículo activo o inactivo para la operación.</p>
-        </div>
-        {!loading && loadError === null && <span className="vehicle-management__count">
-          {vehicles.length} {vehicles.length === 1 ? 'vehículo' : 'vehículos'}
-        </span>}
-      </header>
+    <section className="flex flex-col gap-6">
+      <PageHeader title="Vehículos" description={ready && vehicles.length > 0 ? `${activeVehicles.length} de ${vehicles.length} vehículos activos · ${new Intl.NumberFormat('es-PE').format(activeCapacity)} kg de capacidad activa.` : 'Registra la flota y marca cada vehículo activo o inactivo para la operación.'}>
+        <Button onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Registrar vehículo</Button>
+      </PageHeader>
 
-      {actionError !== null && <p className="vehicle-management__alert" role="alert">{actionError}</p>}
-      {notice !== null && <p className="vehicle-management__success" role="status">{notice}</p>}
+      {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
 
-      <section className="vehicle-management__layout" aria-label="Gestión de vehículos">
-        <Surface className="vehicle-management__form-surface">
-          <div className="vehicle-management__section-heading">
-            <div><h2>Registrar vehículo</h2><p>La placa identifica el vehículo y no se puede editar después.</p></div>
-          </div>
-          <form className="vehicle-management__form" onSubmit={(event) => void createVehicle(event)}>
-            <label className="vehicle-management__field" htmlFor="new-vehicle-plate">Placa
-              <input id="new-vehicle-plate" required minLength={3} maxLength={16}
-                pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*" value={form.plate}
-                onChange={(event) => setForm((current) => ({ ...current, plate: event.target.value }))} />
-            </label>
-            <label className="vehicle-management__field" htmlFor="new-vehicle-type">Tipo de vehículo
-              <input id="new-vehicle-type" required minLength={2} maxLength={40} value={form.type}
-                onChange={(event) => setForm((current) => ({ ...current, type: event.target.value }))} />
-            </label>
-            <label className="vehicle-management__field" htmlFor="new-vehicle-capacity">Capacidad (kg) · opcional
-              <input id="new-vehicle-capacity" type="number" min="0.01" max="100000" step="any"
-                value={form.capacityKg} onChange={(event) => setForm((current) => ({ ...current, capacityKg: event.target.value }))} />
-            </label>
-            <div className="vehicle-management__form-actions">
-              <Button type="submit" disabled={saving}>{saving ? 'Registrando…' : 'Registrar vehículo'}</Button>
-            </div>
-          </form>
-        </Surface>
+      {loading && <LoadingRows label="Cargando vehículos…" />}
+      {!loading && loadError !== null && (
+        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => void loadVehicles()}>Reintentar</Button>}>{loadError}</ErrorNotice>
+      )}
+      {ready && vehicles.length === 0 && (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><Truck aria-hidden="true" /></EmptyMedia>
+            <EmptyTitle>Aún no hay vehículos</EmptyTitle>
+            <EmptyDescription>Registra un vehículo para comenzar a administrar la flota.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent><Button onClick={openCreate}>Registrar el primero</Button></EmptyContent>
+        </Empty>
+      )}
+      {ready && vehicles.length > 0 && (
+        <>
+          <DataTable label="Flota registrada" columns={columns} data={vehicles} searchPlaceholder="Buscar placa o tipo"
+            filters={[{ columnId: 'status', title: 'Disponibilidad', options: STATUS_OPTIONS }]} onRowClick={startEditing} />
+        </>
+      )}
 
-        <Surface className="vehicle-management__list-surface">
-          <div className="vehicle-management__section-heading">
-            <div><h2>Flota registrada</h2><p>El estado activo/inactivo es la disponibilidad que ofrece actualmente el catálogo.</p></div>
-          </div>
-          {loading ? <p className="vehicle-management__loading" role="status">Cargando vehículos…</p>
-            : loadError !== null ? <div className="vehicle-management__empty" role="alert">
-              <p>{loadError}</p><Button variant="secondary" onClick={() => void loadVehicles()}>Reintentar</Button>
-            </div>
-              : vehicles.length === 0 ? <div className="vehicle-management__empty">
-                <h3>Aún no hay vehículos</h3><p>Registra un vehículo para comenzar a administrar la flota.</p>
-              </div>
-                : <ul className="vehicle-management__list">
-                  {vehicles.map((vehicle) => {
-                    const isEditing = editingVehicleId === vehicle.id;
-                    return <li className="vehicle-management__row" key={vehicle.id} aria-label={`Vehículo ${vehicle.plate}`}>
-                      <div className="vehicle-management__identity">
-                        <div>
-                          <h3>{vehicle.plate}</h3>
-                          <p><span>Tipo</span>{vehicle.type}</p>
-                          <p><span>Capacidad</span>{capacityLabel(vehicle.capacityKg)}</p>
-                        </div>
-                        <StatusPill tone={vehicle.status === 'active' ? 'success' : 'neutral'}>
-                          {vehicle.status === 'active' ? 'Activo' : 'Inactivo'}
-                        </StatusPill>
-                      </div>
-                      {isEditing ? (
-                        <form className="vehicle-management__edit-form" onSubmit={(event) => void saveVehicle(event, vehicle)}>
-                          <label className="vehicle-management__field" htmlFor={`edit-vehicle-type-${vehicle.id}`}>Tipo de vehículo
-                            <input id={`edit-vehicle-type-${vehicle.id}`} required minLength={2} maxLength={40}
-                              value={editForm.type} onChange={(event) => setEditForm((current) => ({ ...current, type: event.target.value }))} />
-                          </label>
-                          <label className="vehicle-management__field" htmlFor={`edit-vehicle-capacity-${vehicle.id}`}>Capacidad (kg)
-                            <input id={`edit-vehicle-capacity-${vehicle.id}`} type="number" min="0.01" max="100000" step="any"
-                              value={editForm.capacityKg} onChange={(event) => setEditForm((current) => ({ ...current, capacityKg: event.target.value }))} />
-                          </label>
-                          <label className="vehicle-management__field" htmlFor={`edit-vehicle-status-${vehicle.id}`}>Disponibilidad
-                            <select id={`edit-vehicle-status-${vehicle.id}`} value={editForm.status}
-                              onChange={(event) => setEditForm((current) => ({ ...current, status: event.target.value as VehicleStatus }))}>
-                              <option value="active">Activo</option><option value="inactive">Inactivo</option>
-                            </select>
-                          </label>
-                          <div className="vehicle-management__row-actions">
-                            <Button type="submit" disabled={busyVehicleId === vehicle.id}>Guardar cambios</Button>
-                            <Button type="button" variant="secondary" onClick={() => setEditingVehicleId(null)}>Cancelar</Button>
-                          </div>
-                        </form>
-                      ) : <div className="vehicle-management__row-actions">
-                        <Button type="button" variant="secondary" onClick={() => startEditing(vehicle)} aria-label={`Editar ${vehicle.plate}`}>
-                          Editar vehículo
-                        </Button>
-                      </div>}
-                    </li>;
-                  })}
-                </ul>}
-        </Surface>
-      </section>
+      <FormSheet open={creating} onOpenChange={setCreating} icon={Truck} title="Registrar vehículo"
+        description="La placa identifica el vehículo y no se puede editar después."
+        onSubmit={(event) => void createVehicle(event)}
+        footer={(
+          <>
+            <Button type="button" variant="outline" disabled={saving} onClick={() => setCreating(false)}>Cancelar</Button>
+            <Button type="submit" disabled={saving}>{saving ? 'Registrando…' : 'Registrar vehículo'}</Button>
+          </>
+        )}>
+        {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+        <FieldGroup className="gap-4">
+          <TextField id="new-vehicle-plate" label="Placa" placeholder="Ej. ABC-123" required minLength={3} maxLength={16}
+            pattern={IDENTIFIER_PATTERN} value={form.plate}
+            onChange={(event) => setForm((current) => ({ ...current, plate: event.target.value }))} />
+          <TextField id="new-vehicle-type" label="Tipo de vehículo" placeholder="Ej. Furgoneta" required minLength={2} maxLength={40} value={form.type}
+            onChange={(event) => setForm((current) => ({ ...current, type: event.target.value }))} />
+          <TextField id="new-vehicle-capacity" label="Capacidad (kg) · opcional" placeholder="Ej. 1200" type="number" min="0.01" max="100000" step="any"
+            value={form.capacityKg} onChange={(event) => setForm((current) => ({ ...current, capacityKg: event.target.value }))} />
+        </FieldGroup>
+      </FormSheet>
+
+      <FormSheet open={editingVehicle !== undefined} onOpenChange={(open) => { if (!open) setEditingVehicleId(null); }} icon={Pencil}
+        title={`Editar ${editingVehicle?.plate ?? 'vehículo'}`} description="La placa no se puede cambiar."
+        onSubmit={(event) => { if (editingVehicle !== undefined) void saveVehicle(event, editingVehicle); }}
+        footer={(
+          <>
+            <Button type="button" variant="outline" onClick={() => setEditingVehicleId(null)}>Cancelar</Button>
+            <Button type="submit" disabled={busyVehicleId === editingVehicleId}>Guardar cambios</Button>
+          </>
+        )}>
+        {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+        <FieldGroup className="gap-4">
+          <TextField id="edit-vehicle-type" label="Tipo de vehículo" placeholder="Ej. Furgoneta" required minLength={2} maxLength={40}
+            value={editForm.type} onChange={(event) => setEditForm((current) => ({ ...current, type: event.target.value }))} />
+          <TextField id="edit-vehicle-capacity" label="Capacidad (kg)" placeholder="Ej. 1200" type="number" min="0.01" max="100000" step="any"
+            value={editForm.capacityKg} onChange={(event) => setEditForm((current) => ({ ...current, capacityKg: event.target.value }))} />
+          <SelectField id="edit-vehicle-status" label="Disponibilidad" placeholder="Selecciona la disponibilidad" value={editForm.status}
+            options={STATUS_OPTIONS} onChange={(status) => setEditForm((current) => ({ ...current, status }))} />
+        </FieldGroup>
+      </FormSheet>
     </section>
   );
 }
