@@ -63,7 +63,7 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 ## Patrones
 
 - **Armazón:** como `sidebar-07`, con `SidebarProvider`, `Sidebar collapsible="icon"`, `SidebarInset` y `SidebarTrigger`. `Ctrl+B` activo. "Pedidos" es un `Collapsible` con `SidebarMenuSub`; la cuenta es un `DropdownMenu`.
-- **Login:** dos tarjetas sobre fondo gris: mapa isométrico a la izquierda (`public/login-map.svg`, generado con `scripts/generate-login-map.mjs`) y formulario a la derecha.
+- **Login:** dos tarjetas sobre fondo gris: mapa isométrico a la izquierda (`public/login-map.svg`) y formulario a la derecha.
 - **Formularios:** los registros y ediciones van en `FormSheet`, con `FieldGroup` + `Field`. Los `Input` conservan la validación nativa (`required`, `pattern`, `minLength`, `maxLength`). `Select` y `DatePicker` no la aplican, así que se validan con mensaje en español mediante `FieldError`.
 - **`pattern`:** se compila con el flag `v`. Los patrones viven en `lib/patterns.ts`, con test, porque uno inválido se ignora sin avisar.
 - **Fechas:** `lib/dates.ts`. Nunca `new Date('YYYY-MM-DD')`, que se interpreta como UTC y en Lima muestra el día anterior.
