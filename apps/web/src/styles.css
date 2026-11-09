@@ -141,6 +141,34 @@
     @apply border-border outline-ring/50;
   }
 
+  /* Scroll global: barra fina sin flechas ni fondo; el pulgar se marca un poco más al pasar el mouse. */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background: color-mix(in oklch, var(--foreground) 18%, transparent) padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in oklch, var(--foreground) 32%, transparent);
+  }
+  /* Firefox no tiene los pseudoelementos de WebKit; Chrome ignoraría los de arriba si viera estas propiedades. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+    }
+  }
+
   html {
     @apply font-sans;
   }
