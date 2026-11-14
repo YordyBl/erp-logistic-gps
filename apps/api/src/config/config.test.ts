@@ -14,7 +14,18 @@ describe('loadConfig', () => {
       gpsSimulationTimeScale: 1,
       gpsPositionRetentionDays: 30,
       valhallaUrl: undefined,
+      routeSimulationEnabled: false,
     });
+  });
+
+  it('enables route simulation only for an explicit development environment with Valhalla', () => {
+    const valhalla = { VALHALLA_URL: 'http://valhalla:8002' };
+    expect(loadConfig({ ...valhalla, NODE_ENV: 'development' }).routeSimulationEnabled).toBe(true);
+    expect(loadConfig({ ...valhalla, NODE_ENV: ' development ' }).routeSimulationEnabled).toBe(true);
+    expect(loadConfig(valhalla).routeSimulationEnabled).toBe(false);
+    expect(loadConfig({ ...valhalla, NODE_ENV: 'test' }).routeSimulationEnabled).toBe(false);
+    expect(loadConfig({ ...valhalla, NODE_ENV: 'production' }).routeSimulationEnabled).toBe(false);
+    expect(loadConfig({ NODE_ENV: 'development' }).routeSimulationEnabled).toBe(false);
   });
 
   it('validates GPS simulation frequency and configurable history retention', () => {

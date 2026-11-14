@@ -125,7 +125,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   it('limits route reads to the linked account and starts all stop orders with audit once', async () => {
     const ctx = await seed();
     const ids = [await ctx.createOrder('EXEC-ORDER-1'), await ctx.createOrder('EXEC-ORDER-2')];
-    const route = await ctx.plan(ids, undefined, true);
+    const route = await ctx.plan(ids);
     const before = await hash(ctx.organizationId);
     await expect(execution.mine(ctx.organizationId, ctx.actorId)).rejects.toThrow();
     await expect(execution.start(ctx.organizationId, route.id, ctx.actorId, AT)).rejects.toThrow();
@@ -141,6 +141,9 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
     await source.query(`UPDATE delivery_stops SET latitude=-12.05, longitude=-77.03
       WHERE organization_id=$1 AND route_id=$2`, [ctx.organizationId, route.id]);
+    // Simulated routes now start at planning; mark this started route to exercise GPS storage.
+    await source.query(`UPDATE delivery_routes SET simulated_completion_enabled=true
+      WHERE organization_id=$1 AND id=$2`, [ctx.organizationId, route.id]);
     const positions = new RoutePositionTypeOrmStore(source);
     const activeRoutes = (await positions.findActiveRoutes())
       .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId);
@@ -238,7 +241,6 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     const origin = { addressLine: 'Starting location', latitude: -11.9740702, longitude: -77.0814464 };
     const route = await ctx.plan([await ctx.createOrder('EXEC-ORIGIN-1')], origin, true);
     await ctx.bind();
-    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
 
     const active = await new RoutePositionTypeOrmStore(source).findActiveRoutes();
     expect(active.every((activeRoute) => activeRoute.simulatedCompletionEnabled)).toBe(true);

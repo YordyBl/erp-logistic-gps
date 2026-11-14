@@ -23,7 +23,7 @@ const input = {
   }],
 };
 
-function makeUseCase(mapLinkResolver: MapLinkResolver) {
+function makeUseCase(mapLinkResolver: MapLinkResolver, simulationEnabled = false) {
   const store = { plan: vi.fn(async (route: PlannedRoute) => route) };
   const getDriver = { execute: vi.fn().mockResolvedValue({ driver: { status: 'active' } }) };
   const getVehicle = { execute: vi.fn().mockResolvedValue({ vehicle: { status: 'active' } }) };
@@ -35,6 +35,7 @@ function makeUseCase(mapLinkResolver: MapLinkResolver) {
       getVehicle as unknown as GetVehicleUseCase,
       clock,
       mapLinkResolver,
+      { simulationEnabled },
     ),
     store,
   };
@@ -47,7 +48,7 @@ describe('PlanRouteUseCase Google Maps coordinates', () => {
         ? { latitude: -11.9740702, longitude: -77.0814464 }
         : { latitude: -11.9598866, longitude: -77.0428574 }),
     };
-    const { useCase, store } = makeUseCase(resolver);
+    const { useCase, store } = makeUseCase(resolver, true);
 
     await useCase.execute({ ...input,
       origin: { addressLine: 'Núcleo de investigación', googleMapsUrl: 'https://maps.app.goo.gl/origin' },
@@ -81,5 +82,40 @@ describe('PlanRouteUseCase Google Maps coordinates', () => {
 
     await expect(useCase.execute(input)).rejects.toThrow('Google Maps link could not be resolved');
     expect(store.plan).not.toHaveBeenCalled();
+  });
+});
+
+describe('PlanRouteUseCase route simulation', () => {
+  const resolver: MapLinkResolver = {
+    resolve: vi.fn().mockResolvedValue({ latitude: -11.9740702, longitude: -77.0814464 }),
+  };
+  const origin = { addressLine: 'Núcleo de investigación', latitude: -11.97, longitude: -77.08 };
+
+  it('rejects a simulated route when simulation is unavailable', async () => {
+    const { useCase, store } = makeUseCase(resolver, false);
+
+    await expect(useCase.execute({ ...input, origin, simulatedCompletionEnabled: true }))
+      .rejects.toMatchObject({ code: 'DELIVERY_ROUTE_INVALID_INPUT',
+        message: 'Route simulation is only available in development' });
+    expect(store.plan).not.toHaveBeenCalled();
+  });
+
+  it('requires an origin for a simulated route', async () => {
+    const { useCase, store } = makeUseCase(resolver, true);
+
+    await expect(useCase.execute({ ...input, simulatedCompletionEnabled: true }))
+      .rejects.toMatchObject({ code: 'DELIVERY_ROUTE_INVALID_INPUT',
+        message: 'Simulated routes require an origin' });
+    expect(store.plan).not.toHaveBeenCalled();
+  });
+
+  it('keeps planning ordinary routes when simulation is unavailable', async () => {
+    const { useCase, store } = makeUseCase(resolver, false);
+
+    await useCase.execute(input);
+
+    expect(store.plan).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'planned', simulatedCompletionEnabled: false,
+    }), input.actorUserId);
   });
 });

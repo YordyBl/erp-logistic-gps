@@ -73,6 +73,14 @@ export class DriverAccountTypeOrmStore implements DriverAccountBindingStore {
           if (user.role !== 'DRIVER' || user.status !== 'active') {
             throw new DriverInvariantError('Only an active DRIVER account can be linked');
           }
+          // The driver row lock above serializes this check with simulated route planning.
+          const simulated = await manager.query<unknown[]>(
+            `SELECT 1 FROM delivery_routes WHERE organization_id=$1 AND driver_id=$2
+              AND simulated_completion_enabled=true AND status IN ('planned','in_progress')`,
+            [organizationId, driverId]);
+          if (simulated.length > 0) {
+            throw new DriverInvariantError('Driver has an active simulated route');
+          }
         }
         const rows = await manager.query<BindingRow[]>(
           `SELECT user_id FROM driver_accounts WHERE organization_id=$1 AND driver_id=$2`,

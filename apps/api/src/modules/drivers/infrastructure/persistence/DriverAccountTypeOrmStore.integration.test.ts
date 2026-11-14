@@ -27,7 +27,8 @@ describe.skipIf(url === null)('Driver-account binding (PostgreSQL)', () => {
 
   afterAll(async () => {
     if (!source?.isInitialized) return;
-    for (const table of ['driver_account_binding_history', 'driver_accounts', 'drivers', 'users']) {
+    for (const table of ['driver_account_binding_history', 'driver_accounts', 'delivery_routes',
+      'vehicles', 'drivers', 'users']) {
       await source.query(`DELETE FROM "${table}" WHERE organization_id = ANY($1::uuid[])`, [organizations]);
     }
     await source.query(`DELETE FROM organizations WHERE id = ANY($1::uuid[])`, [organizations]);
@@ -159,5 +160,30 @@ describe.skipIf(url === null)('Driver-account binding (PostgreSQL)', () => {
     expect((await source.query<{ id: string }[]>(
       `SELECT id FROM driver_account_binding_history WHERE organization_id=$1`,
       [ctx.organizationId]))).toHaveLength(1);
+  });
+
+  it('rejects linking an account while the driver has an active simulated route', async () => {
+    const ctx = await seed();
+    const at = '2026-10-27T16:00:00.000Z';
+    const vehicleId = randomUUID();
+    const routeId = randomUUID();
+    await source.query(`INSERT INTO vehicles (id, organization_id, plate, type, capacity_kg,
+      status, created_at, updated_at) VALUES ($1,$2,$3,'van',800,'active',now(),now())`,
+    [vehicleId, ctx.organizationId, `S${vehicleId.slice(0, 6).toUpperCase()}`]);
+    await source.query(`INSERT INTO delivery_routes (id, organization_id, public_code, planned_date,
+      driver_id, vehicle_id, status, created_at, started_at, simulated_completion_enabled)
+      VALUES ($1,$2,'SIM-BIND-1','2026-10-27',$3,$4,'in_progress',now(),now(),true)`,
+    [routeId, ctx.organizationId, ctx.driverId, vehicleId]);
+
+    await expect(store.bind(ctx.organizationId, ctx.driverId, ctx.userId, ctx.adminId, at))
+      .rejects.toMatchObject({ code: 'DRIVER_INVARIANT_VIOLATION',
+        message: 'Driver has an active simulated route' });
+    expect(await store.get(ctx.organizationId, ctx.driverId)).toEqual({ driverId: ctx.driverId, userId: null });
+    expect(await source.query(`SELECT id FROM driver_account_binding_history WHERE driver_id=$1`,
+      [ctx.driverId])).toHaveLength(0);
+
+    await source.query(`UPDATE delivery_routes SET status='completed', completed_at=now() WHERE id=$1`, [routeId]);
+    await expect(store.bind(ctx.organizationId, ctx.driverId, ctx.userId, ctx.adminId, at))
+      .resolves.toEqual({ driverId: ctx.driverId, userId: ctx.userId });
   });
 });

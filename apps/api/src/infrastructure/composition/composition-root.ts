@@ -65,6 +65,7 @@ export async function composeApiModules(
   dataSource: DataSource,
   authConfig: AuthConfig,
   evidenceStorageConfig?: S3EvidenceObjectStorageConfig,
+  options: { readonly routeSimulationEnabled?: boolean } = {},
 ): Promise<ComposedApiModules> {
   const [deliveryOrders, identity, customers, drivers, vehicles] =
     await Promise.all([
@@ -84,6 +85,7 @@ export async function composeApiModules(
     store: new RoutePlanningTypeOrmStore(dataSource),
     executionStore: new DriverRouteTypeOrmStore(dataSource),
     getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
+    simulationEnabled: options.routeSimulationEnabled ?? false,
   });
   const dispatchDashboard = new DispatchDashboardTypeOrmQuery(dataSource);
 

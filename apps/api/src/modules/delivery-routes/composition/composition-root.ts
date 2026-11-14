@@ -139,11 +139,14 @@ export function createDeliveryRoutesModule(options: {
   readonly executionStore: DriverRouteExecutionStore;
   readonly clock?: Clock;
   readonly mapLinkResolver?: MapLinkResolver;
+  /** Route simulation; the process enables it only in an explicit development environment. */
+  readonly simulationEnabled?: boolean;
 }) {
   const clock = options.clock ?? new SystemClock();
+  const simulation = { simulationEnabled: options.simulationEnabled ?? false };
   return {
     planRoute: new PlanRouteUseCase(options.store, options.getDriver,
-      options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver()),
+      options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver(), simulation),
     listRoutes: new ListRoutesUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
     reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),

@@ -40,6 +40,8 @@ export class DeliveryRouteEntity {
   originLongitude!: string | null;
   @Column({ name: 'simulated_completion_enabled', type: 'boolean', default: false })
   simulatedCompletionEnabled!: boolean;
+  @Column({ name: 'simulation_actor_user_id', type: 'uuid', nullable: true })
+  simulationActorUserId!: string | null;
   @Column({ name: 'created_at', type: 'timestamptz' }) createdAt!: Date;
   @Column({ name: 'started_at', type: 'timestamptz', nullable: true }) startedAt!: Date | null;
   @Column({ name: 'completed_at', type: 'timestamptz', nullable: true }) completedAt!: Date | null;

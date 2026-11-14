@@ -47,6 +47,12 @@ export interface AppConfig {
   readonly gpsSimulationTimeScale: number;
   readonly gpsPositionRetentionDays: number;
   readonly valhallaUrl: string | undefined;
+  /**
+   * Simulated GPS and automatic simulated completion. Enabled only when
+   * NODE_ENV is explicitly `development` (never through the default) and a
+   * Valhalla service supplies the geometry the simulation moves along.
+   */
+  readonly routeSimulationEnabled: boolean;
 }
 
 /**
@@ -57,6 +63,7 @@ export interface AppConfig {
  * same default so neither setup can drift silently.
  */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const valhallaUrl = readOptionalLocalServiceUrl(env.VALHALLA_URL, 'VALHALLA_URL');
   return {
     environment: readEnvironment(env),
     port: readPort(env),
@@ -82,7 +89,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       'GPS_POSITION_RETENTION_DAYS',
       DEFAULT_GPS_POSITION_RETENTION_DAYS,
     ),
-    valhallaUrl: readOptionalLocalServiceUrl(env.VALHALLA_URL, 'VALHALLA_URL'),
+    valhallaUrl,
+    routeSimulationEnabled: readOptional(env.NODE_ENV) === 'development' && valhallaUrl !== undefined,
   };
 }
 

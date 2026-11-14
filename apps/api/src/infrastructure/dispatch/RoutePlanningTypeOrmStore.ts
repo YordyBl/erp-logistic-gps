@@ -12,6 +12,7 @@ import { DeliveryOrderStatusHistoryEntity } from '../../modules/delivery-orders/
 import { toDomain } from '../../modules/delivery-orders/infrastructure/persistence/mappers/DeliveryOrderMapper.js';
 import { DriverEntity } from '../../modules/drivers/infrastructure/persistence/entities/DriverEntity.js';
 import { VehicleEntity } from '../../modules/vehicles/infrastructure/persistence/entities/VehicleEntity.js';
+import { startRouteInTransaction } from './route-start.js';
 
 /** Process-level unit of work; no module repository calls another module's repository. */
 export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
@@ -31,6 +32,11 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         if (driver === null || vehicle === null) throw new DeliveryRouteNotFoundError();
         if (driver.status !== 'active' || vehicle.status !== 'active') {
           throw new DeliveryRouteConflictError('Driver and vehicle must be active');
+        }
+        const simulated = route.simulatedCompletionEnabled === true;
+        // The driver row lock above serializes this check with account binding.
+        if (simulated && await driverHasAccount(manager, route.organizationId, route.driverId)) {
+          throw new DeliveryRouteConflictError('Simulated routes require a driver without a linked account');
         }
 
         const allIds = route.stops.flatMap((stop) => stop.orderIds);
@@ -86,6 +92,7 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         persistedRoute.originLatitude = route.origin === undefined ? null : String(route.origin.latitude);
         persistedRoute.originLongitude = route.origin === undefined ? null : String(route.origin.longitude);
         persistedRoute.simulatedCompletionEnabled = route.simulatedCompletionEnabled ?? false;
+        persistedRoute.simulationActorUserId = simulated ? actorUserId : null;
         persistedRoute.createdAt = new Date(route.createdAt);
         persistedRoute.startedAt = null;
         persistedRoute.completedAt = null;
@@ -136,7 +143,10 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
             await manager.insert(DeliveryOrderStatusHistoryEntity, history);
           }
         }
-        return route;
+        if (!simulated) return route;
+        // Simulated routes have no driver account to start them, so they start now.
+        const startedAt = await startRouteInTransaction(manager, persistedRoute, actorUserId, assignedAt);
+        return { ...route, status: 'in_progress' as const, startedAt: startedAt.toISOString() };
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -248,6 +258,13 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       throw error;
     }
   }
+}
+
+async function driverHasAccount(manager: EntityManager, organizationId: string,
+  driverId: string): Promise<boolean> {
+  const rows = await manager.query<unknown[]>(
+    'SELECT 1 FROM driver_accounts WHERE organization_id=$1 AND driver_id=$2', [organizationId, driverId]);
+  return rows.length > 0;
 }
 
 function isUniqueViolation(error: unknown): boolean {

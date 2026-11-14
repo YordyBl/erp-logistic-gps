@@ -53,6 +53,7 @@ const positionSimulator = new RoutePositionSimulator(
   {
     intervalMilliseconds: config.gpsSimulationIntervalSeconds * 1_000,
     retentionDays: config.gpsPositionRetentionDays,
+    samplingEnabled: config.routeSimulationEnabled,
   },
   (error) => logger.error({ err: error }, 'GPS position simulation tick failed'),
   async (position) => {
@@ -98,6 +99,7 @@ const composed = await composeApiModules(
   dataSource,
   authConfig,
   loadEvidenceStorageConfig(),
+  { routeSimulationEnabled: config.routeSimulationEnabled },
 );
 simulatedCompletionRef.current = async (route, position) => {
   if (route.driverUserId === undefined) return;

@@ -320,6 +320,27 @@ describe('POST /api/v1/delivery-routes', () => {
   });
 });
 
+describe('POST /api/v1/delivery-routes simulation outside development', () => {
+  it('rejects a simulated route with 400 and leaves the order unchanged', async () => {
+    const { testApp, token, driverId, vehicleId, createOrder } = await seededRouteApp();
+    const id = await createOrder('ROUTE-SIM-OFF-1');
+    const before = await request(testApp.app).get(`${ORDERS}/${id}`).set(bearer(token));
+
+    const response = await request(testApp.app).post(ROUTES).set(bearer(token)).send({
+      publicCode: 'ROUTE-SIM-OFF-1', plannedDate: '2026-10-27', driverId, vehicleId,
+      simulatedCompletionEnabled: true,
+      origin: { addressLine: 'Núcleo de investigación', latitude: -11.97, longitude: -77.08 },
+      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds: [id] }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatchObject({ code: 'DELIVERY_ROUTE_INVALID_INPUT',
+      message: 'Route simulation is only available in development' });
+    expect((await request(testApp.app).get(`${ORDERS}/${id}`).set(bearer(token))).body)
+      .toEqual(before.body);
+  });
+});
+
 describe('PATCH /api/v1/delivery-routes/:routeId', () => {
   async function planRoute(
     ctx: Awaited<ReturnType<typeof seededRouteApp>>,

@@ -48,12 +48,18 @@ const commandSchema = z.strictObject({
   organizationId: z.uuid(), actorUserId: z.uuid(), ...planRouteBodySchema.shape,
 });
 
+export interface RouteSimulationOptions {
+  /** True only in an explicit development environment with routing geometry available. */
+  readonly simulationEnabled: boolean;
+}
+
 export class PlanRouteUseCase {
   constructor(private readonly store: RoutePlanningStore,
     private readonly getDriver: GetDriverUseCase,
     private readonly getVehicle: GetVehicleUseCase,
     private readonly clock: Clock,
-    private readonly mapLinkResolver: MapLinkResolver) {}
+    private readonly mapLinkResolver: MapLinkResolver,
+    private readonly simulation: RouteSimulationOptions = { simulationEnabled: false }) {}
 
   async execute(input: unknown): Promise<{ route: PlannedRoute }> {
     const parsed = commandSchema.safeParse(input);
@@ -71,6 +77,12 @@ export class PlanRouteUseCase {
     if (new Set(sequences).size !== sequences.length ||
         new Set(orderIds).size !== orderIds.length) {
       throw new DeliveryRouteValidationError('Stop sequences and order ids must be unique');
+    }
+    if (simulatedCompletionEnabled && !this.simulation.simulationEnabled) {
+      throw new DeliveryRouteValidationError('Route simulation is only available in development');
+    }
+    if (simulatedCompletionEnabled && origin === undefined) {
+      throw new DeliveryRouteValidationError('Simulated routes require an origin');
     }
     const [driver, vehicle] = await Promise.all([
       this.getDriver.execute({ organizationId, driverId }),

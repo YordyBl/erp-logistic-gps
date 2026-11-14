@@ -5,6 +5,8 @@ import type { RoutePositionStore } from '../infrastructure/RoutePositionTypeOrmS
 export interface RoutePositionSimulationConfig {
   readonly intervalMilliseconds: number;
   readonly retentionDays: number;
+  /** False outside an explicit development environment: history is still pruned, nothing is simulated. */
+  readonly samplingEnabled: boolean;
 }
 
 const DESTINATION_ARRIVAL_RADIUS_METERS = 50;
@@ -58,6 +60,7 @@ export class RoutePositionSimulator {
     const cutoff = new Date(Date.parse(now) - this.config.retentionDays * 24 * 60 * 60 * 1_000)
       .toISOString();
     await this.store.pruneReceivedBefore(cutoff);
+    if (!this.config.samplingEnabled) return;
     const routes = await this.store.findActiveRoutes();
     for (const route of routes) {
       try {

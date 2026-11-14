@@ -37,12 +37,14 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
   afterAll(async () => {
     if (!source?.isInitialized) return;
     if (organizationIds.length > 0) {
-      for (const table of ['delivery_stop_orders', 'delivery_order_status_history',
+      for (const table of ['delivery_attempts', 'delivery_route_status_history', 'driver_accounts',
+        'delivery_stop_orders', 'delivery_order_status_history',
         'delivery_orders', 'delivery_stops', 'delivery_routes', 'drivers', 'vehicles']) {
         await source.query(`DELETE FROM "${table}" WHERE "organization_id" = ANY($1::uuid[])`,
           [organizationIds]);
       }
       await source.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
+      await source.query('DELETE FROM users WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
       await source.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [organizationIds]);
     }
     await source.destroy();
@@ -343,5 +345,76 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
       .resolves.toMatchObject({ driverId, vehicleId });
     await expect(store.reassign(randomUUID(), secondRoute.id, { driverId }))
       .rejects.toThrow();
+  });
+
+  function simulatedRoute(organizationId: string, driverId: string, vehicleId: string,
+    orderIds: string[]): PlannedRoute {
+    const base = plannedRoute(organizationId, driverId, vehicleId, orderIds);
+    return { ...base, simulatedCompletionEnabled: true,
+      origin: { addressLine: 'Núcleo de investigación', latitude: -11.97407, longitude: -77.081446 } };
+  }
+
+  it('starts a simulated route at planning with audited transitions by the planning actor', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const id = await makeOrder('SIM-PLAN-1');
+    const route = simulatedRoute(organizationId, driverId, vehicleId, [id]);
+    const actor = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DISPATCHER','active',now())`,
+    [actor, organizationId, `${actor}@example.test`]);
+
+    const planned = await store.plan(route, actor);
+
+    expect(planned).toMatchObject({ id: route.id, status: 'in_progress',
+      startedAt: expect.any(String), simulatedCompletionEnabled: true });
+    const [row] = await source.query<{ status: string; started_at: Date | null;
+      simulation_actor_user_id: string | null }[]>(
+      'SELECT status, started_at, simulation_actor_user_id FROM delivery_routes WHERE id=$1', [route.id]);
+    expect(row).toMatchObject({ status: 'in_progress', simulation_actor_user_id: actor });
+    expect(row?.started_at?.toISOString()).toBe(planned.startedAt);
+    expect((await orders.findById(id))?.status).toBe('in_transit');
+    const history = await orders.findStatusHistory(organizationId, id);
+    expect(history.map((event) => [event.fromStatus, event.toStatus, event.actorUserId])).toEqual([
+      ['created', 'planned', actor], ['planned', 'assigned', actor], ['assigned', 'in_transit', actor]]);
+    const attempts = await source.query<{ status: string; route_id: string; driver_id: string }[]>(
+      'SELECT status, route_id, driver_id FROM delivery_attempts WHERE order_id=$1', [id]);
+    expect(attempts).toEqual([{ status: 'in_progress', route_id: route.id, driver_id: driverId }]);
+    const routeHistory = await source.query<{ from_status: string; to_status: string; actor_user_id: string }[]>(
+      'SELECT from_status, to_status, actor_user_id FROM delivery_route_status_history WHERE route_id=$1',
+      [route.id]);
+    expect(routeHistory).toEqual([{ from_status: 'planned', to_status: 'in_progress', actor_user_id: actor }]);
+    await expect(store.findById(organizationId, route.id)).resolves.toMatchObject({
+      status: 'in_progress', startedAt: planned.startedAt, simulatedCompletionEnabled: true });
+  });
+
+  it('keeps ordinary planning unstarted and without a simulation actor', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const route = plannedRoute(organizationId, driverId, vehicleId, [await makeOrder('ORDINARY-PLAN-1')]);
+
+    await expect(store.plan(route, randomUUID())).resolves.toEqual(route);
+
+    const [row] = await source.query<{ status: string; simulation_actor_user_id: string | null }[]>(
+      'SELECT status, simulation_actor_user_id FROM delivery_routes WHERE id=$1', [route.id]);
+    expect(row).toEqual({ status: 'planned', simulation_actor_user_id: null });
+  });
+
+  it('rejects a simulated route for a driver linked to an account with no writes', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const userId = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DRIVER','active',now())`,
+    [userId, organizationId, `${userId}@example.test`]);
+    await source.query('INSERT INTO driver_accounts (driver_id, organization_id, user_id) VALUES ($1,$2,$3)',
+      [driverId, organizationId, userId]);
+    const id = await makeOrder('SIM-LINKED-1');
+    const route = simulatedRoute(organizationId, driverId, vehicleId, [id]);
+
+    await expect(store.plan(route, randomUUID())).rejects.toMatchObject({
+      message: 'Simulated routes require a driver without a linked account' });
+
+    expect(await store.findById(organizationId, route.id)).toBeNull();
+    expect((await orders.findById(id))?.status).toBe('created');
   });
 });
