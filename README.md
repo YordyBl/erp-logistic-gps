@@ -54,6 +54,10 @@ curl --fail --location --output infra/valhalla/data/peru-latest.osm.pbf \
 docker compose -f docker-compose.yml -f docker-compose.valhalla.yml up --build
 ```
 
+On Windows (Docker Desktop), add `-f docker-compose.valhalla.windows.yml` after the Valhalla
+file so the graph build runs in a Docker volume instead of the checkout; see
+[`docs/operations/gps-tracking.md`](docs/operations/gps-tracking.md#windows-docker-desktop).
+
 The first startup builds Peru routing tiles and can take several minutes; subsequent runs reuse
 the local graph. Valhalla is exposed on loopback port `8002` by default (`VALHALLA_PORT` changes
 it), and the API container uses the internal Compose address. Every order carries coordinates

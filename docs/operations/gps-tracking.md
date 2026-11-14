@@ -91,6 +91,22 @@ graph can take several minutes and use multiple gigabytes of memory and disk. Us
 `VALHALLA_BUILD_CONCURRENCY` to cap build threads (default `2`) and `VALHALLA_PORT` to change
 the loopback host port. The application container waits for Valhalla's `/status` health check.
 
+### Windows (Docker Desktop)
+
+On Windows, Docker runs containers in a Linux VM and the bind mount into the checkout does not
+work reliably for the graph build: `valhalla_build_tiles` aborts with
+`vector::_M_range_check ... (which is 0)` while creating graph edges. Use the Windows override
+on top of the base override. It keeps the build's working data in a named Docker volume and
+binds only the read-only OSM extract and `start.sh`:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.valhalla.yml -f docker-compose.valhalla.windows.yml up -d valhalla
+```
+
+The first build takes about four minutes on a 3.5 GB Docker VM. To rebuild the graph, stop
+Valhalla and remove its volume with `docker volume rm erp-logistic_valhalla-data`. Linux and
+Ubuntu servers do not need this file; they keep using `docker-compose.valhalla.yml` alone.
+
 Every delivery order must carry coordinates (create, edit and import reject orders without
 them), and every route stop is exactly one order: at planning time the stop copies the order's
 delivery address and coordinates, so each planned route always has the geometry Valhalla and
