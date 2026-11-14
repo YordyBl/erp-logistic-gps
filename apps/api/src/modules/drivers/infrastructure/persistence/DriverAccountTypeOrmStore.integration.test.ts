@@ -170,11 +170,19 @@ describe.skipIf(url === null)('Driver-account binding (PostgreSQL)', () => {
     await source.query(`INSERT INTO vehicles (id, organization_id, plate, type, capacity_kg,
       status, created_at, updated_at) VALUES ($1,$2,$3,'van',800,'active',now(),now())`,
     [vehicleId, ctx.organizationId, `S${vehicleId.slice(0, 6).toUpperCase()}`]);
+    // A legacy opted-in route without a simulation actor never auto-closes, so it must not block.
     await source.query(`INSERT INTO delivery_routes (id, organization_id, public_code, planned_date,
       driver_id, vehicle_id, status, created_at, started_at, simulated_completion_enabled)
       VALUES ($1,$2,'SIM-BIND-1','2026-10-27',$3,$4,'in_progress',now(),now(),true)`,
     [routeId, ctx.organizationId, ctx.driverId, vehicleId]);
+    await expect(store.bind(ctx.organizationId, ctx.driverId, ctx.userId, ctx.adminId, at))
+      .resolves.toEqual({ driverId: ctx.driverId, userId: ctx.userId });
+    await store.bind(ctx.organizationId, ctx.driverId, null, ctx.adminId, at);
+    await source.query(`DELETE FROM driver_account_binding_history WHERE driver_id=$1`, [ctx.driverId]);
 
+    // A dispatcher-owned simulation records its planning actor: that one blocks the link.
+    await source.query(`UPDATE delivery_routes SET simulation_actor_user_id=$2 WHERE id=$1`,
+      [routeId, ctx.adminId]);
     await expect(store.bind(ctx.organizationId, ctx.driverId, ctx.userId, ctx.adminId, at))
       .rejects.toMatchObject({ code: 'DRIVER_INVARIANT_VIOLATION',
         message: 'Driver has an active simulated route' });

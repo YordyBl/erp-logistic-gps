@@ -74,9 +74,12 @@ export class DriverAccountTypeOrmStore implements DriverAccountBindingStore {
             throw new DriverInvariantError('Only an active DRIVER account can be linked');
           }
           // The driver row lock above serializes this check with simulated route planning.
+          // Only dispatcher-owned simulations (which record their planning actor) close by
+          // themselves; a legacy opted-in route without an actor must not block the link.
           const simulated = await manager.query<unknown[]>(
             `SELECT 1 FROM delivery_routes WHERE organization_id=$1 AND driver_id=$2
-              AND simulated_completion_enabled=true AND status IN ('planned','in_progress')`,
+              AND simulated_completion_enabled=true AND simulation_actor_user_id IS NOT NULL
+              AND status IN ('planned','in_progress')`,
             [organizationId, driverId]);
           if (simulated.length > 0) {
             throw new DriverInvariantError('Driver has an active simulated route');
