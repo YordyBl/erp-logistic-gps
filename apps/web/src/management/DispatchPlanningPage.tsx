@@ -3,7 +3,8 @@ import { ArrowLeftRight, Eye, Plus, RefreshCw, Route } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
-  DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver, Vehicle,
+  CreateDispatchRouteInput, DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver,
+  RouteSimulationAvailability, Vehicle,
 } from '../api/client.js';
 import { RowActions, SortableHeader, TableProgress } from '../components/data-table/columnHelpers.js';
 import { DataTable, type DataTableFilter } from '../components/data-table/DataTable.js';
@@ -45,18 +46,9 @@ interface DispatchClient {
   listDeliveryOrders(): Promise<readonly DeliveryOrder[]>;
   listDrivers(): Promise<readonly Driver[]>;
   listVehicles(): Promise<readonly Vehicle[]>;
-  createDispatchRoute(input: {
-    readonly publicCode: string;
-    readonly plannedDate: string;
-    readonly driverId: string;
-    readonly vehicleId: string;
-    readonly stops: readonly {
-      readonly sequence: number;
-      readonly addressLine: string;
-      readonly googleMapsUrl?: string;
-      readonly orderIds: readonly string[];
-    }[];
-  }): Promise<DispatchRoute>;
+  createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute>;
+  /** Development-only availability; omitted or failing means simulation is unavailable. */
+  getRouteSimulation?(): Promise<RouteSimulationAvailability>;
   reassignDispatchRoute(routeId: string, input: {
     readonly driverId?: string;
     readonly vehicleId?: string;
@@ -71,6 +63,8 @@ interface StopDraft {
 }
 
 const newStop = (): StopDraft => ({ addressLine: '', googleMapsUrl: '', orderIds: [] });
+
+const SIMULATION_UNAVAILABLE: RouteSimulationAvailability = { enabled: false, eligibleDriverIds: [] };
 
 function driverOptions(drivers: readonly Driver[]) {
   return drivers.map((driver) => ({ value: driver.id, label: driver.fullName }));
@@ -93,6 +87,10 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const [plannedDate, setPlannedDate] = useState('');
   const [driverId, setDriverId] = useState('');
   const [vehicleId, setVehicleId] = useState('');
+  const [simulation, setSimulation] = useState<RouteSimulationAvailability>(SIMULATION_UNAVAILABLE);
+  const [simulate, setSimulate] = useState(false);
+  const [originAddress, setOriginAddress] = useState('');
+  const [originMapsUrl, setOriginMapsUrl] = useState('');
   const [showMissing, setShowMissing] = useState(false);
   const [history, setHistory] = useState<Record<string, readonly DeliveryOrderStatusHistory[]>>({});
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
@@ -125,8 +123,29 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
 
   useEffect(() => { void loadData(); }, [loadData]);
 
+  // Simulation availability is optional: a missing method or a failed request
+  // simply hides the controls instead of blocking regular planning.
+  useEffect(() => {
+    let cancelled = false;
+    const load = client.getRouteSimulation?.bind(client);
+    if (load === undefined) return undefined;
+    load()
+      .then((availability) => { if (!cancelled) setSimulation(availability); })
+      .catch(() => { if (!cancelled) setSimulation(SIMULATION_UNAVAILABLE); });
+    return () => { cancelled = true; };
+  }, [client]);
+
   const eligibleOrders = orders.filter((order) => order.status === 'created' || order.status === 'returned');
   const activeDrivers = drivers.filter((driver) => driver.status === 'active');
+  const simulating = simulation.enabled && simulate;
+  const selectableDrivers = simulating
+    ? activeDrivers.filter((driver) => simulation.eligibleDriverIds.includes(driver.id))
+    : activeDrivers;
+
+  function toggleSimulation(checked: boolean) {
+    setSimulate(checked);
+    if (checked && driverId !== '' && !simulation.eligibleDriverIds.includes(driverId)) setDriverId('');
+  }
   const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
   const orderById = new Map(orders.map((order) => [order.id, order]));
 
@@ -168,26 +187,41 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       setError('Asigna al menos un pedido a cada parada antes de crear la ruta.');
       return;
     }
+    if (simulating && (originAddress.trim() === '' || originMapsUrl.trim() === '')) {
+      setError('Indica la dirección y el enlace de Google Maps del origen de la simulación.');
+      return;
+    }
     setSaving(true);
     try {
       const created = await client.createDispatchRoute({
         publicCode: routeCode.trim(), plannedDate, driverId, vehicleId,
+        ...(simulating ? {
+          simulatedCompletionEnabled: true,
+          origin: { addressLine: originAddress.trim(), googleMapsUrl: originMapsUrl.trim() },
+        } : {}),
         stops: stops.map((stop, index) => ({
           sequence: index + 1, addressLine: stop.addressLine.trim(), orderIds: stop.orderIds,
           ...(stop.googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: stop.googleMapsUrl.trim() }),
         })),
       });
+      // A simulated route starts at planning, so its orders are already in transit.
+      const nextOrderStatus = created.simulatedCompletionEnabled === true ? 'in_transit' : 'assigned';
       setRoutes((current) => [...current, created]);
       setOrders((current) => current.map((order) => stops.some((stop) => stop.orderIds.includes(order.id))
-        ? { ...order, status: 'assigned' } : order));
+        ? { ...order, status: nextOrderStatus } : order));
       setRouteCode('');
       setPlannedDate('');
       setDriverId('');
       setVehicleId('');
       setStops([newStop()]);
+      setSimulate(false);
+      setOriginAddress('');
+      setOriginMapsUrl('');
       setShowMissing(false);
       setCreateOpen(false);
-      setNotice(`Ruta ${created.publicCode} creada.`);
+      setNotice(created.simulatedCompletionEnabled === true
+        ? `Ruta ${created.publicCode} creada. La simulación ya está en curso.`
+        : `Ruta ${created.publicCode} creada.`);
     } catch (cause) {
       setError(cause instanceof Error ? `No se pudo crear la ruta. ${cause.message}` : 'No se pudo crear la ruta.');
     } finally {
@@ -235,7 +269,10 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       enableHiding: false,
       cell: ({ row }) => (
         <span className="flex flex-col">
-          <span className="font-medium tabular-nums">{row.original.route.publicCode}</span>
+          <span className="flex items-center gap-2">
+            <span className="font-medium tabular-nums">{row.original.route.publicCode}</span>
+            {row.original.route.simulatedCompletionEnabled === true && <Badge variant="outline">Simulada</Badge>}
+          </span>
           <span className="text-xs text-muted-foreground">{formatPlannedDate(row.original.route.plannedDate)}</span>
         </span>
       ),
@@ -331,7 +368,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
         footer={(
           <>
             <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancelar</Button>
-            <Button type="submit" disabled={saving || loading || activeDrivers.length === 0 || activeVehicles.length === 0}>
+            <Button type="submit" disabled={saving || loading || selectableDrivers.length === 0 || activeVehicles.length === 0}>
               {saving ? 'Creando ruta…' : 'Crear ruta'}
             </Button>
           </>
@@ -341,13 +378,36 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
               <span>Pedidos asignados: <span className="text-foreground">{stops.reduce((total, stop) => total + stop.orderIds.length, 0)}</span></span>
             </DocumentTitle>
             {error !== null && <ErrorNotice>{error}</ErrorNotice>}
+            {simulation.enabled && (
+              <FieldSet>
+                <Field orientation="horizontal">
+                  <Checkbox id="route-simulate" checked={simulate} onCheckedChange={(checked) => toggleSimulation(checked === true)} />
+                  <FieldLabel htmlFor="route-simulate" className="font-normal">Simular ruta</FieldLabel>
+                </Field>
+                <FieldDescription>
+                  Solo en desarrollo. La ruta inicia al crearse, recorre la geometría de Valhalla desde el origen y cierra sola cada parada.
+                  Solo admite conductores sin cuenta vinculada.
+                </FieldDescription>
+                {simulate && (
+                  <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <TextField id="route-origin-address" label="Dirección de origen" placeholder="Ej. Almacén central, Ate" maxLength={200}
+                      value={originAddress} onChange={(event) => setOriginAddress(event.target.value)} />
+                    <Field>
+                      <FieldLabel htmlFor="route-origin-maps">Enlace de Google Maps del origen</FieldLabel>
+                      <Input id="route-origin-maps" type="url" maxLength={2048} placeholder="https://maps.app.goo.gl/..." value={originMapsUrl}
+                        onChange={(event) => setOriginMapsUrl(event.target.value)} />
+                    </Field>
+                  </FieldGroup>
+                )}
+              </FieldSet>
+            )}
             <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
               <TextField id="route-code" label="Código de ruta" placeholder="Ej. R-2041" required minLength={3} maxLength={32} value={routeCode}
                 onChange={(event) => setRouteCode(event.target.value)} />
               <DateField id="route-date" label="Fecha planificada" placeholder="Elige una fecha" value={plannedDate} onChange={setPlannedDate}
                 error={showMissing && plannedDate === '' ? 'Elige la fecha planificada.' : null} />
               <SelectField id="route-driver" label="Conductor" placeholder="Selecciona un conductor" value={driverId}
-                options={driverOptions(activeDrivers)} onChange={setDriverId}
+                options={driverOptions(selectableDrivers)} onChange={setDriverId}
                 error={showMissing && driverId === '' ? 'Selecciona un conductor.' : null} />
               <SelectField id="route-vehicle" label="Vehículo" placeholder="Selecciona un vehículo" value={vehicleId}
                 options={vehicleOptions(activeVehicles)} onChange={setVehicleId}
