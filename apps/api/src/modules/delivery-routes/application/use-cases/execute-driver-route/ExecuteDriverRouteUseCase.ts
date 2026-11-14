@@ -20,13 +20,15 @@ const incident = z.strictObject({
   description: z.string().trim().min(3).max(1000), evidenceIds,
 });
 const completeCommand = query.extend({ routeId: z.uuid() });
-const completeSimulatedCommand = query.extend({
-  routeId: z.uuid(), driverId: z.uuid(), occurredAt: z.iso.datetime().optional(),
+const completeSimulatedStopsCommand = query.extend({
+  routeId: z.uuid(), reachedStopCount: z.number().int().positive(),
+  occurredAt: z.iso.datetime().optional(),
 });
 
 export class ExecuteDriverRouteUseCase {
   constructor(private readonly store: DriverRouteExecutionStore,
-    private readonly clock: Clock) {}
+    private readonly clock: Clock,
+    private readonly simulation: { readonly simulationEnabled: boolean } = { simulationEnabled: false }) {}
 
   async mine(input: unknown) {
     const parsed = query.safeParse(input);
@@ -73,13 +75,21 @@ export class ExecuteDriverRouteUseCase {
       parsed.data.actorUserId, this.clock.now()) };
   }
 
-  async completeSimulated(input: unknown) {
-    const parsed = completeSimulatedCommand.safeParse(input);
-    if (!parsed.success) throw new DeliveryRouteValidationError('Simulated route completion command is invalid');
-    if (this.store.completeSimulated === undefined) {
+  /**
+   * Closes the stops a simulated vehicle has passed, then the route once every
+   * order has an outcome. `actorUserId` is the dispatcher who planned the route.
+   */
+  async completeSimulatedStops(input: unknown) {
+    if (!this.simulation.simulationEnabled) {
+      throw new DeliveryRouteConflictError('Route simulation is only available in development');
+    }
+    const parsed = completeSimulatedStopsCommand.safeParse(input);
+    if (!parsed.success) throw new DeliveryRouteValidationError('Simulated stop completion command is invalid');
+    if (this.store.completeSimulatedStops === undefined) {
       throw new DeliveryRouteConflictError('Simulated delivery completion requires persistent execution storage');
     }
-    return { route: await this.store.completeSimulated(parsed.data.organizationId, parsed.data.routeId,
-      parsed.data.driverId, parsed.data.actorUserId, parsed.data.occurredAt ?? this.clock.now()) };
+    const { organizationId, routeId, actorUserId, reachedStopCount, occurredAt } = parsed.data;
+    return { route: await this.store.completeSimulatedStops(organizationId, routeId, actorUserId,
+      reachedStopCount, occurredAt ?? this.clock.now()) };
   }
 }

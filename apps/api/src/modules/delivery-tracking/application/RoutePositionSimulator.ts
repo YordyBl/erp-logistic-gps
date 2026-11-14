@@ -9,8 +9,6 @@ export interface RoutePositionSimulationConfig {
   readonly samplingEnabled: boolean;
 }
 
-const DESTINATION_ARRIVAL_RADIUS_METERS = 50;
-
 export class RoutePositionSimulator {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
@@ -23,7 +21,7 @@ export class RoutePositionSimulator {
     private readonly config: RoutePositionSimulationConfig,
     private readonly onError: (error: unknown) => void = () => undefined,
     private readonly onPositionRecorded: (position: RoutePosition) => void | Promise<void> = () => undefined,
-    private readonly onDestinationReached: (route: RoutePositionContext, position: RoutePosition) =>
+    private readonly onSimulatedStopsReached: (route: RoutePositionContext, position: RoutePosition) =>
       void | Promise<void> = () => undefined,
   ) {}
 
@@ -67,8 +65,8 @@ export class RoutePositionSimulator {
         const position: RoutePosition | null = await this.provider.sample(route, now);
         if (position !== null && await this.store.record(position)) {
           await this.onPositionRecorded(position);
-          if (isSimulatedDeliveryArrival(route, position)) {
-            await this.onDestinationReached(route, position);
+          if (hasReachedSimulatedStops(route, position)) {
+            await this.onSimulatedStopsReached(route, position);
           }
         }
       } catch (error) {
@@ -78,18 +76,8 @@ export class RoutePositionSimulator {
   }
 }
 
-function isSimulatedDeliveryArrival(route: RoutePositionContext, position: RoutePosition): boolean {
-  if (position.source !== 'simulated' || route.simulatedCompletionEnabled !== true ||
-      route.driverUserId === undefined || route.stops.length !== 1) return false;
-  const destination = route.stops[0];
-  if (destination === undefined || destination.latitude === null || destination.longitude === null) return false;
-  const toRadians = (degrees: number) => degrees * Math.PI / 180;
-  const latitudeDelta = toRadians(destination.latitude - position.latitude);
-  const longitudeDelta = toRadians(destination.longitude - position.longitude);
-  const startLatitude = toRadians(position.latitude);
-  const endLatitude = toRadians(destination.latitude);
-  const haversine = Math.sin(latitudeDelta / 2) ** 2 +
-    Math.cos(startLatitude) * Math.cos(endLatitude) * Math.sin(longitudeDelta / 2) ** 2;
-  const distanceMeters = 6_371_000 * 2 * Math.asin(Math.sqrt(Math.min(1, haversine)));
-  return distanceMeters <= DESTINATION_ARRIVAL_RADIUS_METERS;
+/** Only recorded simulated samples of opted-in, dispatcher-owned simulations close stops. */
+function hasReachedSimulatedStops(route: RoutePositionContext, position: RoutePosition): boolean {
+  return position.source === 'simulated' && route.simulatedCompletionEnabled === true &&
+    route.simulationActorUserId !== undefined && (position.reachedStopCount ?? 0) > 0;
 }

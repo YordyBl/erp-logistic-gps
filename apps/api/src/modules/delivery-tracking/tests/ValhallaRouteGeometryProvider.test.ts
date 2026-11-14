@@ -50,6 +50,26 @@ describe('ValhallaRouteGeometryProvider', () => {
     });
   });
 
+  it('keeps per-leg distances so simulated stops can be located along the route', async () => {
+    const response = (legs: unknown) => new Response(JSON.stringify({
+      routes: [{ distance: 20_778.828, duration: 1_424.315, legs,
+        geometry: { type: 'LineString', coordinates: [[-77.08, -11.97], [-77.04, -11.96], [-77.04, -12.05]] } }],
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const stops = [{ latitude: -11.96, longitude: -77.04 }, { latitude: -12.05, longitude: -77.04 }];
+    const origin = { latitude: -11.97, longitude: -77.08 };
+    const legs = [{ distance: 6_651.375, duration: 544.072 }, { distance: 14_127.452, duration: 880.244 }];
+
+    await expect(new ValhallaRouteGeometryProvider('http://valhalla:8002',
+      vi.fn().mockResolvedValue(response(legs))).getGeometry(stops, origin))
+      .resolves.toMatchObject({ legDistancesMeters: [6_651.375, 14_127.452] });
+    for (const invalid of [[legs[0]], [{ distance: -1 }, legs[1]], [{}, legs[1]]]) {
+      const geometry = await new ValhallaRouteGeometryProvider('http://valhalla:8002',
+        vi.fn().mockResolvedValue(response(invalid))).getGeometry(stops, origin);
+      expect(geometry).not.toBeNull();
+      expect(geometry).not.toHaveProperty('legDistancesMeters');
+    }
+  });
+
   it('requests optional road geometry and converts Valhalla distance to meters', async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       trip: {

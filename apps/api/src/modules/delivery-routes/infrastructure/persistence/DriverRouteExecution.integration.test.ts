@@ -23,6 +23,7 @@ const probe = await probeIntegrationDatabase();
 if (!probe.available) process.stderr.write(`[driver-route:integration] Skipping: ${probe.reason}.\n`);
 const url = probe.available ? probe.url : null;
 const AT = '2026-10-27T15:00:00.000Z';
+const SIMULATION_ORIGIN = { addressLine: 'Starting location', latitude: -11.9740702, longitude: -77.0814464 };
 
 describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   let source: DataSource;
@@ -112,7 +113,23 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     const bind = async () => source.query(`INSERT INTO driver_accounts
       (organization_id, driver_id, user_id) VALUES ($1,$2,$3)`,
     [organizationId, driverId, actorId]);
-    return { organizationId, driverId, actorId, adminId, createOrder, plan, bind };
+    /** Plans a dispatcher-owned simulated route (driver unlinked); planning starts it. */
+    const planSimulated = async (stopOrders: string[][]) => {
+      const route: PlannedRoute = {
+        id: randomUUID(), organizationId, driverId, vehicleId,
+        publicCode: `SIM-${randomUUID().slice(0, 8)}`,
+        plannedDate: '2026-10-27', status: 'planned', createdAt: AT,
+        origin: SIMULATION_ORIGIN, simulatedCompletionEnabled: true,
+        stops: stopOrders.map((orderIds, index) => ({ id: randomUUID(), sequence: index + 1,
+          addressLine: `Stop ${index + 1}`, latitude: -12.05 - index / 100, longitude: -77.03, orderIds })),
+      };
+      return planner.plan(route, adminId);
+    };
+    return { organizationId, driverId, actorId, adminId, createOrder, plan, planSimulated, bind };
+  }
+
+  async function statuses(ids: readonly string[]) {
+    return Promise.all(ids.map(async (id) => (await orders.findById(id))?.status));
   }
 
   async function hash(organizationId: string) {
@@ -141,19 +158,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
     await source.query(`UPDATE delivery_stops SET latitude=-12.05, longitude=-77.03
       WHERE organization_id=$1 AND route_id=$2`, [ctx.organizationId, route.id]);
-    // Simulated routes now start at planning; mark this started route to exercise GPS storage.
-    await source.query(`UPDATE delivery_routes SET simulated_completion_enabled=true
-      WHERE organization_id=$1 AND id=$2`, [ctx.organizationId, route.id]);
     const positions = new RoutePositionTypeOrmStore(source);
-    const activeRoutes = (await positions.findActiveRoutes())
-      .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId);
-    expect(activeRoutes).toHaveLength(1);
-    expect(activeRoutes[0]).toMatchObject({
-      organizationId: ctx.organizationId,
-      routeId: route.id,
-      driverId: ctx.driverId,
-      stops: [{ latitude: -12.05, longitude: -77.03 }],
-    });
     const position = {
       organizationId: ctx.organizationId, routeId: route.id, driverId: ctx.driverId,
       latitude: -12.05, longitude: -77.03, accuracyMeters: 5,
@@ -236,21 +241,20 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await expect(positions.record(position)).resolves.toBe(false);
   });
 
-  it('persists the optional route origin and bound agent context for GPS simulation', async () => {
+  it('exposes only dispatcher-owned simulations of unlinked drivers to the GPS simulator', async () => {
     const ctx = await seed();
-    const origin = { addressLine: 'Starting location', latitude: -11.9740702, longitude: -77.0814464 };
-    const route = await ctx.plan([await ctx.createOrder('EXEC-ORIGIN-1')], origin, true);
-    await ctx.bind();
+    const route = await ctx.planSimulated([[await ctx.createOrder('EXEC-ORIGIN-1')]]);
+    const own = async () => (await new RoutePositionTypeOrmStore(source).findActiveRoutes())
+      .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId);
 
-    const active = await new RoutePositionTypeOrmStore(source).findActiveRoutes();
-    expect(active.every((activeRoute) => activeRoute.simulatedCompletionEnabled)).toBe(true);
-    expect(active).toContainEqual(expect.objectContaining({
-      organizationId: ctx.organizationId, routeId: route.id, driverId: ctx.driverId,
-      driverUserId: ctx.actorId,
+    expect(await own()).toEqual([expect.objectContaining({
+      routeId: route.id, driverId: ctx.driverId, simulationActorUserId: ctx.adminId,
       simulatedCompletionEnabled: true,
-      origin: { addressLine: origin.addressLine, latitude: -11.97407, longitude: -77.081446 },
-      stops: [{ latitude: null, longitude: null }],
-    }));
+      origin: { addressLine: SIMULATION_ORIGIN.addressLine, latitude: -11.97407, longitude: -77.081446 },
+      stops: [{ latitude: -12.05, longitude: -77.03 }],
+    })]);
+    await ctx.bind();
+    expect(await own()).toEqual([]);
   });
 
   it('rolls back start when one linked order is no longer assigned', async () => {
@@ -495,40 +499,116 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect(otherAttempt.id).not.toBe(attempt.id);
   });
 
-  it('atomically completes an arrived single-delivery simulation without fabricating photo evidence', async () => {
+  it('closes reached simulated stops in sequence and completes the route once all orders are delivered', async () => {
     const ctx = await seed();
-    const orderId = await ctx.createOrder('EXEC-SIMULATED-1');
-    const route = await ctx.plan([orderId]);
-    await ctx.bind();
-    await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
-    const beforeUnauthorized = await hash(ctx.organizationId);
-    await expect(execution.completeSimulated(ctx.organizationId, route.id, ctx.driverId,
-      ctx.adminId, AT)).rejects.toThrow();
-    expect(await hash(ctx.organizationId)).toBe(beforeUnauthorized);
+    const ids = [];
+    for (const code of ['SIM-STOP-1', 'SIM-STOP-2', 'SIM-STOP-3', 'SIM-STOP-4']) ids.push(await ctx.createOrder(code));
+    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!, ids[2]!], [ids[3]!]]);
 
-    const completed = await execution.completeSimulated(ctx.organizationId, route.id,
-      ctx.driverId, ctx.actorId, '2026-10-27T15:10:00.000Z');
-    expect(completed).toMatchObject({ id: route.id, status: 'completed' });
-    expect((await orders.findById(orderId))?.status).toBe('delivered');
+    const first = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 1,
+      '2026-10-27T15:10:00.000Z');
+
+    expect(first).toMatchObject({ id: route.id, status: 'in_progress' });
+    expect(await statuses(ids)).toEqual(['delivered', 'in_transit', 'in_transit', 'in_transit']);
+    const afterFirst = await hash(ctx.organizationId);
+    await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 1,
+      '2026-10-27T15:11:00.000Z');
+    expect(await hash(ctx.organizationId)).toBe(afterFirst);
+
+    const completed = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 3,
+      '2026-10-27T15:30:00.000Z');
+
+    expect(completed).toMatchObject({ id: route.id, status: 'completed', completedAt: expect.any(String) });
+    expect(await statuses(ids)).toEqual(['delivered', 'delivered', 'delivered', 'delivered']);
     const attempts = await source.query<{ status: string; receiver_name: string | null;
       delivery_notes: string | null; completed_at: Date | null }[]>(
       `SELECT status, receiver_name, delivery_notes, completed_at FROM delivery_attempts
        WHERE organization_id=$1 AND route_id=$2`, [ctx.organizationId, route.id]);
-    expect(attempts).toHaveLength(1);
-    expect(attempts[0]).toMatchObject({ status: 'delivered', receiver_name: null,
-      delivery_notes: expect.stringContaining('SIMULATED:') });
-    expect(attempts[0]?.completed_at).not.toBeNull();
-    expect(await source.query(`SELECT id FROM delivery_evidence WHERE organization_id=$1 AND order_id=$2`,
-      [ctx.organizationId, orderId])).toHaveLength(0);
-    expect((await orders.findStatusHistory(ctx.organizationId, orderId)).at(-1))
-      .toMatchObject({ fromStatus: 'in_transit', toStatus: 'delivered', actorUserId: ctx.actorId });
-    const historyCount = await source.query<{ count: string }[]>(
-      `SELECT count(*)::text AS count FROM delivery_route_status_history WHERE route_id=$1`, [route.id]);
-    await execution.completeSimulated(ctx.organizationId, route.id, ctx.driverId, ctx.actorId,
-      '2026-10-27T15:20:00.000Z');
-    expect(await source.query<{ count: string }[]>(
-      `SELECT count(*)::text AS count FROM delivery_route_status_history WHERE route_id=$1`, [route.id]))
-      .toEqual(historyCount);
+    expect(attempts).toHaveLength(4);
+    for (const attempt of attempts) {
+      expect(attempt).toMatchObject({ status: 'delivered', receiver_name: null,
+        delivery_notes: expect.stringContaining('SIMULATED:') });
+      expect(attempt.completed_at).not.toBeNull();
+    }
+    expect(await source.query(`SELECT id FROM delivery_evidence WHERE organization_id=$1`,
+      [ctx.organizationId])).toHaveLength(0);
+    for (const id of ids) {
+      const history = await orders.findStatusHistory(ctx.organizationId, id);
+      expect(history.filter((event) => event.toStatus === 'delivered')).toEqual([
+        expect.objectContaining({ fromStatus: 'in_transit', actorUserId: ctx.adminId })]);
+    }
+    expect(await source.query(`SELECT from_status, to_status, actor_user_id
+      FROM delivery_route_status_history WHERE route_id=$1 ORDER BY occurred_at`, [route.id])).toEqual([
+      { from_status: 'planned', to_status: 'in_progress', actor_user_id: ctx.adminId },
+      { from_status: 'in_progress', to_status: 'completed', actor_user_id: ctx.adminId },
+    ]);
+    const afterCompletion = await hash(ctx.organizationId);
+    await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 3,
+      '2026-10-27T15:40:00.000Z');
+    expect(await hash(ctx.organizationId)).toBe(afterCompletion);
+  });
+
+  it('keeps an existing order outcome and still completes the simulated route', async () => {
+    const ctx = await seed();
+    const ids = [await ctx.createOrder('SIM-KEEP-1'), await ctx.createOrder('SIM-KEEP-2')];
+    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!]]);
+    await source.query(`UPDATE delivery_orders SET status='returned' WHERE id=$1`, [ids[1]]);
+    await source.query(`UPDATE delivery_attempts SET status='failed', completed_at=now() WHERE order_id=$1`,
+      [ids[1]]);
+
+    const completed = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 2,
+      '2026-10-27T15:30:00.000Z');
+
+    expect(completed).toMatchObject({ status: 'completed' });
+    expect(await statuses(ids)).toEqual(['delivered', 'returned']);
+    expect((await orders.findStatusHistory(ctx.organizationId, ids[1]!))
+      .some((event) => event.toStatus === 'delivered')).toBe(false);
+  });
+
+  it('rejects ordinary routes, other actors and linked drivers without changing state', async () => {
+    const ctx = await seed();
+    const ordinary = await ctx.plan([await ctx.createOrder('SIM-DENY-1')]);
+    await ctx.bind();
+    await execution.start(ctx.organizationId, ordinary.id, ctx.actorId, AT);
+    const beforeOrdinary = await hash(ctx.organizationId);
+    for (const actor of [ctx.adminId, ctx.actorId]) {
+      await expect(execution.completeSimulatedStops!(ctx.organizationId, ordinary.id, actor, 1, AT))
+        .rejects.toThrow();
+    }
+    expect(await hash(ctx.organizationId)).toBe(beforeOrdinary);
+
+    const other = await seed();
+    const simulated = await other.planSimulated([[await other.createOrder('SIM-DENY-2')]]);
+    const beforeSimulated = await hash(other.organizationId);
+    for (const actor of [other.actorId, randomUUID()]) {
+      await expect(execution.completeSimulatedStops!(other.organizationId, simulated.id, actor, 1, AT))
+        .rejects.toThrow();
+    }
+    await expect(execution.completeSimulatedStops!(ctx.organizationId, simulated.id, other.adminId, 1, AT))
+      .rejects.toThrow();
+    await other.bind();
+    await expect(execution.completeSimulatedStops!(other.organizationId, simulated.id, other.adminId, 1, AT))
+      .rejects.toThrow();
+    expect(await hash(other.organizationId)).toBe(beforeSimulated);
+  });
+
+  it('serializes concurrent simulated completions into one audited outcome', async () => {
+    const ctx = await seed();
+    const ids = [await ctx.createOrder('SIM-RACE-1'), await ctx.createOrder('SIM-RACE-2')];
+    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!]]);
+
+    const results = await Promise.all([
+      execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 2, '2026-10-27T15:30:00.000Z'),
+      execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 2, '2026-10-27T15:30:01.000Z'),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual(['completed', 'completed']);
+    expect(await source.query<{ count: string }[]>(`SELECT count(*)::text AS count
+      FROM delivery_route_status_history WHERE route_id=$1 AND to_status='completed'`, [route.id]))
+      .toEqual([{ count: '1' }]);
+    expect(await source.query<{ count: string }[]>(`SELECT count(*)::text AS count
+      FROM delivery_order_status_history WHERE order_id = ANY($1::uuid[]) AND to_status='delivered'`, [ids]))
+      .toEqual([{ count: '2' }]);
   });
 
   it('denies private evidence download to another driver in the same organization', async () => {

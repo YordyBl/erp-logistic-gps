@@ -33,8 +33,8 @@ Branch: `feat/redesign` · Delivery: `ask-on-risk` · Runner: `npm test` (Vitest
 - Acceptance: the localtest API reaches Valhalla, runs with a demo time scale, and has the new migration applied; `docs/operations/gps-tracking.md` and `docs/api/openapi.yaml` describe the development-only behavior and new endpoint.
 
 ## Tasks
-- T1 — S1-S4 — inline — complete — environment gate, planning validation, auto-start, actor migration, binding guard; commit below
-- T2 — S5 — inline — pending — leg-based stop detection and idempotent per-stop completion
+- T1 — S1-S4 — inline — complete — commit `4142f44`; RDD assessed high, review declined by user for this candidate
+- T2 — S5 — inline — complete — leg-based stop detection and idempotent per-stop completion; commit below
 - T3 — S6 — inline — pending — availability endpoint and web planning controls
 - T4 — S7 — inline — pending — docs, OpenAPI, localtest Valhalla wiring, migration, demo check
 
@@ -48,3 +48,5 @@ Route evidence: tasks depend on each other (T2 uses T1's actor and gate, T3 uses
 - L5 (2026-11-14): “es correcto, procede con todo y tambien guardando en engram por favor” — stops always delivered; implementation authorized.
 - L6 (2026-11-14): Mapped seams. `findActiveRoutes` INNER JOINs `driver_accounts` (must become LEFT JOIN); Valhalla is called with `format: 'osrm'`, whose route legs carry per-leg distance; the web sends no origin; `/drivers/accounts` is ADMIN-only. RDD is on (global).
 - L7 (2026-11-14): T1 implemented test-first. RED observed for config gate, plan-route simulation validation, simulated planning integration (auto-start, actor, linked-driver rejection), binding guard, and disabled simulator sampling; the HTTP 400 test pinned already-implemented behavior. `simulation_actor_user_id` is a plain nullable uuid (history actor FKs remain on their own tables). Start logic was extracted to `route-start.ts` and reused by driver start and simulated planning. Legacy tests that started simulated routes as a bound driver were adjusted. With an isolated `erp_logistic_sim_test` database: 428 tests passed, 1 skipped; 15 web test files fail to load because web dependencies (`lucide-react`, `react-hook-form`) are not installed locally — environmental, pre-existing. Lint of changed files clean; repository-wide lint fails on untracked generated media folders (pre-existing). API typecheck passed.
+- L8 (2026-11-14): RDD assess on `4142f44` returned high/review_due; the user chose "Omitir esta vez" and the exact provider decline invocation returned `declined` / `declined_this_candidate` for the same target.
+- L9 (2026-11-14): T2 implemented test-first. RED observed for Valhalla leg distances, reached-stop counting (intermediate, no-origin, missing legs, accelerated skip), multi-stop simulator trigger, `completeSimulatedStops` use case, and five PostgreSQL integration cases (context exposure, sequential stop closure with idempotent repeats, existing outcome kept, rejections without writes, concurrent completion with single audit). `completeSimulated` (single stop, driver actor) was replaced; the 50 m arrival radius was removed. Full suite with isolated DB: 440 passed, 1 skipped; the same 15 web files fail to load for missing local web dependencies.

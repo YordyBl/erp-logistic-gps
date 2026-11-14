@@ -62,12 +62,12 @@ describe('RoutePositionSimulator', () => {
     }));
   });
 
-  it('completes an arrived single-delivery simulated route only after recording its destination position', async () => {
+  it('reports reached simulated stops only after recording the position', async () => {
     const route = {
-      organizationId: 'org', routeId: 'route', driverId: 'driver', driverUserId: 'driver-user',
+      organizationId: 'org', routeId: 'route', driverId: 'driver', simulationActorUserId: 'dispatcher-user',
       simulatedCompletionEnabled: true,
       startedAt: '2026-11-02T12:00:00.000Z', origin: { latitude: -12.01, longitude: -77.01 },
-      stops: [{ latitude: -12, longitude: -77, orderIds: ['order'] }],
+      stops: [{ latitude: -12, longitude: -77 }, { latitude: -12.1, longitude: -77.1 }],
     };
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
@@ -79,28 +79,28 @@ describe('RoutePositionSimulator', () => {
       organizationId: 'org', routeId: 'route', driverId: 'driver',
       latitude: -12, longitude: -77, accuracyMeters: 5, speedMetersPerSecond: 8,
       source: 'simulated' as const, recordedAt: '2026-11-02T12:00:04.000Z',
-      receivedAt: '2026-11-02T12:00:04.000Z',
+      receivedAt: '2026-11-02T12:00:04.000Z', reachedStopCount: 1,
     };
     const provider = { sample: vi.fn().mockResolvedValue(position) };
     const onPositionRecorded = vi.fn();
-    const onDestinationReached = vi.fn();
+    const onStopsReached = vi.fn();
     const simulator = new RoutePositionSimulator(store, provider,
       { now: () => position.recordedAt }, { intervalMilliseconds: 4_000, retentionDays: 30, samplingEnabled: true },
-      undefined, onPositionRecorded, onDestinationReached);
+      undefined, onPositionRecorded, onStopsReached);
 
     simulator.start();
-    await vi.waitFor(() => expect(onDestinationReached).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onStopsReached).toHaveBeenCalledOnce());
     await simulator.stop();
 
     expect(store.record).toHaveBeenCalledWith(position);
-    expect(onDestinationReached).toHaveBeenCalledWith(route, position);
+    expect(onStopsReached).toHaveBeenCalledWith(route, position);
     expect(onPositionRecorded.mock.invocationCallOrder[0])
-      .toBeLessThan(onDestinationReached.mock.invocationCallOrder[0]!);
+      .toBeLessThan(onStopsReached.mock.invocationCallOrder[0]!);
   });
 
   it('does not auto-complete a route unless simulation completion was explicitly enabled', async () => {
     const route = {
-      organizationId: 'org', routeId: 'route', driverId: 'driver', driverUserId: 'driver-user',
+      organizationId: 'org', routeId: 'route', driverId: 'driver', simulationActorUserId: 'dispatcher-user',
       simulatedCompletionEnabled: false,
       startedAt: '2026-11-02T12:00:00.000Z',
       stops: [{ latitude: -12, longitude: -77 }],
@@ -115,18 +115,18 @@ describe('RoutePositionSimulator', () => {
       organizationId: 'org', routeId: 'route', driverId: 'driver',
       latitude: -12, longitude: -77, accuracyMeters: 5, speedMetersPerSecond: 8,
       source: 'simulated' as const, recordedAt: '2026-11-02T12:00:04.000Z',
-      receivedAt: '2026-11-02T12:00:04.000Z',
+      receivedAt: '2026-11-02T12:00:04.000Z', reachedStopCount: 1,
     };
-    const onDestinationReached = vi.fn();
+    const onStopsReached = vi.fn();
     const simulator = new RoutePositionSimulator(store, { sample: vi.fn().mockResolvedValue(position) },
       { now: () => position.recordedAt }, { intervalMilliseconds: 4_000, retentionDays: 30, samplingEnabled: true },
-      undefined, undefined, onDestinationReached);
+      undefined, undefined, onStopsReached);
 
     simulator.start();
     await vi.waitFor(() => expect(store.record).toHaveBeenCalledOnce());
     await simulator.stop();
 
-    expect(onDestinationReached).not.toHaveBeenCalled();
+    expect(onStopsReached).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -134,7 +134,7 @@ describe('RoutePositionSimulator', () => {
     { source: 'simulated' as const, recorded: false },
   ])('does not complete a route for a non-simulated or unrecorded position ($source, recorded=$recorded)', async ({ source, recorded }) => {
     const route = {
-      organizationId: 'org', routeId: 'route', driverId: 'driver', driverUserId: 'driver-user',
+      organizationId: 'org', routeId: 'route', driverId: 'driver', simulationActorUserId: 'dispatcher-user',
       startedAt: '2026-11-02T12:00:00.000Z',
       stops: [{ latitude: -12, longitude: -77 }],
     };
@@ -148,17 +148,51 @@ describe('RoutePositionSimulator', () => {
       organizationId: 'org', routeId: 'route', driverId: 'driver',
       latitude: -12, longitude: -77, accuracyMeters: 5, speedMetersPerSecond: 8,
       source, recordedAt: '2026-11-02T12:00:04.000Z', receivedAt: '2026-11-02T12:00:04.000Z',
+      reachedStopCount: 1,
     };
     const provider = { sample: vi.fn().mockResolvedValue(position) };
-    const onDestinationReached = vi.fn();
+    const onStopsReached = vi.fn();
     const simulator = new RoutePositionSimulator(store, provider,
       { now: () => position.recordedAt }, { intervalMilliseconds: 4_000, retentionDays: 30, samplingEnabled: true },
-      undefined, undefined, onDestinationReached);
+      undefined, undefined, onStopsReached);
 
     simulator.start();
     await vi.waitFor(() => expect(store.record).toHaveBeenCalledOnce());
     await simulator.stop();
 
-    expect(onDestinationReached).not.toHaveBeenCalled();
+    expect(onStopsReached).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: 'no stop reached yet', route: { simulationActorUserId: 'dispatcher-user' }, reachedStopCount: 0 },
+    { name: 'no simulation actor', route: {}, reachedStopCount: 1 },
+  ])('does not report simulated stops with $name', async ({ route: overrides, reachedStopCount }) => {
+    const route = {
+      organizationId: 'org', routeId: 'route', driverId: 'driver', simulatedCompletionEnabled: true,
+      startedAt: '2026-11-02T12:00:00.000Z', origin: { latitude: -12.01, longitude: -77.01 },
+      stops: [{ latitude: -12, longitude: -77 }], ...overrides,
+    };
+    const store = {
+      pruneReceivedBefore: vi.fn().mockResolvedValue(0),
+      findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findActiveRoutes: vi.fn().mockResolvedValue([route]),
+      record: vi.fn().mockResolvedValue(true),
+    };
+    const position = {
+      organizationId: 'org', routeId: 'route', driverId: 'driver',
+      latitude: -12.005, longitude: -77.005, accuracyMeters: 5, speedMetersPerSecond: 8,
+      source: 'simulated' as const, recordedAt: '2026-11-02T12:00:04.000Z',
+      receivedAt: '2026-11-02T12:00:04.000Z', reachedStopCount,
+    };
+    const onStopsReached = vi.fn();
+    const simulator = new RoutePositionSimulator(store, { sample: vi.fn().mockResolvedValue(position) },
+      { now: () => position.recordedAt }, { intervalMilliseconds: 4_000, retentionDays: 30, samplingEnabled: true },
+      undefined, undefined, onStopsReached);
+
+    simulator.start();
+    await vi.waitFor(() => expect(store.record).toHaveBeenCalledOnce());
+    await simulator.stop();
+
+    expect(onStopsReached).not.toHaveBeenCalled();
   });
 });

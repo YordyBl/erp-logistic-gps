@@ -102,12 +102,12 @@ const composed = await composeApiModules(
   { routeSimulationEnabled: config.routeSimulationEnabled },
 );
 simulatedCompletionRef.current = async (route, position) => {
-  if (route.driverUserId === undefined) return;
-  await composed.deliveryRoutes.executeDriverRoute.completeSimulated({
+  if (route.simulationActorUserId === undefined || position.reachedStopCount === undefined) return;
+  await composed.deliveryRoutes.executeDriverRoute.completeSimulatedStops({
     organizationId: route.organizationId,
     routeId: route.routeId,
-    driverId: route.driverId,
-    actorUserId: route.driverUserId,
+    actorUserId: route.simulationActorUserId,
+    reachedStopCount: position.reachedStopCount,
     occurredAt: position.recordedAt,
   });
   await trackingHubRef.current?.publish(route.organizationId, 'route');

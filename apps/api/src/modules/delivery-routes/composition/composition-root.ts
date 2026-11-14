@@ -150,7 +150,7 @@ export function createDeliveryRoutesModule(options: {
     listRoutes: new ListRoutesUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
     reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),
-    executeDriverRoute: new ExecuteDriverRouteUseCase(options.executionStore, clock),
+    executeDriverRoute: new ExecuteDriverRouteUseCase(options.executionStore, clock, simulation),
   };
 }
 
