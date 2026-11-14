@@ -17,7 +17,7 @@ import { DeliveryOrderTypeOrmRepository } from '../../../delivery-orders/infrast
 import { probeIntegrationDatabase } from '../../../delivery-orders/infrastructure/persistence/test-database.js';
 import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
 import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
-import type { PlannedRoute } from '../../application/ports/RoutePlanningStore.js';
+import type { PlannedRoute, RoutePlanDraft } from '../../application/ports/RoutePlanningStore.js';
 
 const probe = await probeIntegrationDatabase();
 if (!probe.available) process.stderr.write(`[driver-route:integration] Skipping: ${probe.reason}.\n`);
@@ -90,7 +90,8 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       const order = DeliveryOrder.create({
         id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
-        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
+        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince',
+          latitude: -12.05, longitude: -77.03 }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })], createdAt: AT,
       });
       await orders.save(order);
@@ -98,30 +99,28 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     };
     const plan = async (ids: string[], origin?: PlannedRoute['origin'],
       simulatedCompletionEnabled = false) => {
-      const route: PlannedRoute = {
+      // One stop per order: the planner copies each order's location into its stop.
+      const route: RoutePlanDraft = {
         id: randomUUID(), organizationId, driverId, vehicleId,
         publicCode: `EXEC-${randomUUID().slice(0, 8)}`,
         plannedDate: '2026-10-27', status: 'planned', createdAt: AT,
         ...(origin === undefined ? {} : { origin }),
         simulatedCompletionEnabled,
-        stops: [{ id: randomUUID(), sequence: 1, addressLine: 'First stop',
-          latitude: null, longitude: null, orderIds: ids }],
+        stops: ids.map((orderId, index) => ({ id: randomUUID(), sequence: index + 1, orderId })),
       };
-      await planner.plan(route, adminId);
-      return route;
+      return planner.plan(route, adminId);
     };
     const bind = async () => source.query(`INSERT INTO driver_accounts
       (organization_id, driver_id, user_id) VALUES ($1,$2,$3)`,
     [organizationId, driverId, actorId]);
     /** Plans a dispatcher-owned simulated route (driver unlinked); planning starts it. */
-    const planSimulated = async (stopOrders: string[][]) => {
-      const route: PlannedRoute = {
+    const planSimulated = async (orderIds: string[]) => {
+      const route: RoutePlanDraft = {
         id: randomUUID(), organizationId, driverId, vehicleId,
         publicCode: `SIM-${randomUUID().slice(0, 8)}`,
         plannedDate: '2026-10-27', status: 'planned', createdAt: AT,
         origin: SIMULATION_ORIGIN, simulatedCompletionEnabled: true,
-        stops: stopOrders.map((orderIds, index) => ({ id: randomUUID(), sequence: index + 1,
-          addressLine: `Stop ${index + 1}`, latitude: -12.05 - index / 100, longitude: -77.03, orderIds })),
+        stops: orderIds.map((orderId, index) => ({ id: randomUUID(), sequence: index + 1, orderId })),
       };
       return planner.plan(route, adminId);
     };
@@ -150,10 +149,10 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await ctx.bind();
     const view = await execution.mine(ctx.organizationId, ctx.actorId);
     expect(view).toMatchObject({ id: route.id, status: 'planned',
-      stops: [{ orders: ids.map((id) => ({ id, status: 'assigned' })) }] });
+      stops: ids.map((id) => ({ orders: [{ id, status: 'assigned' }] })) });
     const started = await execution.start(ctx.organizationId, route.id, ctx.actorId, AT);
     expect(started).toMatchObject({ id: route.id, status: 'in_progress',
-      stops: [{ orders: ids.map((id) => ({ id, status: 'in_transit' })) }] });
+      stops: ids.map((id) => ({ orders: [{ id, status: 'in_transit' }] })) });
     expect((await execution.mine(ctx.organizationId, ctx.actorId)).startedAt).toBe(started.startedAt);
     expect((await planner.findById(ctx.organizationId, route.id))?.status).toBe('in_progress');
     await source.query(`UPDATE delivery_stops SET latitude=-12.05, longitude=-77.03
@@ -243,7 +242,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
 
   it('exposes only dispatcher-owned simulations of unlinked drivers to the GPS simulator', async () => {
     const ctx = await seed();
-    const route = await ctx.planSimulated([[await ctx.createOrder('EXEC-ORIGIN-1')]]);
+    const route = await ctx.planSimulated([await ctx.createOrder('EXEC-ORIGIN-1')]);
     const own = async () => (await new RoutePositionTypeOrmStore(source).findActiveRoutes())
       .filter((activeRoute) => activeRoute.organizationId === ctx.organizationId);
 
@@ -414,10 +413,10 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
     [nextVehicleId, ctx.organizationId, `V${nextVehicleId.slice(0, 6).toUpperCase()}`, AT]);
     const before = await hash(ctx.organizationId);
-    const second: PlannedRoute = {
+    const second: RoutePlanDraft = {
       ...first, id: randomUUID(), publicCode: `EXEC-${randomUUID().slice(0, 8)}`,
       vehicleId: nextVehicleId,
-      stops: [{ ...first.stops[0]!, id: randomUUID(), orderIds: [nextOrderId] }],
+      stops: [{ id: randomUUID(), sequence: 1, orderId: nextOrderId }],
     };
     await expect(planner.plan(second, ctx.adminId)).rejects.toThrow();
     expect(await hash(ctx.organizationId)).toBe(before);
@@ -503,7 +502,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     const ctx = await seed();
     const ids = [];
     for (const code of ['SIM-STOP-1', 'SIM-STOP-2', 'SIM-STOP-3', 'SIM-STOP-4']) ids.push(await ctx.createOrder(code));
-    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!, ids[2]!], [ids[3]!]]);
+    const route = await ctx.planSimulated(ids);
 
     const first = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 1,
       '2026-10-27T15:10:00.000Z');
@@ -515,7 +514,12 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       '2026-10-27T15:11:00.000Z');
     expect(await hash(ctx.organizationId)).toBe(afterFirst);
 
-    const completed = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 3,
+    const third = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 3,
+      '2026-10-27T15:20:00.000Z');
+    expect(third).toMatchObject({ id: route.id, status: 'in_progress' });
+    expect(await statuses(ids)).toEqual(['delivered', 'delivered', 'delivered', 'in_transit']);
+
+    const completed = await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 4,
       '2026-10-27T15:30:00.000Z');
 
     expect(completed).toMatchObject({ id: route.id, status: 'completed', completedAt: expect.any(String) });
@@ -543,7 +547,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
       { from_status: 'in_progress', to_status: 'completed', actor_user_id: ctx.adminId },
     ]);
     const afterCompletion = await hash(ctx.organizationId);
-    await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 3,
+    await execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 4,
       '2026-10-27T15:40:00.000Z');
     expect(await hash(ctx.organizationId)).toBe(afterCompletion);
   });
@@ -551,7 +555,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   it('keeps an existing order outcome and still completes the simulated route', async () => {
     const ctx = await seed();
     const ids = [await ctx.createOrder('SIM-KEEP-1'), await ctx.createOrder('SIM-KEEP-2')];
-    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!]]);
+    const route = await ctx.planSimulated(ids);
     await source.query(`UPDATE delivery_orders SET status='returned' WHERE id=$1`, [ids[1]]);
     await source.query(`UPDATE delivery_attempts SET status='failed', completed_at=now() WHERE order_id=$1`,
       [ids[1]]);
@@ -578,7 +582,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     expect(await hash(ctx.organizationId)).toBe(beforeOrdinary);
 
     const other = await seed();
-    const simulated = await other.planSimulated([[await other.createOrder('SIM-DENY-2')]]);
+    const simulated = await other.planSimulated([await other.createOrder('SIM-DENY-2')]);
     const beforeSimulated = await hash(other.organizationId);
     for (const actor of [other.actorId, randomUUID()]) {
       await expect(execution.completeSimulatedStops!(other.organizationId, simulated.id, actor, 1, AT))
@@ -595,7 +599,7 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
   it('serializes concurrent simulated completions into one audited outcome', async () => {
     const ctx = await seed();
     const ids = [await ctx.createOrder('SIM-RACE-1'), await ctx.createOrder('SIM-RACE-2')];
-    const route = await ctx.planSimulated([[ids[0]!], [ids[1]!]]);
+    const route = await ctx.planSimulated(ids);
 
     const results = await Promise.all([
       execution.completeSimulatedStops!(ctx.organizationId, route.id, ctx.adminId, 2, '2026-10-27T15:30:00.000Z'),

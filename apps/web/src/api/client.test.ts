@@ -13,7 +13,7 @@ describe('ApiClient dispatch planning', () => {
     await client.listDispatchRoutes();
     await client.createDispatchRoute({
       publicCode: 'ROUTE-001', plannedDate: '2026-11-02', driverId: 'driver-1', vehicleId: 'vehicle-1',
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 100', orderIds: ['order-1', 'order-2'] }],
+      stops: [{ sequence: 1, orderId: 'order-1' }, { sequence: 2, orderId: 'order-2' }],
     });
     await client.reassignDispatchRoute('route/1', { driverId: 'driver-2' });
 
@@ -24,7 +24,7 @@ describe('ApiClient dispatch planning', () => {
     const [createUrl, createInit] = fetcher.mock.calls[1] ?? [];
     expect(createUrl).toBe('http://localhost:3000/api/v1/delivery-routes');
     expect(createInit?.method).toBe('POST');
-    expect(JSON.parse(String(createInit?.body))).toMatchObject({ stops: [{ orderIds: ['order-1', 'order-2'] }] });
+    expect(JSON.parse(String(createInit?.body))).toMatchObject({ stops: [{ sequence: 1, orderId: 'order-1' }, { sequence: 2, orderId: 'order-2' }] });
     const [reassignUrl, reassignInit] = fetcher.mock.calls[2] ?? [];
     expect(reassignUrl).toBe('http://localhost:3000/api/v1/delivery-routes/route%2F1');
     expect(reassignInit?.method).toBe('PATCH');

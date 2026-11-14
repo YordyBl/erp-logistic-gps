@@ -30,9 +30,25 @@ export interface PlannedRoute {
   readonly completedAt?: string;
 }
 
+/** A stop as the planner requests it: exactly one order, no location of its own. */
+export interface PlannedStopDraft {
+  readonly id: string;
+  readonly sequence: number;
+  readonly orderId: string;
+}
+
+/** A route to plan; the store derives each stop's address and coordinates from its order. */
+export interface RoutePlanDraft extends Omit<PlannedRoute, 'stops'> {
+  readonly stops: readonly PlannedStopDraft[];
+}
+
 /** One atomic decision: route, links, and audited transitions commit together. */
 export interface RoutePlanningStore {
-  plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute>;
+  /**
+   * Copies each order's delivery address and coordinates into its stop while the
+   * order row is locked (a snapshot), and rejects orders without coordinates.
+   */
+  plan(route: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute>;
   list(organizationId: string): Promise<readonly PlannedRoute[]>;
   findById(organizationId: string, routeId: string): Promise<PlannedRoute | null>;
   /** Active drivers without a linked account: the only drivers a simulated route may use. */

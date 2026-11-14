@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { In, type DataSource, type EntityManager } from 'typeorm';
 
-import type { PlannedRoute, RoutePlanningStore } from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
+import type {
+  PlannedRoute, PlannedStop, RoutePlanDraft, RoutePlanningStore,
+} from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import { DeliveryRouteEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryRouteEntity.js';
 import { DeliveryStopEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryStopEntity.js';
@@ -18,7 +20,7 @@ import { startRouteInTransaction } from './route-start.js';
 export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
   constructor(private readonly dataSource: DataSource) {}
 
-  async plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute> {
+  async plan(route: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute> {
     try {
       return await this.dataSource.transaction(async (manager) => {
         const driver = await manager.findOne(DriverEntity, {
@@ -39,7 +41,7 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           throw new DeliveryRouteConflictError('Simulated routes require a driver without a linked account');
         }
 
-        const allIds = route.stops.flatMap((stop) => stop.orderIds);
+        const allIds = route.stops.map((stop) => stop.orderId);
         const orders = new Map<string, DeliveryOrderEntity>();
         // Consistent lock order prevents crossed multi-order plans from deadlocking.
         for (const id of [...allIds].sort()) {
@@ -50,6 +52,18 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           if (entity === null) throw new DeliveryRouteNotFoundError();
           orders.set(id, entity);
         }
+        // Each stop is a snapshot of its locked order's location, so a concurrent
+        // order edit cannot slip in between reading and planning.
+        const stops: PlannedStop[] = route.stops.map((stop) => {
+          const order = orders.get(stop.orderId);
+          if (order === undefined) throw new DeliveryRouteNotFoundError();
+          if (order.latitude === null || order.longitude === null) {
+            throw new DeliveryRouteConflictError('Every planned order must have delivery coordinates');
+          }
+          return { id: stop.id, sequence: stop.sequence, addressLine: order.deliveryAddressLine,
+            latitude: Number(order.latitude), longitude: Number(order.longitude), orderIds: [stop.orderId] };
+        });
+        const planned: PlannedRoute = { ...route, stops };
 
         const plannedAt = route.createdAt;
         const assignedAt = new Date(Date.parse(plannedAt) + 1).toISOString();
@@ -98,7 +112,7 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         persistedRoute.completedAt = null;
         await manager.insert(DeliveryRouteEntity, persistedRoute);
 
-        for (const stop of route.stops) {
+        for (const stop of stops) {
           const row = new DeliveryStopEntity();
           row.id = stop.id;
           row.organizationId = route.organizationId;
@@ -143,10 +157,10 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
             await manager.insert(DeliveryOrderStatusHistoryEntity, history);
           }
         }
-        if (!simulated) return route;
+        if (!simulated) return planned;
         // Simulated routes have no driver account to start them, so they start now.
         const startedAt = await startRouteInTransaction(manager, persistedRoute, actorUserId, assignedAt);
-        return { ...route, status: 'in_progress' as const, startedAt: startedAt.toISOString() };
+        return { ...planned, status: 'in_progress' as const, startedAt: startedAt.toISOString() };
       });
     } catch (error) {
       if (isUniqueViolation(error)) {

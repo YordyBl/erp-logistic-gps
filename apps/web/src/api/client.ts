@@ -257,13 +257,10 @@ export interface CreateDispatchRouteInput {
   readonly vehicleId: string;
   readonly origin?: { readonly addressLine: string; readonly googleMapsUrl: string };
   readonly simulatedCompletionEnabled?: boolean;
+  /** One stop per order; the API copies each order's address and coordinates into its stop. */
   readonly stops: readonly {
     readonly sequence: number;
-    readonly addressLine: string;
-    readonly googleMapsUrl?: string;
-    readonly latitude?: number;
-    readonly longitude?: number;
-    readonly orderIds: readonly string[];
+    readonly orderId: string;
   }[];
 }
 

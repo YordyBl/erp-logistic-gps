@@ -42,7 +42,7 @@ function makeClient(overrides: Record<string, unknown> = {}) {
 }
 
 describe('DispatchPlanningPage', () => {
-  it('creates a manual route with multiple orders grouped in one stop', async () => {
+  it('creates a manual route with one stop per selected order, in selection order', async () => {
     const user = setupUser();
     const client = makeClient();
     render(<DispatchPlanningPage client={client} />);
@@ -53,42 +53,62 @@ describe('DispatchPlanningPage', () => {
     const plannedDate = await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
     await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
     await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
-    await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
-    await user.click(screen.getByLabelText(/PED-001/));
     await user.click(screen.getByLabelText(/PED-002/));
+    await user.click(screen.getByLabelText(/PED-001/));
+    expect(screen.queryByLabelText(/Dirección de parada/)).toBeNull();
+    expect(screen.queryByLabelText(/Enlace de Google Maps de parada/)).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
 
     await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
       publicCode: 'RUTA-001',
       plannedDate,
-      stops: [expect.objectContaining({ sequence: 1, orderIds: ['order-1', 'order-2'] })],
+      stops: [{ sequence: 1, orderId: 'order-2' }, { sequence: 2, orderId: 'order-1' }],
     })));
     expect((await screen.findByRole('status')).textContent).toContain('Ruta RUTA-001 creada.');
   });
 
-  it('submits an optional Google Maps link with the scheduled stop', async () => {
+  it('shows each stop with its order address and lets the dispatcher reorder and remove stops', async () => {
     const user = setupUser();
     const client = makeClient();
     render(<DispatchPlanningPage client={client} />);
 
     await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-001/);
-    await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-MAPS');
+    await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-ORDEN');
     const plannedDate = await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
     await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
     await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
-    await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
-    await user.type(screen.getByLabelText(/Enlace de Google Maps de parada 1/),
-      'https://maps.app.goo.gl/ykdoXKrKCx7B8APFA');
     await user.click(screen.getByLabelText(/PED-001/));
+    await user.click(screen.getByLabelText(/PED-002/));
+    expect(screen.getByText('Parada 1 · PED-001')).toBeTruthy();
+    expect(screen.getByText('Parada 2 · PED-002')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Subir parada 2' }));
+    expect(screen.getByText('Parada 1 · PED-002')).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Quitar parada 2' }));
+    expect(screen.queryByText(/Parada 2/)).toBeNull();
+    expect((screen.getByLabelText(/PED-001/) as HTMLInputElement).getAttribute('aria-checked')).toBe('false');
     await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
 
     await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
-      plannedDate,
-      stops: [expect.objectContaining({
-        sequence: 1, googleMapsUrl: 'https://maps.app.goo.gl/ykdoXKrKCx7B8APFA',
-      })],
+      plannedDate, stops: [{ sequence: 1, orderId: 'order-2' }],
     })));
+  });
+
+  it('asks for at least one order before calling the API', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DispatchPlanningPage client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
+    await screen.findByText(/PED-001/);
+    await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-VACIA');
+    await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
+    await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
+    await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
+    await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
+
+    expect(await screen.findByText('Selecciona al menos un pedido para la ruta.')).toBeTruthy();
+    expect(client.createDispatchRoute).not.toHaveBeenCalled();
   });
 
   it('asks for date, driver and vehicle with Spanish messages before calling the API', async () => {
@@ -99,7 +119,6 @@ describe('DispatchPlanningPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-001/);
     await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-001');
-    await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
     await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
 
     expect(await screen.findByText('Elige la fecha planificada.')).toBeTruthy();
@@ -199,7 +218,6 @@ describe('DispatchPlanningPage', () => {
       await user.type(screen.getByLabelText('Código de ruta'), 'RUTA-SIM');
       const plannedDate = await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
       await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
-      await user.type(screen.getByLabelText('Dirección de parada 1'), 'Av. Arequipa 100');
       await user.click(screen.getByLabelText(/PED-001/));
       return plannedDate;
     }
@@ -232,6 +250,7 @@ describe('DispatchPlanningPage', () => {
       await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
         publicCode: 'RUTA-SIM', plannedDate, driverId: 'driver-2', simulatedCompletionEnabled: true,
         origin: { addressLine: 'Núcleo de investigación', googleMapsUrl: 'https://maps.app.goo.gl/origin' },
+        stops: [{ sequence: 1, orderId: 'order-1' }],
       })));
       expect((await screen.findByRole('status')).textContent).toContain('Ruta RUTA-SIM creada. La simulación ya está en curso.');
     });

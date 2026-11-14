@@ -13,7 +13,7 @@ import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteU
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
 import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
 import { ListRoutesUseCase } from '../application/use-cases/list-routes/ListRoutesUseCase.js';
-import type { PlannedRoute, RoutePlanningStore } from '../application/ports/RoutePlanningStore.js';
+import type { PlannedRoute, PlannedStop, RoutePlanDraft, RoutePlanningStore } from '../application/ports/RoutePlanningStore.js';
 import type { MapLinkResolver } from '../application/ports/MapLinkResolver.js';
 import { GoogleMapsLinkResolver } from '../infrastructure/GoogleMapsLinkResolver.js';
 
@@ -26,7 +26,19 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
     private readonly users?: UserRepository,
     private readonly getDriver?: GetDriverUseCase) {}
 
-  async plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute> {
+  async plan(draft: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute> {
+    // Mirror the database adapter: every stop copies its single order's location.
+    const stops: PlannedStop[] = [];
+    for (const stop of draft.stops) {
+      const order = await this.orders.findById(stop.orderId);
+      if (order === null || order.organizationId !== draft.organizationId) throw new DeliveryRouteNotFoundError();
+      const { addressLine, latitude, longitude } = order.deliveryAddress;
+      if (latitude === undefined || longitude === undefined) {
+        throw new DeliveryRouteConflictError('Every planned order must have delivery coordinates');
+      }
+      stops.push({ id: stop.id, sequence: stop.sequence, addressLine, latitude, longitude, orderIds: [stop.orderId] });
+    }
+    const route: PlannedRoute = { ...draft, stops };
     for (const current of this.routes.values()) {
       if (current.organizationId === route.organizationId &&
           (current.publicCode === route.publicCode || current.driverId === route.driverId ||

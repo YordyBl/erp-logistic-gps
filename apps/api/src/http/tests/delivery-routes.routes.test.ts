@@ -9,6 +9,10 @@ import {
 
 const ROUTES = '/api/v1/delivery-routes';
 const ORDERS = '/api/v1/delivery-orders';
+/** One stop per order, in the given order: stops carry no location of their own. */
+const stopsFor = (orderIds: readonly string[]) => orderIds.map((orderId, index) => ({ sequence: index + 1, orderId }));
+/** Location every order created through `validOrderBody` has; its stop must copy it. */
+const ORDER_LOCATION = { addressLine: 'Av. Javier Prado Este 1234', latitude: -12.0975, longitude: -77.0023 };
 
 describe('GET /api/v1/delivery-routes', () => {
   it('lists only the authenticated organization routes for dispatch roles', async () => {
@@ -17,7 +21,7 @@ describe('GET /api/v1/delivery-routes', () => {
     const created = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
       publicCode: 'LIST-ROUTE-001', plannedDate: '2026-11-02',
       driverId: ctx.driverId, vehicleId: ctx.vehicleId,
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 123', orderIds: [orderId] }],
+      stops: [{ sequence: 1, orderId: orderId }],
     });
     expect(created.status).toBe(201);
 
@@ -34,7 +38,7 @@ describe('GET /api/v1/delivery-routes', () => {
     const created = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
       publicCode: 'LIST-ROLE-001', plannedDate: '2026-11-02',
       driverId: ctx.driverId, vehicleId: ctx.vehicleId,
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 123', orderIds: [orderId] }],
+      stops: [{ sequence: 1, orderId: orderId }],
     });
     const driver = await ctx.testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
     const driverToken = await ctx.testApp.signIn(driver);
@@ -85,7 +89,7 @@ async function seededRouteApp() {
 }
 
 describe('driver route execution', () => {
-  it('shows only the bound driver their route, grouped stop orders, and starts all orders once', async () => {
+  it('shows only the bound driver their route, one stop per order, and starts all orders once', async () => {
     const ctx = await seededRouteApp();
     const user = await ctx.testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
     const driverToken = await ctx.testApp.signIn(user);
@@ -96,7 +100,7 @@ describe('driver route execution', () => {
     const planned = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
       publicCode: 'EXEC-ROUTE-1', plannedDate: '2026-10-27',
       driverId: ctx.driverId, vehicleId: ctx.vehicleId,
-      stops: [{ sequence: 1, addressLine: 'First stop', orderIds: ids }],
+      stops: stopsFor(ids),
     });
     expect(planned.status).toBe(201);
     const mine = `${ROUTES}/mine`;
@@ -110,7 +114,7 @@ describe('driver route execution', () => {
     const read = await request(ctx.testApp.app).get(mine).set(bearer(driverToken));
     expect(read.status).toBe(200);
     expect(read.body.data).toMatchObject({ id: planned.body.data.id, status: 'planned',
-      stops: [{ sequence: 1, orders: ids.map((id) => ({ id, status: 'assigned' })) }] });
+      stops: ids.map((id, index) => ({ sequence: index + 1, orders: [{ id, status: 'assigned' }] })) });
     const before = await Promise.all(ids.map(async (id) =>
       (await request(ctx.testApp.app).get(`${ORDERS}/${id}/history`).set(bearer(ctx.token))).body));
     const start = `${ROUTES}/${planned.body.data.id as string}/start`;
@@ -121,7 +125,7 @@ describe('driver route execution', () => {
     const started = await request(ctx.testApp.app).post(start).set(bearer(driverToken)).send({});
     expect(started.status).toBe(200);
     expect(started.body.data).toMatchObject({ id: planned.body.data.id, status: 'in_progress',
-      stops: [{ orders: ids.map((id) => ({ id, status: 'in_transit' })) }] });
+      stops: ids.map((id) => ({ orders: [{ id, status: 'in_transit' }] })) });
     expect(started.body.data.startedAt).toEqual(expect.any(String));
     expect((await request(ctx.testApp.app).get(mine).set(bearer(driverToken))).body).toEqual(started.body);
     for (const [index, id] of ids.entries()) {
@@ -145,7 +149,7 @@ describe('POST /api/v1/delivery-routes', () => {
     const first = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
       publicCode: 'RETRY-ROUTE-1', plannedDate: '2026-10-27',
       driverId: ctx.driverId, vehicleId: ctx.vehicleId,
-      stops: [{ sequence: 1, addressLine: 'Old address', orderIds: [id] }],
+      stops: [{ sequence: 1, orderId: id }],
     });
     expect(first.status).toBe(201);
     // Phase 4 is not implemented: seed its returned outcome, then use the real HTTP planner.
@@ -170,7 +174,7 @@ describe('POST /api/v1/delivery-routes', () => {
     const secondBody = {
       publicCode: 'RETRY-ROUTE-2', plannedDate: '2026-10-27',
       driverId: ctx.secondDriverId, vehicleId: ctx.secondVehicleId,
-      stops: [{ sequence: 1, addressLine: 'New address', orderIds: [id] }],
+      stops: [{ sequence: 1, orderId: id }],
     };
     const denied = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.otherToken)).send(secondBody);
     expect(denied.status).toBe(404);
@@ -195,7 +199,7 @@ describe('POST /api/v1/delivery-routes', () => {
       .set(bearer(ctx.token))).body).toEqual(history.body);
   });
 
-  it('round-trips stops by sequence and keeps the order of orders within a stop', async () => {
+  it('round-trips stops by sequence, each one inheriting its order location', async () => {
     const { testApp, token, driverId, vehicleId, createOrder } = await seededRouteApp();
     const first = await createOrder('REG-ROUTE-001');
     const second = await createOrder('REG-ROUTE-002');
@@ -203,39 +207,56 @@ describe('POST /api/v1/delivery-routes', () => {
     const created = await request(testApp.app).post(ROUTES).set(bearer(token)).send({
       publicCode: 'REG-ROUTE-001', plannedDate: '2026-10-27', driverId, vehicleId,
       stops: [
-        { sequence: 2, addressLine: 'Av. Salaverry 456', orderIds: [third] },
-        { sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds: [first, second] },
+        { sequence: 3, orderId: third },
+        { sequence: 1, orderId: first },
+        { sequence: 2, orderId: second },
       ],
     });
     expect(created.status).toBe(201);
     const read = await request(testApp.app).get(created.headers.location as string).set(bearer(token));
     expect(read.status).toBe(200);
     expect(read.body).toEqual(created.body);
-    expect(read.body.data.stops.map((stop: { sequence: number; orderIds: string[] }) =>
-      [stop.sequence, stop.orderIds])).toEqual([[1, [first, second]], [2, [third]]]);
+    expect(read.body.data.stops).toEqual([first, second, third].map((orderId, index) => ({
+      id: expect.any(String), sequence: index + 1, ...ORDER_LOCATION, orderIds: [orderId],
+    })));
   });
 
-  it('plans ordered stops with multiple orders and audits each assignment', async () => {
+  it('rejects stops that carry their own location or group several orders', async () => {
+    const { testApp, token, driverId, vehicleId, createOrder } = await seededRouteApp();
+    const first = await createOrder('ORD-LEGACY-001');
+    const second = await createOrder('ORD-LEGACY-002');
+    const base = { publicCode: 'LEGACY-ROUTE-001', plannedDate: '2026-10-27', driverId, vehicleId };
+    for (const stop of [
+      { sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds: [first, second] },
+      { sequence: 1, orderId: first, addressLine: 'Av. Arequipa 1234' },
+      { sequence: 1, orderId: first, googleMapsUrl: 'https://maps.app.goo.gl/place' },
+      { sequence: 1, orderId: first, latitude: -12.1, longitude: -77.03 },
+    ]) {
+      const response = await request(testApp.app).post(ROUTES).set(bearer(token)).send({ ...base, stops: [stop] });
+      expect(response.status).toBe(400);
+    }
+    for (const id of [first, second]) {
+      expect((await request(testApp.app).get(`${ORDERS}/${id}`).set(bearer(token))).body.data.status).toBe('created');
+    }
+  });
+
+  it('plans one ordered stop per order and audits each assignment', async () => {
     const { testApp, token, otherToken, driverId, vehicleId, createOrder } = await seededRouteApp();
     const first = await createOrder('ORD-ROUTE-001');
     const second = await createOrder('ORD-ROUTE-002');
     const third = await createOrder('ORD-ROUTE-003');
     const result = await request(testApp.app).post(ROUTES).set(bearer(token)).send({
       publicCode: 'LIMA-ROUTE-001', plannedDate: '2026-10-27', driverId, vehicleId,
-      stops: [
-        { sequence: 1, addressLine: 'Av. Arequipa 1234', latitude: -12.1,
-          longitude: -77.03, orderIds: [first, second] },
-        { sequence: 2, addressLine: 'Av. Salaverry 456', latitude: -12.09,
-          longitude: -77.04, orderIds: [third] },
-      ],
+      stops: stopsFor([first, second, third]),
     });
     expect(result.status).toBe(201);
     expect(result.body.data).toMatchObject({
       organizationId: ORGANIZATION_ID, publicCode: 'LIMA-ROUTE-001',
       plannedDate: '2026-10-27', status: 'planned', driverId, vehicleId,
       stops: [
-        { sequence: 1, orderIds: [first, second] },
-        { sequence: 2, orderIds: [third] },
+        { sequence: 1, ...ORDER_LOCATION, orderIds: [first] },
+        { sequence: 2, ...ORDER_LOCATION, orderIds: [second] },
+        { sequence: 3, ...ORDER_LOCATION, orderIds: [third] },
       ],
     });
     const read = await request(testApp.app).get(result.headers.location as string).set(bearer(token));
@@ -268,7 +289,7 @@ describe('POST /api/v1/delivery-routes', () => {
     const beforeHistory = await request(testApp.app).get(`${ORDERS}/${first}/history`).set(bearer(token));
     const requestBody = (orderIds: string[]) => ({
       publicCode: 'LIMA-ROUTE-002', plannedDate: '2026-10-27', driverId, vehicleId,
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds }],
+      stops: stopsFor(orderIds),
     });
     const foreignOrder = await request(testApp.app).post(ORDERS).set(bearer(otherToken))
       .send(validOrderBody({ customerId: OTHER_CUSTOMER_ID, publicCode: 'FOREIGN-ROUTE-1' }));
@@ -300,7 +321,7 @@ describe('POST /api/v1/delivery-routes', () => {
     expect(otherDriver.status).toBe(201);
     expect(otherVehicle.status).toBe(201);
     const body = { publicCode: 'ROUTE-GUARD-1', plannedDate: '2026-10-27', driverId,
-      vehicleId, stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds: [id] }] };
+      vehicleId, stops: [{ sequence: 1, orderId: id }] };
     for (const foreign of [
       { driverId: otherDriver.body.data.id as string },
       { vehicleId: otherVehicle.body.data.id as string },
@@ -345,7 +366,7 @@ describe('POST /api/v1/delivery-routes simulation outside development', () => {
       publicCode: 'ROUTE-SIM-OFF-1', plannedDate: '2026-10-27', driverId, vehicleId,
       simulatedCompletionEnabled: true,
       origin: { addressLine: 'Núcleo de investigación', latitude: -11.97, longitude: -77.08 },
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds: [id] }],
+      stops: [{ sequence: 1, orderId: id }],
     });
 
     expect(response.status).toBe(400);
@@ -365,7 +386,7 @@ describe('PATCH /api/v1/delivery-routes/:routeId', () => {
   ) {
     const result = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token)).send({
       publicCode, plannedDate: '2026-10-27', ...resources,
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds }],
+      stops: stopsFor(orderIds),
     });
     expect(result.status).toBe(201);
     return result.body.data as { id: string; driverId: string; vehicleId: string; stops: unknown };

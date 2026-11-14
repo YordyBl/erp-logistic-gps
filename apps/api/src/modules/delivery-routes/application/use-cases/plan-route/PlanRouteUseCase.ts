@@ -4,21 +4,17 @@ import { z } from 'zod';
 import type { GetDriverUseCase } from '../../../../drivers/application/use-cases/get-driver/GetDriverUseCase.js';
 import type { GetVehicleUseCase } from '../../../../vehicles/application/use-cases/get-vehicle/GetVehicleUseCase.js';
 import { DeliveryRouteConflictError, DeliveryRouteValidationError } from '../../../domain/errors/DeliveryRouteError.js';
-import type { PlannedRoute, RoutePlanningStore } from '../../ports/RoutePlanningStore.js';
+import type { PlannedRoute, RoutePlanDraft, RoutePlanningStore } from '../../ports/RoutePlanningStore.js';
 import type { Clock } from '../../../../delivery-orders/application/ports/Clock.js';
 import type { MapLinkResolver } from '../../ports/MapLinkResolver.js';
 
+/**
+ * One stop per order. A stop has no location of its own: the store copies the
+ * order's delivery address and coordinates when the route is planned.
+ */
 const stopSchema = z.strictObject({
   sequence: z.number().int().positive(),
-  addressLine: z.string().trim().min(5).max(200),
-  googleMapsUrl: z.string().trim().url().max(2_048).optional(),
-  latitude: z.number().finite().min(-90).max(90).optional(),
-  longitude: z.number().finite().min(-180).max(180).optional(),
-  orderIds: z.array(z.uuid()).min(1),
-}).refine((stop) => (stop.latitude === undefined) === (stop.longitude === undefined), {
-  path: ['latitude'], message: 'latitude and longitude must be provided together',
-}).refine((stop) => stop.googleMapsUrl === undefined || stop.latitude === undefined, {
-  path: ['googleMapsUrl'], message: 'googleMapsUrl cannot be combined with explicit coordinates',
+  orderId: z.uuid(),
 });
 
 const originSchema = z.strictObject({
@@ -73,7 +69,7 @@ export class PlanRouteUseCase {
     const { organizationId, actorUserId, driverId, vehicleId, stops, origin,
       simulatedCompletionEnabled } = parsed.data;
     const sequences = stops.map((stop) => stop.sequence);
-    const orderIds = stops.flatMap((stop) => stop.orderIds);
+    const orderIds = stops.map((stop) => stop.orderId);
     if (new Set(sequences).size !== sequences.length ||
         new Set(orderIds).size !== orderIds.length) {
       throw new DeliveryRouteValidationError('Stop sequences and order ids must be unique');
@@ -91,25 +87,16 @@ export class PlanRouteUseCase {
     if (driver.driver.status !== 'active' || vehicle.vehicle.status !== 'active') {
       throw new DeliveryRouteConflictError('Driver and vehicle must be active');
     }
-    const [originWithCoordinates, stopsWithCoordinates] = await Promise.all([
-      origin === undefined ? Promise.resolve(undefined) : this.resolveLocation(origin, 'origin'),
-      Promise.all(stops.map(async (stop) => ({
-        ...stop,
-        ...(stop.googleMapsUrl === undefined ? {} : await this.resolveLocation(stop,
-          `stops.${stop.sequence}`)),
-      }))),
-    ]);
-    const route: PlannedRoute = {
+    const originWithCoordinates = origin === undefined
+      ? undefined : await this.resolveLocation(origin, 'origin');
+    const route: RoutePlanDraft = {
       id: randomUUID(), organizationId, publicCode: parsed.data.publicCode,
       plannedDate: parsed.data.plannedDate, driverId, vehicleId, status: 'planned',
       ...(originWithCoordinates === undefined ? {} : { origin: originWithCoordinates }),
       simulatedCompletionEnabled,
       createdAt: this.clock.now(),
-      stops: stopsWithCoordinates.map((stop) => ({
-        id: randomUUID(), sequence: stop.sequence, addressLine: stop.addressLine,
-        latitude: stop.latitude ?? null, longitude: stop.longitude ?? null,
-        orderIds: stop.orderIds,
-      })).sort((left, right) => left.sequence - right.sequence),
+      stops: stops.map((stop) => ({ id: randomUUID(), sequence: stop.sequence, orderId: stop.orderId }))
+        .sort((left, right) => left.sequence - right.sequence),
     };
     return { route: await this.store.plan(route, actorUserId) };
   }

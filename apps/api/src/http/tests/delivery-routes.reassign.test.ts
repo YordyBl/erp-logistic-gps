@@ -39,7 +39,7 @@ async function setup() {
     orderIds: string[]) => {
     const created = await request(testApp.app).post(ROUTES).set(bearer(token)).send({
       publicCode, plannedDate: '2026-10-27', driverId, vehicleId,
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 1234', orderIds }] });
+      stops: orderIds.map((orderId, index) => ({ sequence: index + 1, orderId })) });
     expect(created.status).toBe(201);
     return created.body.data as { id: string; driverId: string; vehicleId: string };
   };
@@ -103,8 +103,7 @@ describe('PATCH /api/v1/delivery-routes/:routeId (regression probes)', () => {
     const foreignRoute = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.otherToken)).send({
       publicCode: 'CLL-ROUTE', plannedDate: '2026-10-27',
       driverId: foreignDriver.body.data.id, vehicleId: foreignVehicle.body.data.id,
-      stops: [{ sequence: 1, addressLine: 'Av. Callao 100',
-        orderIds: [foreignOrder.body.data.id] }] });
+      stops: [{ sequence: 1, orderId: foreignOrder.body.data.id }] });
     expect(foreignRoute.status).toBe(201);
     const ownDriver = await ctx.createDriver('06');
     const rejected = await request(ctx.testApp.app)

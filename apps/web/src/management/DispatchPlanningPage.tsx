@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table';
-import { ArrowLeftRight, Eye, Plus, RefreshCw, Route } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, Eye, Plus, RefreshCw, Route, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
@@ -56,14 +56,6 @@ interface DispatchClient {
   listDeliveryOrderStatusHistory(orderId: string): Promise<readonly DeliveryOrderStatusHistory[]>;
 }
 
-interface StopDraft {
-  readonly addressLine: string;
-  readonly googleMapsUrl: string;
-  readonly orderIds: readonly string[];
-}
-
-const newStop = (): StopDraft => ({ addressLine: '', googleMapsUrl: '', orderIds: [] });
-
 const SIMULATION_UNAVAILABLE: RouteSimulationAvailability = { enabled: false, eligibleDriverIds: [] };
 
 function driverOptions(drivers: readonly Driver[]) {
@@ -82,7 +74,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const [createOpen, setCreateOpen] = useState(false);
   const [detailRouteId, setDetailRouteId] = useState<string | null>(null);
   const [reassignRouteId, setReassignRouteId] = useState<string | null>(null);
-  const [stops, setStops] = useState<readonly StopDraft[]>([newStop()]);
+  // One stop per order, in visiting order. Each stop takes its address and coordinates from the order.
+  const [stopOrderIds, setStopOrderIds] = useState<readonly string[]>([]);
   const [routeCode, setRouteCode] = useState('');
   const [plannedDate, setPlannedDate] = useState('');
   const [driverId, setDriverId] = useState('');
@@ -149,18 +142,20 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
   const orderById = new Map(orders.map((order) => [order.id, order]));
 
-  function updateStop(index: number, update: (stop: StopDraft) => StopDraft) {
-    setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? update(stop) : stop));
+  function toggleOrder(orderId: string, checked: boolean) {
+    setStopOrderIds((current) => checked
+      ? (current.includes(orderId) ? current : [...current, orderId])
+      : current.filter((id) => id !== orderId));
   }
 
-  function toggleOrder(stopIndex: number, orderId: string, checked: boolean) {
-    setStops((current) => current.map((stop, index) => {
-      if (index !== stopIndex) return { ...stop, orderIds: stop.orderIds.filter((id) => id !== orderId) };
-      return {
-        ...stop,
-        orderIds: checked ? [...stop.orderIds, orderId] : stop.orderIds.filter((id) => id !== orderId),
-      };
-    }));
+  function moveStop(index: number, offset: -1 | 1) {
+    setStopOrderIds((current) => {
+      const target = index + offset;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target]!, next[index]!];
+      return next;
+    });
   }
 
   async function showOrderHistory(orderId: string) {
@@ -183,8 +178,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       setShowMissing(true);
       return;
     }
-    if (stops.some((stop) => stop.orderIds.length === 0)) {
-      setError('Asigna al menos un pedido a cada parada antes de crear la ruta.');
+    if (stopOrderIds.length === 0) {
+      setError('Selecciona al menos un pedido para la ruta.');
       return;
     }
     if (simulating && (originAddress.trim() === '' || originMapsUrl.trim() === '')) {
@@ -199,21 +194,18 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
           simulatedCompletionEnabled: true,
           origin: { addressLine: originAddress.trim(), googleMapsUrl: originMapsUrl.trim() },
         } : {}),
-        stops: stops.map((stop, index) => ({
-          sequence: index + 1, addressLine: stop.addressLine.trim(), orderIds: stop.orderIds,
-          ...(stop.googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: stop.googleMapsUrl.trim() }),
-        })),
+        stops: stopOrderIds.map((orderId, index) => ({ sequence: index + 1, orderId })),
       });
       // A simulated route starts at planning, so its orders are already in transit.
       const nextOrderStatus = created.simulatedCompletionEnabled === true ? 'in_transit' : 'assigned';
       setRoutes((current) => [...current, created]);
-      setOrders((current) => current.map((order) => stops.some((stop) => stop.orderIds.includes(order.id))
+      setOrders((current) => current.map((order) => stopOrderIds.includes(order.id)
         ? { ...order, status: nextOrderStatus } : order));
       setRouteCode('');
       setPlannedDate('');
       setDriverId('');
       setVehicleId('');
-      setStops([newStop()]);
+      setStopOrderIds([]);
       setSimulate(false);
       setOriginAddress('');
       setOriginMapsUrl('');
@@ -363,7 +355,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       {!createOpen && error !== null && <ErrorNotice>{error}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
       <FormSheet open={createOpen} onOpenChange={setCreateOpen} width="wide" paper title="Crear ruta manual"
-        description="Asigna conductor y vehículo, y agrupa los pedidos en paradas."
+        description="Asigna conductor y vehículo, y elige los pedidos: cada pedido es una parada."
         onSubmit={(event) => void createRoute(event)}
         footer={(
           <>
@@ -374,8 +366,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
           </>
         )}>
             <DocumentTitle title="HOJA DE RUTA" aside={<IconChip icon={Route} tone="primary" />}>
-              <span>Paradas: <span className="text-foreground">{stops.length}</span></span>
-              <span>Pedidos asignados: <span className="text-foreground">{stops.reduce((total, stop) => total + stop.orderIds.length, 0)}</span></span>
+              <span>Paradas: <span className="text-foreground">{stopOrderIds.length}</span></span>
+              <span>Pedidos asignados: <span className="text-foreground">{stopOrderIds.length}</span></span>
             </DocumentTitle>
             {error !== null && <ErrorNotice>{error}</ErrorNotice>}
             {simulation.enabled && (
@@ -414,70 +406,68 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                 error={showMissing && vehicleId === '' ? 'Selecciona un vehículo.' : null} />
             </FieldGroup>
 
-            {stops.map((stop, stopIndex) => {
-              const assignedElsewhere = new Set(stops.flatMap((item, index) => index === stopIndex ? [] : item.orderIds));
-              return (
-                <FieldSet key={stopIndex}>
-                  <FieldLegend>Parada {stopIndex + 1}</FieldLegend>
-                  <FieldGroup className="gap-4">
-                    <TextField id={`stop-address-${stopIndex}`} label={`Dirección de parada ${stopIndex + 1}`} placeholder="Ej. Av. Arequipa 123, Lince" required minLength={5} maxLength={200}
-                      value={stop.addressLine} onChange={(event) => updateStop(stopIndex, (current) => ({ ...current, addressLine: event.target.value }))} />
-                    <Field>
-                      <FieldLabel htmlFor={`stop-maps-${stopIndex}`}>Enlace de Google Maps de parada {stopIndex + 1} (opcional)</FieldLabel>
-                      <Input id={`stop-maps-${stopIndex}`} type="url" maxLength={2048} placeholder="https://maps.app.goo.gl/..." value={stop.googleMapsUrl}
-                        onChange={(event) => updateStop(stopIndex, (current) => ({ ...current, googleMapsUrl: event.target.value }))} />
-                      <FieldDescription>Se resolverá al crear la ruta para obtener las coordenadas.</FieldDescription>
-                    </Field>
-                    <FieldSet>
-                      <FieldLegend variant="label">Pedidos elegibles</FieldLegend>
-                      {eligibleOrders.length === 0 && <FieldDescription>No hay pedidos creados o devueltos disponibles.</FieldDescription>}
-                      <FieldGroup className="gap-3">
-                        {eligibleOrders.map((order) => {
-                          const checkboxId = `stop-${stopIndex}-order-${order.id}`;
-                          return (
-                            <div key={order.id} className="flex flex-col gap-2">
-                              <Field orientation="horizontal">
-                                <Checkbox id={checkboxId} checked={stop.orderIds.includes(order.id)} disabled={assignedElsewhere.has(order.id)}
-                                  onCheckedChange={(checked) => toggleOrder(stopIndex, order.id, checked === true)} />
-                                <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
-                              </Field>
-                              {order.status === 'returned' && (
-                                <div className="flex flex-wrap items-center gap-2 pl-6">
-                                  <Badge variant="destructive">Devuelto · incidencia registrada</Badge>
-                                  <Button type="button" variant="outline" onClick={() => void showOrderHistory(order.id)} disabled={historyLoadingId === order.id}>
-                                    {historyLoadingId === order.id ? 'Cargando historial…' : 'Ver historial'}
-                                  </Button>
-                                </div>
-                              )}
-                              {history[order.id]?.map((event, index) => (
-                                <p key={`${event.occurredAt}-${index}`} className="pl-6 text-sm text-muted-foreground">
-                                  {event.toStatus === 'returned' && <strong>Incidencia reportada · </strong>}
-                                  {event.fromStatus} → {event.toStatus} · {formatDateTime(event.occurredAt)}
-                                </p>
-                              ))}
-                            </div>
-                          );
-                        })}
-                      </FieldGroup>
-                    </FieldSet>
-                    {stops.length > 1 && (
-                      <div>
-                        <Button type="button" variant="outline" onClick={() => setStops((current) => current.filter((_, index) => index !== stopIndex))}>
-                          Eliminar parada {stopIndex + 1}
-                        </Button>
-                      </div>
-                    )}
-                  </FieldGroup>
-                  <Separator />
-                </FieldSet>
-              );
-            })}
-
-            <div>
-              <Button type="button" variant="ghost" onClick={() => setStops((current) => [...current, newStop()])}>
-                <Plus data-icon="inline-start" aria-hidden="true" /> Añadir parada
-              </Button>
-            </div>
+            <FieldSet>
+              <FieldLegend>Paradas</FieldLegend>
+              <FieldDescription>
+                Cada pedido es una parada y usa la dirección y las coordenadas del pedido. Ordénalas en el orden de visita.
+              </FieldDescription>
+              {stopOrderIds.length === 0 && <FieldDescription>Aún no hay paradas. Marca los pedidos que irán en la ruta.</FieldDescription>}
+              <ol className="flex flex-col gap-2">
+                {stopOrderIds.map((orderId, index) => {
+                  const order = orderById.get(orderId);
+                  const position = index + 1;
+                  return (
+                    <li key={orderId} className="flex items-center gap-3 rounded-md border px-3 py-2">
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="font-medium tabular-nums">Parada {position} · {order?.publicCode ?? 'Pedido'}</span>
+                        <span className="truncate text-sm text-muted-foreground">
+                          {order === undefined ? 'Pedido no disponible' : `${order.deliveryAddress.addressLine}, ${order.deliveryAddress.district}`}
+                        </span>
+                      </span>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Subir parada ${position}`}
+                        disabled={index === 0} onClick={() => moveStop(index, -1)}><ArrowUp aria-hidden="true" /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Bajar parada ${position}`}
+                        disabled={index === stopOrderIds.length - 1} onClick={() => moveStop(index, 1)}><ArrowDown aria-hidden="true" /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Quitar parada ${position}`}
+                        onClick={() => toggleOrder(orderId, false)}><X aria-hidden="true" /></Button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </FieldSet>
+            <Separator />
+            <FieldSet>
+              <FieldLegend variant="label">Pedidos elegibles</FieldLegend>
+              {eligibleOrders.length === 0 && <FieldDescription>No hay pedidos creados o devueltos disponibles.</FieldDescription>}
+              <FieldGroup className="gap-3">
+                {eligibleOrders.map((order) => {
+                  const checkboxId = `route-order-${order.id}`;
+                  return (
+                    <div key={order.id} className="flex flex-col gap-2">
+                      <Field orientation="horizontal">
+                        <Checkbox id={checkboxId} checked={stopOrderIds.includes(order.id)}
+                          onCheckedChange={(checked) => toggleOrder(order.id, checked === true)} />
+                        <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
+                      </Field>
+                      {order.status === 'returned' && (
+                        <div className="flex flex-wrap items-center gap-2 pl-6">
+                          <Badge variant="destructive">Devuelto · incidencia registrada</Badge>
+                          <Button type="button" variant="outline" onClick={() => void showOrderHistory(order.id)} disabled={historyLoadingId === order.id}>
+                            {historyLoadingId === order.id ? 'Cargando historial…' : 'Ver historial'}
+                          </Button>
+                        </div>
+                      )}
+                      {history[order.id]?.map((event, index) => (
+                        <p key={`${event.occurredAt}-${index}`} className="pl-6 text-sm text-muted-foreground">
+                          {event.toStatus === 'returned' && <strong>Incidencia reportada · </strong>}
+                          {event.fromStatus} → {event.toStatus} · {formatDateTime(event.occurredAt)}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                })}
+              </FieldGroup>
+            </FieldSet>
       </FormSheet>
 
       {loading && <LoadingRows label="Cargando rutas…" />}

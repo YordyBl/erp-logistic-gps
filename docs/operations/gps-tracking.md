@@ -48,7 +48,8 @@ A simulated route:
 1. Uses only a driver **without a linked account**. Planning with a linked driver returns 409,
    and binding an account to a driver with a `planned` or `in_progress` simulated route also
    returns 409. Both checks run under the driver row lock.
-2. Requires an origin, so even single-stop routes have a path to follow.
+2. Requires an origin, so even single-stop routes have a path to follow. Its stops always
+   have coordinates because they are copied from the orders.
 3. **Starts when planned**: in the planning transaction the route becomes `in_progress` with
    `startedAt`, its orders become `in_transit` with one `in_progress` attempt each, and order
    and route status history is written.
@@ -90,11 +91,17 @@ graph can take several minutes and use multiple gigabytes of memory and disk. Us
 `VALHALLA_BUILD_CONCURRENCY` to cap build threads (default `2`) and `VALHALLA_PORT` to change
 the loopback host port. The application container waits for Valhalla's `/status` health check.
 
-During route scheduling, an optional HTTPS Google Maps share link can be added to each stop.
-The API resolves short links through a limited number of manually validated redirects to
-Google Maps hosts, extracts the place coordinates, and persists those coordinates with the
-stop. Unsupported hosts, non-HTTPS links, unresolved redirects, and links without coordinates
-reject route creation. Do not include private or credential-bearing URLs.
+Every delivery order must carry coordinates (create, edit and import reject orders without
+them), and every route stop is exactly one order: at planning time the stop copies the order's
+delivery address and coordinates, so each planned route always has the geometry Valhalla and
+the GPS simulator need. Stops accept no address, link or coordinates of their own.
+
+Google Maps links are still supported in two places. The order form resolves an optional
+HTTPS share link to coordinates before the order is created, and the origin of a simulated
+route may be given as a link. The API resolves short links through a limited number of
+manually validated redirects to Google Maps hosts and extracts the place coordinates.
+Unsupported hosts, non-HTTPS links, unresolved redirects, and links without coordinates are
+rejected. Do not include private or credential-bearing URLs.
 
 ## Authenticated live tracking
 

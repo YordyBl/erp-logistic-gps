@@ -11,7 +11,8 @@ import { DeliveryAddress } from '../../../delivery-orders/domain/value-objects/D
 import { Package } from '../../../delivery-orders/domain/value-objects/Package.js';
 import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
 import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
-import type { PlannedRoute } from '../../application/ports/RoutePlanningStore.js';
+import type { PlannedRoute, RoutePlanDraft } from '../../application/ports/RoutePlanningStore.js';
+import { DeliveryRouteConflictError } from '../../domain/errors/DeliveryRouteError.js';
 import { probeIntegrationDatabase } from '../../../delivery-orders/infrastructure/persistence/test-database.js';
 
 const CREATED_AT = '2026-10-27T15:00:00.000Z';
@@ -50,6 +51,10 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     await source.destroy();
   });
 
+  interface OrderLocation { readonly addressLine: string; readonly latitude: number; readonly longitude: number }
+  const DEFAULT_LOCATION: OrderLocation = { addressLine: 'Av. Arequipa 1234', latitude: -12.084, longitude: -77.035 };
+  const orderLocations = new Map<string, OrderLocation>();
+
   async function seed() {
     const organizationId = randomUUID();
     const customerId = randomUUID();
@@ -72,29 +77,41 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
       (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
       VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
     [vehicleId, organizationId, `R${vehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
-    const makeOrder = async (code: string) => {
+    const makeOrder = async (code: string, location: OrderLocation | null = DEFAULT_LOCATION) => {
       const order = DeliveryOrder.create({
         id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
-        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
+        deliveryAddress: DeliveryAddress.create(location === null
+          ? { addressLine: 'Av. Arequipa 1234', district: 'Lince' }
+          : { ...location, district: 'Lince' }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })],
         createdAt: CREATED_AT,
       });
       await orders.save(order);
+      if (location !== null) orderLocations.set(order.id, location);
       return order.id;
     };
     return { organizationId, driverId, vehicleId, makeOrder };
   }
 
+  /** One stop per order, as the planner sends it: the store copies each order's location. */
   function plannedRoute(organizationId: string, driverId: string, vehicleId: string,
-    orderIds: string[]): PlannedRoute {
+    orderIds: string[]): RoutePlanDraft {
     return {
       id: randomUUID(), organizationId, driverId, vehicleId,
       publicCode: `ROUTE-${randomUUID().slice(0, 8).toUpperCase()}`,
       plannedDate: '2026-10-27', status: 'planned', createdAt: CREATED_AT,
-      stops: [{ id: randomUUID(), sequence: 1, addressLine: 'Av. Arequipa 1234',
-        latitude: null, longitude: null, orderIds }],
+      stops: orderIds.map((orderId, index) => ({ id: randomUUID(), sequence: index + 1, orderId })),
     };
+  }
+
+  /** The route the store must return and persist for a draft: stops carry their order's location. */
+  function located(draft: RoutePlanDraft): PlannedRoute {
+    return { ...draft, stops: draft.stops.map(({ orderId, ...stop }) => {
+      const location = orderLocations.get(orderId);
+      if (location === undefined) throw new Error('order location not seeded');
+      return { ...stop, ...location, orderIds: [orderId] };
+    }) };
   }
 
   it('commits ordered links and both audited order transitions; rejects active reuse', async () => {
@@ -103,8 +120,8 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const second = await makeOrder('ORDER-ROUTE-2');
     const route = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
     const actor = randomUUID();
-    await expect(store.plan(route, actor)).resolves.toEqual(route);
-    await expect(store.findById(organizationId, route.id)).resolves.toEqual(route);
+    await expect(store.plan(route, actor)).resolves.toEqual(located(route));
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(located(route));
     await expect(store.findById(randomUUID(), route.id)).resolves.toBeNull();
     for (const id of [first, second]) {
       expect((await orders.findById(id))?.status).toBe('assigned');
@@ -123,23 +140,42 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     expect(await orders.findStatusHistory(organizationId, third)).toEqual([]);
   });
 
-  it('persists resolved stop coordinates for later route geometry and GPS simulation', async () => {
+  it('copies each locked order location into its own stop, in sequence order', async () => {
     const { organizationId, driverId, vehicleId, makeOrder } = await seed();
-    const first = await makeOrder('ORDER-COORDINATE-1');
-    const second = await makeOrder('ORDER-COORDINATE-2');
-    const base = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
-    const route: PlannedRoute = {
-      ...base,
-      stops: [
-        { ...base.stops[0]!, sequence: 1, latitude: -11.974070, longitude: -77.081446, orderIds: [first] },
-        { ...base.stops[0]!, id: randomUUID(), sequence: 2, latitude: -12.046400, longitude: -77.042800,
-          addressLine: 'Plaza Mayor', orderIds: [second] },
-      ],
-    };
+    const first = await makeOrder('ORDER-COORDINATE-1',
+      { addressLine: 'Av. Jose Larco 345', latitude: -12.1219, longitude: -77.03 });
+    const second = await makeOrder('ORDER-COORDINATE-2',
+      { addressLine: 'Plaza Mayor de Lima', latitude: -12.0464, longitude: -77.0428 });
+    const route = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
 
-    await store.plan(route, randomUUID());
+    const planned = await store.plan(route, randomUUID());
 
-    await expect(store.findById(organizationId, route.id)).resolves.toEqual(route);
+    expect(planned.stops).toEqual([
+      { id: route.stops[0]!.id, sequence: 1, addressLine: 'Av. Jose Larco 345',
+        latitude: -12.1219, longitude: -77.03, orderIds: [first] },
+      { id: route.stops[1]!.id, sequence: 2, addressLine: 'Plaza Mayor de Lima',
+        latitude: -12.0464, longitude: -77.0428, orderIds: [second] },
+    ]);
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(planned);
+    // A later order edit does not move the planned stop: the stop is a snapshot.
+    await source.query(`UPDATE delivery_orders SET delivery_address_line='Otra direccion 1',
+      latitude=-12.2, longitude=-77.1 WHERE id=$1`, [first]);
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(planned);
+  });
+
+  it('rejects planning an order without coordinates and writes nothing', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const locatedOrder = await makeOrder('ORDER-LOCATED-1');
+    const legacy = await makeOrder('ORDER-UNLOCATED-1', null);
+    const route = plannedRoute(organizationId, driverId, vehicleId, [locatedOrder, legacy]);
+
+    await expect(store.plan(route, randomUUID())).rejects.toBeInstanceOf(DeliveryRouteConflictError);
+
+    await expect(store.findById(organizationId, route.id)).resolves.toBeNull();
+    for (const id of [locatedOrder, legacy]) {
+      expect((await orders.findById(id))?.status).toBe('created');
+      expect(await orders.findStatusHistory(organizationId, id)).toEqual([]);
+    }
   });
 
   it('redispatches a returned order atomically without losing its prior route or audit', async () => {
@@ -158,7 +194,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const second = plannedRoute(organizationId, driverId, vehicleId, [id]);
     // The original route is no longer reserving its resources after execution.
     await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1`, [first.id]);
-    await expect(store.plan(second, actor)).resolves.toEqual(second);
+    await expect(store.plan(second, actor)).resolves.toEqual(located(second));
     expect((await orders.findById(id))?.activeRouteId).toBe(second.id);
     expect((await orders.findById(id))?.status).toBe('assigned');
     const history = await orders.findStatusHistory(organizationId, id);
@@ -348,7 +384,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
   });
 
   function simulatedRoute(organizationId: string, driverId: string, vehicleId: string,
-    orderIds: string[]): PlannedRoute {
+    orderIds: string[]): RoutePlanDraft {
     const base = plannedRoute(organizationId, driverId, vehicleId, orderIds);
     return { ...base, simulatedCompletionEnabled: true,
       origin: { addressLine: 'Núcleo de investigación', latitude: -11.97407, longitude: -77.081446 } };
@@ -392,7 +428,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const { organizationId, driverId, vehicleId, makeOrder } = await seed();
     const route = plannedRoute(organizationId, driverId, vehicleId, [await makeOrder('ORDINARY-PLAN-1')]);
 
-    await expect(store.plan(route, randomUUID())).resolves.toEqual(route);
+    await expect(store.plan(route, randomUUID())).resolves.toEqual(located(route));
 
     const [row] = await source.query<{ status: string; simulation_actor_user_id: string | null }[]>(
       'SELECT status, simulation_actor_user_id FROM delivery_routes WHERE id=$1', [route.id]);

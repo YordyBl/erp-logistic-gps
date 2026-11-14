@@ -56,9 +56,9 @@ docker compose -f docker-compose.yml -f docker-compose.valhalla.yml up --build
 
 The first startup builds Peru routing tiles and can take several minutes; subsequent runs reuse
 the local graph. Valhalla is exposed on loopback port `8002` by default (`VALHALLA_PORT` changes
-it), and the API container uses the internal Compose address. The web route-planning form
-accepts an optional Google Maps link per stop; the API resolves permitted Google Maps links
-to coordinates used by Valhalla and GPS simulation. See
+it), and the API container uses the internal Compose address. Every order carries coordinates
+(typed or resolved from an optional Google Maps link in the order form), and each route stop
+is one order that inherits them for Valhalla and GPS simulation. See
 [`docs/operations/gps-tracking.md`](docs/operations/gps-tracking.md) for details.
 
 ### Demo data
