@@ -441,6 +441,17 @@ paths:
         only its previous active order link. No delivery-attempt record is
         created until delivery execution is implemented. Rejections write
         nothing. Route start is a separate DRIVER action; GPS remains separate.
+
+        Development-only simulation: `simulatedCompletionEnabled: true` is
+        accepted only when the API runs with `NODE_ENV=development` set
+        explicitly and `VALHALLA_URL` configured; otherwise it returns 400. A
+        simulated route requires an `origin` and a driver without a linked
+        account (409 otherwise, checked under the driver row lock). It starts
+        in the planning transaction: the route is persisted `in_progress` with
+        `startedAt`, its orders move to `in_transit` with one `in_progress`
+        attempt each, and every history row records the planning user as
+        actor. Use `GET /api/v1/delivery-routes/simulation` to check
+        availability and eligible drivers first.
       security:
         - bearerAuth: []
       parameters:
@@ -473,6 +484,49 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-routes/simulation:
+    get:
+      tags: [delivery-routes]
+      operationId: getRouteSimulation
+      summary: Report whether development route simulation is available
+      description: |
+        ADMIN or DISPATCHER reads whether simulated routes can be planned and
+        which drivers may be used. `enabled` is true only when the API runs
+        with `NODE_ENV=development` set explicitly and `VALHALLA_URL`
+        configured; in any other environment it is false and
+        `eligibleDriverIds` is empty. When enabled, `eligibleDriverIds` lists
+        the organization's active drivers that have no linked account.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Simulation availability for the caller's organization.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [enabled, eligibleDriverIds]
+                    properties:
+                      enabled:
+                        type: boolean
+                      eligibleDriverIds:
+                        type: array
+                        items:
+                          type: string
+                          format: uuid
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/delivery-routes/mine:
@@ -1749,6 +1803,8 @@ paths:
         other tenants are rejected. A user can belong to only one driver profile.
         Binding changes are audited atomically; ordinary catalog PATCH cannot
         change this association. Unbound profiles remain valid for dispatch.
+        Binding an account to a driver that has a `planned` or `in_progress`
+        simulated route returns 409; the check runs under the driver row lock.
       security:
         - bearerAuth: []
       requestBody:
@@ -2375,7 +2431,11 @@ components:
         simulatedCompletionEnabled:
           type: boolean
           default: false
-          description: Enables audited simulated delivery and route completion at destination for this route only.
+          description: |
+            Development only. Starts the route at planning and lets the GPS
+            simulator close every reached stop (orders delivered) and then the
+            route. Requires `origin`, a driver without a linked account,
+            `NODE_ENV=development` and `VALHALLA_URL`; otherwise 400 or 409.
         origin:
           type: object
           additionalProperties: false

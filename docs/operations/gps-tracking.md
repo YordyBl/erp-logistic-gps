@@ -20,13 +20,54 @@ photos or order history.
 
 Valhalla supplies optional planned route geometry and a duration estimate. A route may start
 from a separately persisted origin; the simulator routes from that origin through its delivery
-stops. Single-delivery simulated routes are marked delivered and completed atomically when a
-recorded simulated position reaches the destination. The attempt notes identify the result as
-simulated and state that no physical confirmation or photo was collected; ordinary driver
-confirmations still require their available evidence. This behavior requires an explicit
-`simulatedCompletionEnabled: true` route-plan setting; only opted-in routes receive simulated GPS, and existing routes default to false. Current driver coordinates come from the
-selected position source and may differ from that geometry; a driver can use Google Maps or
-another navigation app without changing GPS ingestion.
+stops. Current driver coordinates come from the selected position source and may differ from
+that geometry; a driver can use Google Maps or another navigation app without changing GPS
+ingestion.
+
+## Development-only route simulation
+
+Route simulation exists only to demonstrate the system locally. It is enabled when **both**
+conditions hold:
+
+- `NODE_ENV` is set explicitly to `development`. An unset `NODE_ENV` does not enable it, even
+  though the API otherwise defaults to development; `production`, `test` and any other value
+  disable it.
+- `VALHALLA_URL` is configured, because without geometry no position is produced and a
+  simulated route would never close.
+
+When simulation is disabled, planning rejects `simulatedCompletionEnabled: true` with 400, the
+simulator samples no positions and completes nothing, and GPS retention pruning keeps running.
+
+`GET /api/v1/delivery-routes/simulation` (ADMIN or DISPATCHER) returns
+`{ enabled, eligibleDriverIds }`. The web planning page uses it to show the **Simular ruta**
+checkbox, the origin address and Google Maps link fields, and to restrict the driver list. The
+controls stay hidden when the endpoint reports `enabled: false` or fails.
+
+A simulated route:
+
+1. Uses only a driver **without a linked account**. Planning with a linked driver returns 409,
+   and binding an account to a driver with a `planned` or `in_progress` simulated route also
+   returns 409. Both checks run under the driver row lock.
+2. Requires an origin, so even single-stop routes have a path to follow.
+3. **Starts when planned**: in the planning transaction the route becomes `in_progress` with
+   `startedAt`, its orders become `in_transit` with one `in_progress` attempt each, and order
+   and route status history is written.
+4. Records the planning dispatcher as the actor (`delivery_routes.simulation_actor_user_id`,
+   added by migration `SimulatedRouteActor1794100000000`) on every simulated history row.
+5. **Closes each stop by itself**. Reached stops are detected from progress along the geometry
+   using Valhalla leg distances, so a tick that skips several stops closes all of them in order.
+   Each reached stop's `in_transit` orders become `delivered` with a terminal attempt whose note
+   says the result is simulated and that no physical confirmation or photo was collected;
+   already-terminal orders are skipped. The route completes when every active order is
+   terminal. Processing is idempotent and locks orders in `orderId` order.
+
+Ordinary driver confirmations still require their available evidence; only opted-in routes
+receive simulated GPS, and existing routes default to `simulatedCompletionEnabled: false`.
+
+The Compose stack sets `NODE_ENV=development`, passes `GPS_SIMULATION_INTERVAL_SECONDS`
+(default `4`) and uses `GPS_SIMULATION_TIME_SCALE=10` by default so a multi-stop demo route
+closes in minutes. Starting it with `docker-compose.valhalla.yml` supplies `VALHALLA_URL`.
+Override either value in `.env`.
 
 ## Local Peru routing service
 
