@@ -196,6 +196,8 @@ export interface DispatchRoute {
   readonly driverId: string;
   readonly vehicleId: string;
   readonly status: 'planned' | 'in_progress' | 'completed';
+  /** Present and true only for development simulations. */
+  readonly simulatedCompletionEnabled?: boolean;
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly completedAt?: string;
@@ -207,6 +209,12 @@ export interface DispatchRoute {
     readonly longitude: number | null;
     readonly orderIds: readonly string[];
   }[];
+}
+
+/** Whether route simulation is available (development only) and which drivers it may use. */
+export interface RouteSimulationAvailability {
+  readonly enabled: boolean;
+  readonly eligibleDriverIds: readonly string[];
 }
 
 export interface DispatchDashboardSummary {
@@ -246,6 +254,8 @@ export interface CreateDispatchRouteInput {
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;
+  readonly origin?: { readonly addressLine: string; readonly googleMapsUrl: string };
+  readonly simulatedCompletionEnabled?: boolean;
   readonly stops: readonly {
     readonly sequence: number;
     readonly addressLine: string;
@@ -387,6 +397,10 @@ export class ApiClient {
 
   async createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }> {
     return this.requestData('/tracking/ticket', { method: 'POST', body: '{}' });
+  }
+
+  async getRouteSimulation(): Promise<RouteSimulationAvailability> {
+    return this.requestData('/delivery-routes/simulation');
   }
 
   async createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute> {

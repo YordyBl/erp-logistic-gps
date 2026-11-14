@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import { Router } from 'express';
 
 import { planRouteBodySchema, type PlanRouteUseCase } from '../../modules/delivery-routes/application/use-cases/plan-route/PlanRouteUseCase.js';
+import type { GetRouteSimulationUseCase } from '../../modules/delivery-routes/application/use-cases/get-route-simulation/GetRouteSimulationUseCase.js';
 import type { GetRouteUseCase } from '../../modules/delivery-routes/application/use-cases/get-route/GetRouteUseCase.js';
 import { reassignRouteBodySchema, type ReassignRouteUseCase } from '../../modules/delivery-routes/application/use-cases/reassign-route/ReassignRouteUseCase.js';
 import type { ExecuteDriverRouteUseCase } from '../../modules/delivery-routes/application/use-cases/execute-driver-route/ExecuteDriverRouteUseCase.js';
@@ -16,6 +17,7 @@ export function createDeliveryRoutesRouter(
     readonly planRoute: PlanRouteUseCase;
     readonly listRoutes: { execute(input: unknown): Promise<{ routes: readonly unknown[] }> };
     readonly getRoute: GetRouteUseCase;
+    readonly getRouteSimulation: GetRouteSimulationUseCase;
     readonly reassignRoute: ReassignRouteUseCase;
     readonly executeDriverRoute: ExecuteDriverRouteUseCase;
   },
@@ -26,6 +28,10 @@ export function createDeliveryRoutesRouter(
   router.get('/', requireRole('ADMIN', 'DISPATCHER'), async (_request, response) => {
     const result = await ports.listRoutes.execute({ organizationId: requireOrganizationId(response) });
     response.status(200).json({ data: result.routes });
+  });
+  router.get('/simulation', requireRole('ADMIN', 'DISPATCHER'), async (_request, response) => {
+    const result = await ports.getRouteSimulation.execute({ organizationId: requireOrganizationId(response) });
+    response.status(200).json({ data: result.simulation });
   });
   router.post('/', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
     const body = parseOrThrow(planRouteBodySchema, request.body, 'Plan route request body is invalid');

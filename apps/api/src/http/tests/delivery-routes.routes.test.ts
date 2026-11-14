@@ -320,6 +320,21 @@ describe('POST /api/v1/delivery-routes', () => {
   });
 });
 
+describe('GET /api/v1/delivery-routes/simulation', () => {
+  it('reports simulation as unavailable outside development and restricts it to dispatch roles', async () => {
+    const { testApp, token } = await seededRouteApp();
+
+    const response = await request(testApp.app).get(`${ROUTES}/simulation`).set(bearer(token));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { enabled: false, eligibleDriverIds: [] } });
+    const user = await testApp.seedUser({ id: DRIVER_ID, email: DRIVER_EMAIL, role: 'DRIVER' });
+    const driverToken = await testApp.signIn(user);
+    expect((await request(testApp.app).get(`${ROUTES}/simulation`).set(bearer(driverToken))).status).toBe(403);
+    expect((await request(testApp.app).get(`${ROUTES}/simulation`)).status).toBe(401);
+  });
+});
+
 describe('POST /api/v1/delivery-routes simulation outside development', () => {
   it('rejects a simulated route with 400 and leaves the order unchanged', async () => {
     const { testApp, token, driverId, vehicleId, createOrder } = await seededRouteApp();

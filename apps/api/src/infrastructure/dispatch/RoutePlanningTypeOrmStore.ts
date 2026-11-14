@@ -160,6 +160,16 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
     return this.readPlannedRoute(this.dataSource.manager, organizationId, routeId);
   }
 
+  async listSimulationEligibleDriverIds(organizationId: string): Promise<readonly string[]> {
+    const rows = await this.dataSource.query<{ id: string }[]>(`
+      SELECT d.id FROM drivers d
+      WHERE d.organization_id=$1 AND d.status='active'
+        AND NOT EXISTS (SELECT 1 FROM driver_accounts a
+          WHERE a.organization_id=d.organization_id AND a.driver_id=d.id)
+      ORDER BY d.full_name, d.id`, [organizationId]);
+    return rows.map((row) => row.id);
+  }
+
   async list(organizationId: string): Promise<readonly PlannedRoute[]> {
     const routes = await this.dataSource.manager.find(DeliveryRouteEntity, {
       where: { organizationId, status: In(['planned', 'in_progress', 'completed']) },

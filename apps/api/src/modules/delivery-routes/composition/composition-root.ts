@@ -8,6 +8,7 @@ import type { UserRepository } from '../../identity-and-access/application/ports
 import type { DriverRouteExecutionStore, DriverRouteView } from '../application/ports/DriverRouteExecutionStore.js';
 import { ExecuteDriverRouteUseCase } from '../application/use-cases/execute-driver-route/ExecuteDriverRouteUseCase.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../domain/errors/DeliveryRouteError.js';
+import { GetRouteSimulationUseCase } from '../application/use-cases/get-route-simulation/GetRouteSimulationUseCase.js';
 import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteUseCase.js';
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
 import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
@@ -44,6 +45,11 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
   async findById(organizationId: string, routeId: string): Promise<PlannedRoute | null> {
     const route = this.routes.get(routeId);
     return route?.organizationId === organizationId ? route : null;
+  }
+
+  /** The in-memory planner holds no account bindings, so it offers no simulation drivers. */
+  async listSimulationEligibleDriverIds(): Promise<readonly string[]> {
+    return [];
   }
 
   async list(organizationId: string): Promise<readonly PlannedRoute[]> {
@@ -149,6 +155,7 @@ export function createDeliveryRoutesModule(options: {
       options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver(), simulation),
     listRoutes: new ListRoutesUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
+    getRouteSimulation: new GetRouteSimulationUseCase(options.store, simulation),
     reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),
     executeDriverRoute: new ExecuteDriverRouteUseCase(options.executionStore, clock, simulation),
   };

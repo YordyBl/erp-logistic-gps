@@ -417,4 +417,27 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     expect(await store.findById(organizationId, route.id)).toBeNull();
     expect((await orders.findById(id))?.status).toBe('created');
   });
+
+  it('lists only active drivers without a linked account as simulation candidates', async () => {
+    const { organizationId, driverId } = await seed();
+    const linkedId = randomUUID();
+    const inactiveId = randomUUID();
+    for (const [id, status] of [[linkedId, 'active'], [inactiveId, 'inactive']] as const) {
+      await source.query(`INSERT INTO drivers
+        (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+        VALUES ($1,$2,'Other Driver',$3,'+51 911 222 334',$4,$5,$6,$6)`,
+      [id, organizationId, `DNI-${id.slice(0, 8).toUpperCase()}`, `L-${id.slice(0, 8).toUpperCase()}`,
+        status, CREATED_AT]);
+    }
+    const userId = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DRIVER','active',now())`,
+    [userId, organizationId, `${userId}@example.test`]);
+    await source.query('INSERT INTO driver_accounts (driver_id, organization_id, user_id) VALUES ($1,$2,$3)',
+      [linkedId, organizationId, userId]);
+
+    await expect(store.listSimulationEligibleDriverIds(organizationId)).resolves.toEqual([driverId]);
+    await expect(store.listSimulationEligibleDriverIds(randomUUID())).resolves.toEqual([]);
+  });
 });

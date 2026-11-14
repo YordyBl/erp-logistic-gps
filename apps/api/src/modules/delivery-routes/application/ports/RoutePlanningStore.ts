@@ -35,6 +35,8 @@ export interface RoutePlanningStore {
   plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute>;
   list(organizationId: string): Promise<readonly PlannedRoute[]>;
   findById(organizationId: string, routeId: string): Promise<PlannedRoute | null>;
+  /** Active drivers without a linked account: the only drivers a simulated route may use. */
+  listSimulationEligibleDriverIds(organizationId: string): Promise<readonly string[]>;
   /** Replace resources without touching stops, orders or their history. */
   reassign(organizationId: string, routeId: string, changes: {
     readonly driverId?: string;
