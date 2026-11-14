@@ -4,9 +4,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 
 import type { DispatchRoute } from '../api/client.js';
 import { ErrorNotice, LoadingRows } from '../components/Notices.js';
-import { PageHeader } from '../components/PageHeader.js';
-import { Badge } from '../components/ui/badge.js';
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from '../components/ui/card.js';
+import { Card } from '../components/ui/card.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
 import { ActiveRouteItem } from './routes/ActiveRouteItem.js';
 import { loadRouteDetails, NO_ROUTE_DETAILS, type RouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
@@ -200,13 +198,7 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const latestPositionByRoute = new Map(snapshot.positions.map((position) => [position.routeId, position]));
 
   return (
-    <section className="flex flex-col gap-6" aria-labelledby="control-tower-title">
-      <PageHeader title="Torre de control" titleId="control-tower-title"
-        description="Consulta paradas planificadas y la última posición recibida de cada ruta en curso.">
-        <Badge variant={connection === 'connected' ? 'success' : 'secondary'} role="status">
-          {connection === 'connected' ? 'Seguimiento conectado' : connection === 'connecting' ? 'Conectando…' : 'Reconectando…'}
-        </Badge>
-      </PageHeader>
+    <section className="flex flex-col gap-6" aria-label="Torre de control">
       {error !== null && <ErrorNotice>{error}</ErrorNotice>}
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
         <Card className="overflow-hidden p-0">
@@ -218,12 +210,9 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
             </div>
           </div>
         </Card>
-        <Card className="xl:h-[36rem]">
-          <CardHeader>
-            <CardTitle><h2>Rutas activas</h2></CardTitle>
-            <CardAction><Badge variant="outline">{routes.length}</Badge></CardAction>
-          </CardHeader>
-          <CardContent className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+        <div className="flex min-h-0 flex-col gap-4 xl:h-[36rem]">
+          <h2 className="text-base font-semibold">{routes.length} {routes.length === 1 ? 'Ruta activa' : 'Rutas activas'}</h2>
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
             {routes.length === 0 && connection !== 'connected' && <LoadingRows label="Conectando con el seguimiento…" rows={2} />}
             {routes.length === 0 && connection === 'connected' && (
               <Empty>
@@ -240,8 +229,8 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
                 ))}
               </ul>
             )}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </div>
       <p className="text-sm text-muted-foreground">La posición mostrada es la última recibida; no garantiza que el conductor esté allí ahora. ETA no disponible.</p>
     </section>

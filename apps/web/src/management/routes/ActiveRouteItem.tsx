@@ -56,9 +56,9 @@ export function ActiveRouteItem({ route, position, details }: {
           detail={`${progress.closed} de ${countLabel(progress.total, 'pedido cerrado', 'pedidos cerrados')}${progress.returned > 0 ? ` · ${countLabel(progress.returned, 'devuelto', 'devueltos')}` : ''}`} />
       )}
 
-      <Collapsible defaultOpen={route.status === 'in_progress'} className="group/stops flex flex-col gap-3">
+      <Collapsible className="group/stops flex flex-col gap-3">
         <CollapsibleTrigger asChild>
-          <Button type="button" variant="ghost" className="-mx-1 justify-between px-1">
+          <Button type="button" variant="link" className="h-auto justify-between p-0 text-foreground">
             {countLabel(route.stops.length, 'parada', 'paradas')}
             <ChevronDown data-icon="inline-end" className="transition-transform group-data-[state=open]/stops:rotate-180" aria-hidden="true" />
           </Button>
