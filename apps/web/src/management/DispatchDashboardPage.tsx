@@ -194,9 +194,9 @@ function DeliveriesCard({ deliveries, userName }: { readonly deliveries: number;
   const hasDeliveries = deliveries > 0;
   return (
     <li className="col-span-2 sm:col-span-1 xl:col-span-3">
-      <Card className="relative h-full overflow-hidden">
+      <Card size="sm" className="relative h-full overflow-hidden">
         {hasDeliveries && <ConfettiArt />}
-        <CardContent className="relative flex h-full flex-col justify-between gap-3">
+        <CardContent className="relative flex h-full flex-col justify-center gap-1">
           <div className="flex flex-col gap-0.5">
             <h2 className="flex items-center gap-2 text-lg font-semibold">
               {hasDeliveries ? `¡Felicidades${userName === undefined ? '' : `, ${userName}`}!` : 'Aún sin entregas'}
@@ -204,7 +204,7 @@ function DeliveriesCard({ deliveries, userName }: { readonly deliveries: number;
             </h2>
             <p className="text-xs text-muted-foreground">Entregas de hoy</p>
           </div>
-          <div className="flex flex-col">
+          <div className="flex items-baseline gap-2">
             <strong className="text-3xl font-semibold tabular-nums">{deliveries.toLocaleString('es-PE')}</strong>
             <p className="text-xs text-muted-foreground">Confirmadas hoy, hora de Lima</p>
           </div>
@@ -216,18 +216,19 @@ function DeliveriesCard({ deliveries, userName }: { readonly deliveries: number;
 
 function DeliveredRingCard({ counts, total }: { readonly counts: DispatchDashboardSummary['orderStatusCounts']; readonly total: number }) {
   const share = deliveredShare(counts);
-  const circumference = 2 * Math.PI * 34;
   return (
     <li className="col-span-2 sm:col-span-1 xl:col-span-3">
-      <Card className="h-full">
+      <Card size="sm" className="h-full">
         <CardContent className="flex h-full flex-col gap-2">
           <p className="text-sm text-muted-foreground">Avance de entregas</p>
           <div className="grid flex-1 grid-cols-[5.5rem_minmax(0,1fr)] items-center gap-3">
-            <svg viewBox="0 0 88 88" className="size-22" role="img" aria-label={`${share} % de los pedidos entregados`}>
-              <circle cx="44" cy="44" r="34" fill="none" stroke="var(--muted)" strokeWidth="8" />
-              <circle cx="44" cy="44" r="34" fill="none" stroke="var(--status-delivered)" strokeWidth="8" strokeLinecap="round"
-                strokeDasharray={`${(share / 100) * circumference} ${circumference}`} transform="rotate(-90 44 44)" />
-              <text x="44" y="44" textAnchor="middle" dominantBaseline="central" className="fill-foreground text-base font-semibold">{share}%</text>
+            <svg viewBox="0 0 88 52" className="h-auto w-full" role="img" aria-label={`${share} % de los pedidos entregados`}>
+              <path d="M10 44 A34 34 0 0 1 78 44" fill="none" stroke="var(--muted)" strokeWidth="8" strokeLinecap="round" />
+              {share > 0 && (
+                <path d="M10 44 A34 34 0 0 1 78 44" fill="none" stroke="var(--status-delivered)" strokeWidth="8" strokeLinecap="round"
+                  pathLength={100} strokeDasharray={`${share} 100`} />
+              )}
+              <text x="44" y="40" textAnchor="middle" dominantBaseline="central" className="fill-foreground text-base font-semibold">{share}%</text>
             </svg>
             <p className="text-xs text-muted-foreground">
               {total === 0 ? 'Aún no hay pedidos registrados.' : (

@@ -12,7 +12,7 @@ export function AppShell({ pageId, headerActions, children, ...sidebar }: Compon
 }) {
   return (
     <TooltipProvider>
-      <SidebarProvider>
+      <SidebarProvider defaultOpen={false}>
         <AppSidebar {...sidebar} />
         <SidebarInset className="min-w-0">
           <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-4">
