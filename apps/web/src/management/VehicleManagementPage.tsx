@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleStatus } from '../api/client.js';
 import { FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
+import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { SearchInput } from '../components/SearchInput.js';
@@ -42,6 +43,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [busyVehicleId, setBusyVehicleId] = useState<string | null>(null);
@@ -100,7 +102,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
       setVehicles((current) => [...current, created].sort(compareVehicles));
       setForm(emptyForm());
       setCreating(false);
-      setNotice(`Vehículo ${created.plate} registrado.`);
+      setRegistered(`El vehículo ${created.plate} se registró correctamente.`);
     } catch (cause) {
       setActionError(errorMessage(cause, 'No se pudo registrar el vehículo.'));
     } finally {
@@ -179,6 +181,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
       </PageHeader>
 
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
+      <RegistrationDialog title="Vehículo registrado" message={registered} onClose={() => setRegistered(null)} />
 
       {loading && <LoadingRows label="Cargando vehículos…" />}
       {!loading && loadError !== null && (

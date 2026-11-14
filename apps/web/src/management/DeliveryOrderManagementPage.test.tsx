@@ -96,7 +96,7 @@ describe('DeliveryOrderManagementPage', () => {
       deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores' },
       packages: [{ description: 'Caja pequeña' }],
     });
-    expect((await screen.findByRole('status')).textContent).toBe('Pedido creado.');
+    expect((await screen.findByRole('dialog')).textContent).toContain('se registró correctamente');
   });
 
   it('fills editable coordinates from a Google Maps link and keeps the link on create', async () => {

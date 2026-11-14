@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
 import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
+import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { SearchInput } from '../components/SearchInput.js';
@@ -45,6 +46,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [accountDriverId, setAccountDriverId] = useState<string | null>(null);
@@ -94,7 +96,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       setDrivers((current) => [...current, created].sort(compareDrivers));
       setForm(newDriverForm());
       setCreateOpen(false);
-      setNotice(`Conductor ${created.fullName} registrado.`);
+      setRegistered(`El conductor ${created.fullName} se registró correctamente.`);
     } catch (cause) {
       setActionError(errorMessage(cause, 'No se pudo registrar el conductor.'));
     } finally {
@@ -201,6 +203,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
 
       {!sheetOpen && actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
+      <RegistrationDialog title="Conductor registrado" message={registered} onClose={() => setRegistered(null)} />
 
       {loading && <LoadingRows label="Cargando conductores…" />}
       {!loading && loadError !== null && (

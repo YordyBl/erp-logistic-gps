@@ -96,7 +96,7 @@ describe('CustomerCatalogPage', () => {
       contactPhone: '01 555 1234',
       status: 'inactive',
     }));
-    expect(await screen.findByText('Cliente «Distribuidora Norte» registrado.')).toBeTruthy();
+    expect(await screen.findByText('El cliente «Distribuidora Norte» se registró correctamente.')).toBeTruthy();
     expect(screen.getByText('Distribuidora Norte')).toBeTruthy();
     expect(screen.getByText('Inactivo')).toBeTruthy();
     expect(client.listCustomers).toHaveBeenCalledOnce();

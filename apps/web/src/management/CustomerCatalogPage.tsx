@@ -8,6 +8,7 @@ import { DataTable } from '../components/data-table/DataTable.js';
 import { FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { IconChip } from '../components/IconChip.js';
+import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Badge } from '../components/ui/badge.js';
@@ -98,6 +99,7 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [registered, setRegistered] = useState<string | null>(null);
 
   useEffect(() => {
     let current = true;
@@ -138,7 +140,7 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
     try {
       const created = await client.createCustomer(form);
       setCustomers((previous) => [...previous, created]);
-      setSuccessMessage(`Cliente «${created.name}» registrado.`);
+      setRegistered(`El cliente «${created.name}» se registró correctamente.`);
       setForm(emptyForm);
       setFormOpen(false);
     } catch {
@@ -158,6 +160,7 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
       </PageHeader>
 
       {successMessage && <SuccessNotice>{successMessage}</SuccessNotice>}
+      <RegistrationDialog title="Cliente registrado" message={registered} onClose={() => setRegistered(null)} />
       <div className="flex flex-col gap-4">
         {loading && <LoadingRows label="Cargando clientes…" />}
         {loadFailed && (

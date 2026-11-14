@@ -1,5 +1,5 @@
 import {
-  Antenna, ClipboardList, Inbox, MapPinOff, PackagePlus, PartyPopper, RadioTower, RefreshCw, Route,
+  ClipboardList, Inbox, MapPinOff, PackagePlus, PartyPopper, RadioTower, RefreshCw, Route,
   Satellite, ShieldCheck, TriangleAlert, Truck, UserRound, type LucideIcon,
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -110,8 +110,8 @@ function DashboardContent({ summary, details, userName, onOpenOrders, onOpenDisp
   return (
     <>
       {summary.ordersAwaitingPlanning > 0 && (
-        <AnnouncementBanner storageKey="banner-por-planificar" icon={Antenna}
-          action={<Button type="button" variant="ghost" onClick={onOpenDispatch}>Planificar</Button>}>
+        <AnnouncementBanner storageKey="banner-por-planificar" icon={TriangleAlert}
+          action={<Button type="button" variant="link" className="h-auto p-0 underline" onClick={onOpenDispatch}>Planificar</Button>}>
           {summary.ordersAwaitingPlanning === 1 ? 'Tienes 1 pedido por planificar' : `Tienes ${summary.ordersAwaitingPlanning.toLocaleString('es-PE')} pedidos por planificar`}: agrúpalos en una ruta para despacharlos.
         </AnnouncementBanner>
       )}

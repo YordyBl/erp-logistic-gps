@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ApiClient, Customer, DeliveryOrder } from '../api/client.js';
 import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
 import { DataTable } from '../components/data-table/DataTable.js';
+import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { OrderStatusBadge } from '../components/OrderStatusBadge.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -25,6 +26,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
@@ -141,6 +143,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
 
       {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
+      <RegistrationDialog title="Pedido registrado" message={registered} onClose={() => setRegistered(null)} />
 
       <div className="flex flex-col gap-4">
         {loading && <LoadingRows label="Cargando pedidos y clientes" />}
@@ -167,7 +170,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         showNoCustomers={activeCustomers.length === 0 && !loading && loadError === null}
         onCreated={(created) => {
           setOrders((current) => [created, ...current.filter((order) => order.id !== created.id)]);
-          setNotice('Pedido creado.');
+          setRegistered(`El pedido ${created.publicCode} se registró correctamente.`);
         }} />
 
       <OrderImportSheet client={client} open={importOpen} onOpenChange={setImportOpen}
