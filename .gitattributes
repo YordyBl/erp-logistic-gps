@@ -1,0 +1,2 @@
+# Shell scripts run inside Linux containers; CRLF breaks them (e.g. "set: pipefail").
+*.sh text eol=lf
