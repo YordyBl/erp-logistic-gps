@@ -184,7 +184,7 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
         )}
       </div>
 
-      <FormSheet open={formOpen} onOpenChange={setFormOpen} icon={Building2} title="Registrar cliente"
+      <FormSheet open={formOpen} onOpenChange={setFormOpen} title="Registrar cliente"
         description="Completa los datos de contacto para identificar a la empresa." formLabel="Nuevo cliente"
         onSubmit={(event) => void submitForm(event)}
         footer={(

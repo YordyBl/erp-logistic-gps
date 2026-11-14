@@ -1,9 +1,7 @@
-import type { LucideIcon } from 'lucide-react';
 import type { FormEvent, ReactNode } from 'react';
 
 import { useFocusReturn } from '../hooks/use-focus-return.js';
 import { resolveOpener } from '../lib/focusOpener.js';
-import { IconChip } from './IconChip.js';
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from './ui/sheet.js';
 
 const WIDTHS = {
@@ -12,14 +10,11 @@ const WIDTHS = {
 } as const;
 
 /** Cabecera común de los paneles laterales. */
-function PanelHeader({ icon, title, description }: { readonly icon: LucideIcon; readonly title: string; readonly description: string }) {
+function PanelHeader({ title, description }: { readonly title: string; readonly description: string }) {
   return (
-    <SheetHeader className="flex-row items-start gap-3 border-b pr-12">
-      <IconChip icon={icon} tone="primary" />
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <SheetTitle>{title}</SheetTitle>
-        <SheetDescription>{description}</SheetDescription>
-      </div>
+    <SheetHeader className="border-b pr-12">
+      <SheetTitle>{title}</SheetTitle>
+      <SheetDescription>{description}</SheetDescription>
     </SheetHeader>
   );
 }
@@ -29,10 +24,9 @@ function PanelHeader({ icon, title, description }: { readonly icon: LucideIcon; 
  * cerrar el panel por accidente no borra lo escrito. Con `paper`, el contenido se muestra como una
  * hoja sobre fondo gris, igual que un documento.
  */
-export function FormSheet({ open, onOpenChange, icon, title, description, formLabel, width = 'default', paper = false, onSubmit, footer, children }: {
+export function FormSheet({ open, onOpenChange, title, description, formLabel, width = 'default', paper = false, onSubmit, footer, children }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly icon: LucideIcon;
   readonly title: string;
   readonly description: string;
   readonly formLabel?: string;
@@ -49,7 +43,7 @@ export function FormSheet({ open, onOpenChange, icon, title, description, formLa
       <SheetContent className={WIDTHS[width]}
         onOpenAutoFocus={() => focus.remember(resolveOpener())}
         onCloseAutoFocus={focus.onCloseAutoFocus}>
-        <PanelHeader icon={icon} title={title} description={description} />
+        <PanelHeader title={title} description={description} />
         <form className="flex min-h-0 flex-1 flex-col" aria-label={formLabel} onSubmit={onSubmit}>
           {paper
             ? <DocumentBody>{children}</DocumentBody>
@@ -62,10 +56,9 @@ export function FormSheet({ open, onOpenChange, icon, title, description, formLa
 }
 
 /** Panel de solo lectura con aspecto de documento, para ver el detalle de un registro. */
-export function DocumentSheet({ open, onOpenChange, icon, title, description, footer, children }: {
+export function DocumentSheet({ open, onOpenChange, title, description, footer, children }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  readonly icon: LucideIcon;
   readonly title: string;
   readonly description: string;
   readonly footer?: ReactNode;
@@ -78,7 +71,7 @@ export function DocumentSheet({ open, onOpenChange, icon, title, description, fo
       <SheetContent className={WIDTHS.wide}
         onOpenAutoFocus={() => focus.remember(resolveOpener())}
         onCloseAutoFocus={focus.onCloseAutoFocus}>
-        <PanelHeader icon={icon} title={title} description={description} />
+        <PanelHeader title={title} description={description} />
         <DocumentBody>{children}</DocumentBody>
         {footer !== undefined && <SheetFooter className="mt-0 border-t sm:flex-row sm:justify-end">{footer}</SheetFooter>}
       </SheetContent>

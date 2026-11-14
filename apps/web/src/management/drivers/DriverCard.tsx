@@ -23,7 +23,7 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
 
   return (
     <li aria-labelledby={nameId} className="flex">
-      <Card className="w-full">
+      <Card size="sm" className="w-full">
         <CardHeader>
           <div className="flex min-w-0 items-center gap-3">
             <Avatar size="lg">
@@ -47,7 +47,7 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
         </CardHeader>
 
         <CardContent className="flex-1">
-          <dl className="flex flex-col gap-3 text-sm">
+          <dl className="flex flex-col gap-2 text-sm">
             <Detail icon={<IdCard aria-hidden="true" />} label="Documento">{driver.documentNumber}</Detail>
             <Detail icon={<CarFront aria-hidden="true" />} label="Licencia">{driver.licenseNumber}</Detail>
             <Detail icon={<Phone aria-hidden="true" />} label="Teléfono">

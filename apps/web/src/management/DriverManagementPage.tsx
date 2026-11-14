@@ -1,4 +1,4 @@
-import { IdCard, KeyRound, Pencil, Plus, SearchX } from 'lucide-react';
+import { IdCard, Plus, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
@@ -250,7 +250,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
               </EmptyContent>
             </Empty>
           ) : (
-            <ul aria-label="Personal registrado" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            <ul aria-label="Personal registrado" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {visibleDrivers.map((driver) => (
                 <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts}
                   onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
@@ -260,7 +260,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         </div>
       )}
 
-      <FormSheet open={createOpen} onOpenChange={setCreateOpen} icon={IdCard} title="Registrar conductor"
+      <FormSheet open={createOpen} onOpenChange={setCreateOpen} title="Registrar conductor"
         description="Los documentos de identidad no se pueden cambiar después del registro."
         onSubmit={(event) => void createDriver(event)}
         footer={(
@@ -284,7 +284,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         </FieldGroup>
       </FormSheet>
 
-      <FormSheet open={editingDriver !== undefined} onOpenChange={(open) => { if (!open) setEditingDriverId(null); }} icon={Pencil}
+      <FormSheet open={editingDriver !== undefined} onOpenChange={(open) => { if (!open) setEditingDriverId(null); }}
         title={`Editar ${editingDriver?.fullName ?? 'conductor'}`} description="El documento de identidad no se puede cambiar."
         onSubmit={(event) => { if (editingDriver !== undefined) void saveDriver(event, editingDriver); }}
         footer={(
@@ -306,7 +306,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         </FieldGroup>
       </FormSheet>
 
-      <DocumentSheet open={accountDriver !== undefined} onOpenChange={(open) => { if (!open) setAccountDriverId(null); }} icon={KeyRound}
+      <DocumentSheet open={accountDriver !== undefined} onOpenChange={(open) => { if (!open) setAccountDriverId(null); }}
         title={`Cuenta de ${accountDriver?.fullName ?? 'conductor'}`} description="La cuenta DRIVER autoriza a ejecutar rutas en la aplicación.">
         {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
         {accountDriver !== undefined && (

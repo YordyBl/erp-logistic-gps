@@ -1,4 +1,3 @@
-import { FileSpreadsheet } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import type { ApiClient, DeliveryOrder, DeliveryOrderImportResult } from '../../api/client.js';
@@ -64,7 +63,7 @@ export function OrderImportSheet({ client, open, onOpenChange, onImported }: {
   }
 
   return (
-    <FormSheet open={open} onOpenChange={onOpenChange} icon={FileSpreadsheet} title="Importar pedidos"
+    <FormSheet open={open} onOpenChange={onOpenChange} title="Importar pedidos"
       description="CSV o Excel XLSX · una fila por bulto · máximo 5 MB."
       onSubmit={(event) => void importOrders(event)}
       footer={(

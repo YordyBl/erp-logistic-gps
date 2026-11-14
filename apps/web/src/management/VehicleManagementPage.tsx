@@ -1,4 +1,4 @@
-import { Pencil, Plus, SearchX, Truck } from 'lucide-react';
+import { Plus, SearchX, Truck } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
 import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleStatus } from '../api/client.js';
@@ -229,7 +229,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         </div>
       )}
 
-      <FormSheet open={creating} onOpenChange={setCreating} icon={Truck} title="Registrar vehículo"
+      <FormSheet open={creating} onOpenChange={setCreating} title="Registrar vehículo"
         description="La placa identifica el vehículo y no se puede editar después."
         onSubmit={(event) => void createVehicle(event)}
         footer={(
@@ -250,7 +250,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         </FieldGroup>
       </FormSheet>
 
-      <FormSheet open={editingVehicle !== undefined} onOpenChange={(open) => { if (!open) setEditingVehicleId(null); }} icon={Pencil}
+      <FormSheet open={editingVehicle !== undefined} onOpenChange={(open) => { if (!open) setEditingVehicleId(null); }}
         title={`Editar ${editingVehicle?.plate ?? 'vehículo'}`} description="La placa no se puede cambiar."
         onSubmit={(event) => { if (editingVehicle !== undefined) void saveVehicle(event, editingVehicle); }}
         footer={(

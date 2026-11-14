@@ -1,4 +1,4 @@
-import { Package, PackagePlus, Plus, X } from 'lucide-react';
+import { Package, Plus, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 import { ApiError, type ApiClient, type Customer, type DeliveryOrder } from '../../api/client.js';
@@ -132,7 +132,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
   const totalWeight = packages.reduce((total, item) => total + (Number(item.weightKg) || 0), 0);
 
   return (
-    <FormSheet open={open} onOpenChange={onOpenChange} width="wide" paper icon={PackagePlus} title="Crear pedido"
+    <FormSheet open={open} onOpenChange={onOpenChange} width="wide" paper title="Crear pedido"
       description="Los campos con * son obligatorios."
       onSubmit={(event) => void createOrder(event)}
       footer={(

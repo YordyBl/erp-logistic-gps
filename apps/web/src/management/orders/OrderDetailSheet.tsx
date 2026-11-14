@@ -1,4 +1,4 @@
-import { CirclePlus, Package } from 'lucide-react';
+import { CirclePlus } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 
 import type { ApiClient, DeliveryOrder, DeliveryOrderStatusHistory } from '../../api/client.js';
@@ -27,7 +27,7 @@ export function OrderDetailSheet({ client, order, customerName, onClose, footer 
   readonly footer?: ReactNode;
 }) {
   return (
-    <DocumentSheet open={order !== null} onOpenChange={(open) => { if (!open) onClose(); }} icon={Package}
+    <DocumentSheet open={order !== null} onOpenChange={(open) => { if (!open) onClose(); }}
       title={order?.publicCode ?? 'Pedido'} description="Datos de entrega, bultos e historial del pedido."
       {...(footer === undefined ? {} : { footer })}>
       {order !== null && <OrderDocument key={order.id} client={client} order={order} customerName={customerName} />}

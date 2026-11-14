@@ -325,7 +325,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
 
       {!createOpen && error !== null && <ErrorNotice>{error}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
-      <FormSheet open={createOpen} onOpenChange={setCreateOpen} width="wide" paper icon={Route} title="Crear ruta manual"
+      <FormSheet open={createOpen} onOpenChange={setCreateOpen} width="wide" paper title="Crear ruta manual"
         description="Asigna conductor y vehículo, y agrupa los pedidos en paradas."
         onSubmit={(event) => void createRoute(event)}
         footer={(
@@ -440,7 +440,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
           filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)} />
       )}
 
-      <DocumentSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }} icon={Route}
+      <DocumentSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }}
         title={detailRow?.route.publicCode ?? 'Ruta'} description="Paradas, pedidos y avance de la ruta."
         {...(detailRow?.route.status === 'planned' ? {
           footer: <Button type="button" variant="outline" onClick={() => { setReassignRouteId(detailRow.route.id); setDetailRouteId(null); }}><ArrowLeftRight data-icon="inline-start" aria-hidden="true" /> Reasignar</Button>,
@@ -491,7 +491,7 @@ function ReassignSheet({ route, drivers, vehicles, busy, onClose, onSubmit }: {
   const [vehicleId, setVehicleId] = useState(route.vehicleId);
 
   return (
-    <FormSheet open onOpenChange={(open) => { if (!open) onClose(); }} icon={ArrowLeftRight} title={`Reasignar ${route.publicCode}`}
+    <FormSheet open onOpenChange={(open) => { if (!open) onClose(); }} title={`Reasignar ${route.publicCode}`}
       description="Cambia el conductor o el vehículo mientras la ruta no haya iniciado."
       onSubmit={(event) => {
         event.preventDefault();
