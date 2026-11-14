@@ -63,6 +63,9 @@ describe('VehicleManagementPage', () => {
     await waitFor(() => expect(client.createVehicle).toHaveBeenCalledWith({
       plate: 'xyz-987', type: 'Camión ligero', capacityKg: 2500,
     }));
+    const confirmation = await screen.findByRole('dialog', { name: 'Vehículo registrado' });
+    expect(within(confirmation).getByText('El vehículo XYZ-987 se registró correctamente.')).toBeTruthy();
+    await user.click(within(confirmation).getByRole('button', { name: 'Entendido' }));
     expect(await screen.findByRole('listitem', { name: /XYZ-987/ })).toBeTruthy();
   });
 

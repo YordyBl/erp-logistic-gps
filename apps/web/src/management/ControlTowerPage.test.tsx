@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlTowerPage } from './ControlTowerPage.js';
@@ -114,6 +114,9 @@ describe('ControlTowerPage', () => {
     expect(await screen.findByText('Ana Quispe')).toBeTruthy();
     expect(screen.getByText('ABC-123')).toBeTruthy();
     expect(screen.getByText('1 de 1 pedido cerrado')).toBeTruthy();
+    // Las paradas arrancan cerradas.
+    expect(screen.queryByText('Av. Arequipa 100')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /1 parada/ }));
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 · Entregado')).toBeTruthy();
   });
@@ -126,6 +129,7 @@ describe('ControlTowerPage', () => {
     await waitFor(() => expect(mapMock.options).toBeDefined());
     act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
 
+    fireEvent.click(await screen.findByRole('button', { name: /1 parada/ }));
     expect(await screen.findByText('Av. Arequipa 100')).toBeTruthy();
     await waitFor(() => expect(listDeliveryOrders).toHaveBeenCalledOnce());
     act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot }));
