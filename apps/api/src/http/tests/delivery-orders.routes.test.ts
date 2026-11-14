@@ -386,6 +386,25 @@ describe('POST /api/v1/delivery-orders/import', () => {
     expect(orders.body.data).toEqual([]);
   });
 
+  it('rejects an imported order without coordinates and keeps the located one', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send(importCsvRows([
+        ['TEST-CUSTOMER', 'AM', 'IMP-NOLOC', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-LOC', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-2', 'Caja', ''],
+      ]));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders.map((order: { publicCode: string }) => order.publicCode)).toEqual(['IMP-LOC']);
+    expect(response.body.data.rejectedOrders).toEqual([expect.objectContaining({ publicCode: 'IMP-NOLOC' })]);
+    expect(response.body.data.rejectedOrders[0].issues).toContainEqual(
+      expect.objectContaining({ field: 'deliveryAddress.latitude' }),
+    );
+  });
+
   it('imports valid order groups and rejects every row of a group with an invalid package', async () => {
     const { app, token } = await buildSeededApp();
     const response = await request(app)
@@ -393,10 +412,10 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', '2'],
-        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-2', '', ''],
-        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-3', 'Sobre', ''],
-        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-4', 'Caja', '1'],
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', '2'],
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-2', '', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-3', 'Sobre', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-4', 'Caja', '1'],
       ]));
 
     expect(response.status).toBe(200);
@@ -417,7 +436,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
     worksheet.addRow(IMPORT_HEADERS);
     worksheet.addRow([
       'TEST-CUSTOMER', 'PM', 'IMP-XLSX', 'Ana Torres', '+51 987 654 321',
-      'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-XLSX', 'Caja', 1.5,
+      'Av. Javier Prado 100', 'San Borja', -12.0975, -77.0023, 'PKG-XLSX', 'Caja', 1.5,
     ]);
     const upload = Buffer.from(await workbook.xlsx.writeBuffer());
     const response = await request(app)
@@ -464,7 +483,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['FOREIGN-CUSTOMER', 'AM', 'IMP-FOREIGN', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['FOREIGN-CUSTOMER', 'AM', 'IMP-FOREIGN', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', ''],
       ]));
 
     expect(response.status).toBe(200);
@@ -486,7 +505,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['TEST-CUSTOMER', 'AM', 'IMP-INACTIVE', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['TEST-CUSTOMER', 'AM', 'IMP-INACTIVE', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', ''],
       ]));
 
     expect(response.status).toBe(200);
@@ -881,7 +900,7 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     const original = await request(app).get(`/api/v1/delivery-orders/${id}`).set(bearer(token));
     const changes = {
       recipient: { name: 'New Recipient', phone: '+51 999 888 777' },
-      deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince' },
+      deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince', latitude: -12.0840, longitude: -77.0350 },
       packages: [{ code: 'NEW-001', description: 'Replacement parcel' }],
     };
     const changed = await request(app).patch(`/api/v1/delivery-orders/${id}`)
@@ -890,7 +909,7 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(changed.body.data).toMatchObject({
       id, organizationId: ORGANIZATION_ID, publicCode: original.body.data.publicCode,
       status: 'created', recipient: changes.recipient,
-      deliveryAddress: { ...changes.deliveryAddress, latitude: null, longitude: null },
+      deliveryAddress: changes.deliveryAddress,
       packages: [{ ...changes.packages[0], weightKg: null }],
       createdAt: original.body.data.createdAt,
     });
@@ -922,6 +941,10 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(invalid.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
     const empty = await request(app).patch(route).set(bearer(token)).send({});
     expect(empty.status).toBe(400);
+    const unlocated = await request(app).patch(route).set(bearer(token))
+      .send({ deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince' } });
+    expect(unlocated.status).toBe(400);
+    expect(unlocated.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
     const missingToken = await request(app).patch(route).send({ recipient: { name: 'No Token', phone: '+51 987 654 321' } });
     expect(missingToken.status).toBe(401);
     const after = await request(app).get(route).set(bearer(token));

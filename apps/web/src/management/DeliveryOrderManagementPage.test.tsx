@@ -85,6 +85,8 @@ describe('DeliveryOrderManagementPage', () => {
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/Dirección/), 'Jr. Los Olivos 55');
     await user.type(screen.getByLabelText(/Distrito/), 'Miraflores');
+    await user.type(screen.getByLabelText(/^Latitud/), '-12.1211');
+    await user.type(screen.getByLabelText(/^Longitud/), '-77.0297');
     await user.type(screen.getByLabelText(/Descripción del bulto 1/), 'Caja pequeña');
     await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
 
@@ -93,7 +95,7 @@ describe('DeliveryOrderManagementPage', () => {
       customerId: customer.id,
       timeWindow: 'PM',
       recipient: { name: 'Luis Soto', phone: '999 222 333' },
-      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores' },
+      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores', latitude: -12.1211, longitude: -77.0297 },
       packages: [{ description: 'Caja pequeña' }],
     });
     expect((await screen.findByRole('dialog')).textContent).toContain('se registró correctamente');
@@ -109,10 +111,10 @@ describe('DeliveryOrderManagementPage', () => {
     await user.type(screen.getByLabelText(/Enlace de Google Maps/), link);
     await user.click(screen.getByRole('button', { name: 'Obtener coordenadas' }));
     await waitFor(() => expect(client.resolveGoogleMapsLink).toHaveBeenCalledWith(link));
-    await waitFor(() => expect((screen.getByLabelText('Latitud') as HTMLInputElement).value).toBe('-12.1'));
-    expect((screen.getByLabelText('Longitud') as HTMLInputElement).value).toBe('-77.02');
-    await user.clear(screen.getByLabelText('Latitud'));
-    await user.type(screen.getByLabelText('Latitud'), '-12.2');
+    await waitFor(() => expect((screen.getByLabelText(/^Latitud/) as HTMLInputElement).value).toBe('-12.1'));
+    expect((screen.getByLabelText(/^Longitud/) as HTMLInputElement).value).toBe('-77.02');
+    await user.clear(screen.getByLabelText(/^Latitud/));
+    await user.type(screen.getByLabelText(/^Latitud/), '-12.2');
     await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
     await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^PM/);
     await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
@@ -246,6 +248,8 @@ describe('DeliveryOrderManagementPage', () => {
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/Dirección/), 'Jr. Los Olivos 55');
     await user.type(screen.getByLabelText(/Distrito/), 'Miraflores');
+    await user.type(screen.getByLabelText(/^Latitud/), '-12.1211');
+    await user.type(screen.getByLabelText(/^Longitud/), '-77.0297');
     await user.type(screen.getByLabelText(/Descripción del bulto 1/), 'Caja pequeña');
     await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
 
@@ -263,6 +267,8 @@ describe('DeliveryOrderManagementPage', () => {
     await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
     await user.type(screen.getByLabelText(/^Dirección/), 'Jr. Los Olivos 55');
     await user.type(screen.getByLabelText(/Distrito/), 'Miraflores');
+    await user.type(screen.getByLabelText(/^Latitud/), '-12.1211');
+    await user.type(screen.getByLabelText(/^Longitud/), '-77.0297');
     await user.type(screen.getByLabelText(/Descripción del bulto 1/), 'Caja pequeña');
     await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
 
@@ -288,6 +294,27 @@ describe('DeliveryOrderManagementPage', () => {
 
     expect((screen.getByLabelText(/Teléfono del destinatario/) as HTMLInputElement).validity.patternMismatch).toBe(true);
     expect((screen.getByLabelText(/Nombre del destinatario/) as HTMLInputElement).validity.valueMissing).toBe(true);
+    expect(client.createDeliveryOrder).not.toHaveBeenCalled();
+  });
+
+  it('requires delivery coordinates before calling the API', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await chooseOption(user, screen.getByLabelText(/Cliente activo/), /Acme Logística/);
+    await chooseOption(user, screen.getByLabelText(/Franja de entrega/), /^PM/);
+    await user.type(screen.getByLabelText(/Nombre del destinatario/), 'Luis Soto');
+    await user.type(screen.getByLabelText(/Teléfono del destinatario/), '999 222 333');
+    await user.type(screen.getByLabelText(/^Dirección/), 'Jr. Los Olivos 55');
+    await user.type(screen.getByLabelText(/Distrito/), 'Miraflores');
+    await user.type(screen.getByLabelText(/Descripción del bulto 1/), 'Caja pequeña');
+    await user.click(screen.getByRole('button', { name: 'Crear pedido' }));
+
+    expect((screen.getByLabelText(/^Latitud/) as HTMLInputElement).validity.valueMissing).toBe(true);
+    expect((screen.getByLabelText(/^Longitud/) as HTMLInputElement).validity.valueMissing).toBe(true);
     expect(client.createDeliveryOrder).not.toHaveBeenCalled();
   });
 

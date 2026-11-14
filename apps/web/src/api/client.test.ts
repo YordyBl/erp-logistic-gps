@@ -241,7 +241,7 @@ describe('ApiClient customer and order management', () => {
     await expect(client.listDeliveryOrders()).resolves.toEqual([order]);
     await expect(client.createDeliveryOrder({
       customerId: 'customer-1', timeWindow: 'AM', publicCode: 'ORD-001', recipient: order.recipient,
-      deliveryAddress: { addressLine: 'Av. Lima 123', district: 'Lince' },
+      deliveryAddress: { addressLine: 'Av. Lima 123', district: 'Lince', latitude: -12.084, longitude: -77.035 },
       packages: [{ code: 'BOX-1', description: 'Caja' }],
     })).resolves.toEqual(order);
     await expect(client.cancelDeliveryOrder('order-1')).resolves.toMatchObject({ status: 'cancelled' });

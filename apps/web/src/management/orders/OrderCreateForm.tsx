@@ -59,14 +59,15 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
       setShowMissing(true);
       return;
     }
-    if ((latitude === '') !== (longitude === '')) {
-      setFormError('Completa ambas coordenadas o deja las dos vacías.');
+    // Every order must be placed on the map: route stops copy these coordinates.
+    if (latitude.trim() === '' || longitude.trim() === '') {
+      setFormError('Indica la latitud y la longitud de entrega, o obténlas desde el enlace de Google Maps.');
       return;
     }
-    const parsedLatitude = latitude === '' ? undefined : Number(latitude);
-    const parsedLongitude = longitude === '' ? undefined : Number(longitude);
-    if ((parsedLatitude !== undefined && (!Number.isFinite(parsedLatitude) || parsedLatitude < -90 || parsedLatitude > 90)) ||
-        (parsedLongitude !== undefined && (!Number.isFinite(parsedLongitude) || parsedLongitude < -180 || parsedLongitude > 180))) {
+    const parsedLatitude = Number(latitude);
+    const parsedLongitude = Number(longitude);
+    if (!Number.isFinite(parsedLatitude) || parsedLatitude < -90 || parsedLatitude > 90 ||
+        !Number.isFinite(parsedLongitude) || parsedLongitude < -180 || parsedLongitude > 180) {
       setFormError('Ingresa coordenadas válidas: latitud entre -90 y 90 y longitud entre -180 y 180.');
       return;
     }
@@ -88,8 +89,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
         deliveryAddress: {
           addressLine: addressLine.trim(), district: district.trim(),
           ...(googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: googleMapsUrl.trim() }),
-          ...(parsedLatitude === undefined || parsedLongitude === undefined
-            ? {} : { latitude: parsedLatitude, longitude: parsedLongitude }),
+          latitude: parsedLatitude, longitude: parsedLongitude,
         },
         packages: packageInput,
       });
@@ -169,7 +169,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
       </FieldGroup>
 
       <FieldSet className="gap-3">
-        <FieldLegend>Ubicación · opcional</FieldLegend>
+        <FieldLegend>Ubicación *</FieldLegend>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <TextField id="delivery-google-maps" label="Enlace de Google Maps · opcional" placeholder="https://maps.app.goo.gl/..." type="url" value={googleMapsUrl}
             onChange={(event) => setGoogleMapsUrl(event.target.value)} />
@@ -178,12 +178,12 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
           </Button>
         </div>
         <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-          <TextField id="delivery-latitude" label="Latitud" placeholder="Ej. -12.0464" type="number" step="any" min="-90" max="90" value={latitude}
+          <TextField id="delivery-latitude" label="Latitud *" placeholder="Ej. -12.0464" type="number" step="any" min="-90" max="90" required value={latitude}
             onChange={(event) => setLatitude(event.target.value)} />
-          <TextField id="delivery-longitude" label="Longitud" placeholder="Ej. -77.0428" type="number" step="any" min="-180" max="180" value={longitude}
+          <TextField id="delivery-longitude" label="Longitud *" placeholder="Ej. -77.0428" type="number" step="any" min="-180" max="180" required value={longitude}
             onChange={(event) => setLongitude(event.target.value)} />
         </FieldGroup>
-        <FieldDescription>Con coordenadas, el pedido se ubica en el mapa de la ruta. Completa ambas o deja las dos vacías.</FieldDescription>
+        <FieldDescription>Las coordenadas ubican la parada en la ruta. Escríbelas u obténlas desde el enlace de Google Maps.</FieldDescription>
       </FieldSet>
 
       <FieldSet className="gap-2">

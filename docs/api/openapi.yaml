@@ -1004,6 +1004,9 @@ paths:
         rejects its whole order group; other valid groups are imported. Unknown,
         missing required, or duplicate headers reject the entire file before any
         order is created. The upload is limited to 5 MB and 5,000 data rows.
+        `latitude` and `longitude` are required headers and required values:
+        an order group without coordinates is rejected with a
+        `deliveryAddress.latitude` issue.
       security:
         - bearerAuth: []
       parameters:
@@ -2727,6 +2730,39 @@ components:
       dependentRequired:
         latitude: [longitude]
         longitude: [latitude]
+    DeliveryAddressInput:
+      type: object
+      additionalProperties: false
+      required: [addressLine, district, latitude, longitude]
+      description: |
+        Create/edit shape. Coordinates are required because route stops copy
+        the order's location. The Google Maps link is an optional reference;
+        resolve it first with `POST /api/v1/delivery-orders/resolve-map-link`.
+      properties:
+        addressLine:
+          type: string
+          minLength: 5
+          maxLength: 200
+          example: Av. Javier Prado Este 1234
+        district:
+          type: string
+          minLength: 2
+          maxLength: 80
+          example: San Borja
+        googleMapsUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+          example: -12.0975
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+          example: -77.0023
     Package:
       type: object
       additionalProperties: false
@@ -2849,7 +2885,7 @@ components:
         recipient:
           $ref: '#/components/schemas/Recipient'
         deliveryAddress:
-          $ref: '#/components/schemas/DeliveryAddress'
+          $ref: '#/components/schemas/DeliveryAddressInput'
         packages:
           type: array
           minItems: 1
@@ -2864,7 +2900,7 @@ components:
         recipient:
           $ref: '#/components/schemas/Recipient'
         deliveryAddress:
-          $ref: '#/components/schemas/DeliveryAddress'
+          $ref: '#/components/schemas/DeliveryAddressInput'
         packages:
           type: array
           minItems: 1

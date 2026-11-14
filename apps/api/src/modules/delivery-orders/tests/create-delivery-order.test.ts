@@ -21,7 +21,9 @@ function validCommand(overrides: Record<string, unknown> = {}): Record<string, u
     publicCode: 'ord-2026-0001',
     timeWindow: 'AM',
     recipient: { name: 'Ana Torres', phone: '+51 987 654 321' },
-    deliveryAddress: { addressLine: 'Av. Javier Prado Este 1234', district: 'San Borja' },
+    deliveryAddress: {
+      addressLine: 'Av. Javier Prado Este 1234', district: 'San Borja', latitude: -12.0897, longitude: -77.0010,
+    },
     packages: [
       { code: 'pkg-001', description: 'Sealed box', weightKg: 2.5 },
       { code: 'pkg-002', description: 'Document envelope' },
@@ -122,6 +124,28 @@ describe('CreateDeliveryOrder', () => {
         expect.objectContaining({ path: 'deliveryAddress.addressLine' }),
       ]),
     );
+  });
+
+  it('rejects an order without delivery coordinates and stores nothing', async () => {
+    const { eventPublisher, module } = buildModule();
+
+    const error: unknown = await module.createDeliveryOrder
+      .execute(validCommand({
+        deliveryAddress: {
+          addressLine: 'Av. Javier Prado Este 1234', district: 'San Borja',
+          googleMapsUrl: 'https://maps.app.goo.gl/unresolved',
+        },
+      }))
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(DeliveryOrderValidationError);
+    if (!(error instanceof DeliveryOrderValidationError)) {
+      throw new Error('expected DeliveryOrderValidationError');
+    }
+    expect(error.details?.['issues']).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: 'deliveryAddress.latitude' })]),
+    );
+    expect(eventPublisher.events).toHaveLength(0);
   });
 
   it('rejects an invalid recipient at the application boundary', async () => {

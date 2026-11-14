@@ -42,8 +42,9 @@ export interface CreateDeliveryOrderInput {
     readonly addressLine: string;
     readonly district: string;
     readonly googleMapsUrl?: string;
-    readonly latitude?: number;
-    readonly longitude?: number;
+    /** Required: route stops copy the order's coordinates. */
+    readonly latitude: number;
+    readonly longitude: number;
   };
   readonly packages: readonly {
     readonly code?: string;
