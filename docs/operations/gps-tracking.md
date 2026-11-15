@@ -115,9 +115,32 @@ the GPS simulator need. Stops accept no address, link or coordinates of their ow
 Google Maps links are still supported in two places. The order form resolves an optional
 HTTPS share link to coordinates before the order is created, and the origin of a simulated
 route may be given as a link. The API resolves short links through a limited number of
-manually validated redirects to Google Maps hosts and extracts the place coordinates.
-Unsupported hosts, non-HTTPS links, unresolved redirects, and links without coordinates are
-rejected. Do not include private or credential-bearing URLs.
+manually validated redirects to Google Maps hosts and extracts the coordinates from the final
+URL only (page HTML is never downloaded). A named place's exact pair (`!3d<lat>!4d<lng>`)
+wins; otherwise one generic rule takes the first decimal `lat,lng` pair in the decoded path
+and then in each query value, which covers `/maps/@lat,lng,17z`, the pin shares that Google
+redirects to `/maps/search/lat,+lng`, and parameters such as `q`, `query` or `ll` without a
+rule per format. Embedded maps (`!2d<lng>!3d<lat>`, longitude first) and degrees, minutes
+and seconds (`12°05'02.4"S 77°02'06.0"W`) are also read. Accepted hosts are
+`maps.app.goo.gl`, legacy `goo.gl/maps/...`, `google.com`/`google.com.pe` under `/maps`, and
+`maps.google.com`/`maps.google.com.pe` on any path. When Google redirects the server to its
+consent page (`consent.google.com`, depending on the server's region), the consent page is
+not requested: the map URL in its `continue` parameter is read instead. Plus codes
+(`2FQ2+9C Lima`) are not decoded. Unsupported hosts, non-HTTPS links, unresolved redirects, and links without coordinates are
+rejected with a `reason` (`invalid_url`, `unsupported_host`, `unreachable`, `timeout`,
+`redirect_invalid`, `not_map_page`, `no_coordinates`) that the web explains in Spanish. A
+link to a place name without coordinates in its URL (`/maps/place/Name`) is the usual
+`no_coordinates` case: open the place and copy the link from the address bar or from Share.
+Do not include private or credential-bearing URLs.
+
+In the planning form, "Obtener coordenadas del origen" previews the coordinates of the
+simulation origin link; once shown, the route is created with those exact coordinates
+instead of resolving the link again. Every eligible order and every planned stop has a
+"Ver en Google Maps" link, and "Ver ruta en Google Maps" opens driving directions through
+the stops in their current order (plus the previewed origin when simulating) so the
+dispatcher can decide the order and reorder with the arrows. Google Maps does not reorder
+them; a link carries at most nine intermediate stops (three on mobile browsers), and the
+form says how many stops were left out.
 
 ## Authenticated live tracking
 
