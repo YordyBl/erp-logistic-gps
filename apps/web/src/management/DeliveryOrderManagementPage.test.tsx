@@ -196,6 +196,32 @@ describe('DeliveryOrderManagementPage', () => {
     expect(client.listDeliveryOrderStatusHistory).toHaveBeenCalledWith(order.id);
   });
 
+  it('links the order detail to its stored coordinates in Google Maps to check them against the address', async () => {
+    const user = setupUser();
+    const located: DeliveryOrder = { ...order, deliveryAddress: { ...order.deliveryAddress, latitude: -12.0840, longitude: -77.0350 } };
+    const client = makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue([located]) });
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+
+    const link = await screen.findByRole('link', { name: 'Ver ubicación en Google Maps' });
+    expect(link.getAttribute('href')).toBe('https://www.google.com/maps/search/?api=1&query=-12.084%2C-77.035');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(screen.getByText('Lat -12.084 · Lng -77.035')).toBeTruthy();
+  });
+
+  it('says when an order has no coordinates instead of offering a map link', async () => {
+    const user = setupUser();
+    render(<DeliveryOrderManagementPage client={makeClient()} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+
+    expect(await screen.findByText('Sin coordenadas registradas.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Ver ubicación en Google Maps' })).toBeNull();
+  });
+
   it('marks the returned status-history event as a reported incident', async () => {
     const user = setupUser();
     const client = makeClient({

@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table';
-import { ArrowDown, ArrowLeftRight, ArrowUp, ExternalLink, Eye, MapPin, Plus, RefreshCw, Route, X } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, ExternalLink, Eye, Plus, RefreshCw, Route, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
@@ -11,6 +11,7 @@ import { DataTable, type DataTableFilter } from '../components/data-table/DataTa
 import { DocumentSheet, DocumentTitle, FormSheet } from '../components/FormSheet.js';
 import { DateField, SelectField, TextField } from '../components/FormFields.js';
 import { IconChip } from '../components/IconChip.js';
+import { MapLink } from '../components/MapLink.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Avatar, AvatarFallback } from '../components/ui/avatar.js';
@@ -650,16 +651,4 @@ function orderStatusLabel(status: DeliveryOrder['status']): string {
 function orderPoint(order: DeliveryOrder): MapPoint | null {
   const { latitude, longitude } = order.deliveryAddress;
   return latitude === null || longitude === null ? null : { latitude, longitude };
-}
-
-/** Opens Google Maps in a new tab without giving it access to this window. */
-function MapLink({ href, label, iconOnly = false }: { readonly href: string; readonly label: string; readonly iconOnly?: boolean }) {
-  return (
-    <Button asChild variant="ghost" size={iconOnly ? 'icon-sm' : 'sm'}>
-      <a href={href} target="_blank" rel="noopener noreferrer" aria-label={label} title={label}>
-        <MapPin aria-hidden="true" {...(iconOnly ? {} : { 'data-icon': 'inline-start' })} />
-        {!iconOnly && label}
-      </a>
-    </Button>
-  );
 }

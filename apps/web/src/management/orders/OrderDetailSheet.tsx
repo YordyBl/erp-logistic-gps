@@ -5,11 +5,13 @@ import type { ApiClient, DeliveryOrder, DeliveryOrderStatusHistory } from '../..
 import { ActivityTimeline, type TimelineEvent } from '../../components/ActivityTimeline.js';
 import { DocumentSheet, DocumentTitle, DocumentTotal } from '../../components/FormSheet.js';
 import type { IconChipTone } from '../../components/IconChip.js';
+import { MapLink } from '../../components/MapLink.js';
 import { ErrorNotice, LoadingRows } from '../../components/Notices.js';
 import { ORDER_STATUS_ICONS, OrderStatusBadge } from '../../components/OrderStatusBadge.js';
 import { Button } from '../../components/ui/button.js';
 import { ORDER_STATUS_LABELS } from '../../delivery/orderStatus.js';
 import { formatDateTime } from '../../lib/format.js';
+import { googleMapsPlaceUrl } from '../../lib/googleMaps.js';
 
 type DetailClient = Pick<ApiClient, 'listDeliveryOrderStatusHistory'>;
 
@@ -60,6 +62,7 @@ function OrderDocument({ client, order, customerName }: {
           <p className="font-medium">{order.deliveryAddress.addressLine}</p>
           <p>{order.deliveryAddress.district}</p>
           <p className="text-muted-foreground">Franja {order.timeWindow}</p>
+          <DeliveryLocation order={order} />
         </DocumentBlock>
       </div>
 
@@ -83,6 +86,23 @@ function OrderDocument({ client, order, customerName }: {
 
       <OrderHistory client={client} order={order} />
     </>
+  );
+}
+
+/**
+ * The pin is placed on the stored coordinates (what route stops copy), not on the
+ * address text, so the operator can check that both point to the same place.
+ */
+function DeliveryLocation({ order }: { readonly order: DeliveryOrder }) {
+  const { latitude, longitude } = order.deliveryAddress;
+  if (latitude === null || longitude === null) {
+    return <p className="mt-1 text-muted-foreground">Sin coordenadas registradas.</p>;
+  }
+  return (
+    <div className="mt-1 flex flex-col items-start gap-1">
+      <p className="text-muted-foreground tabular-nums">Lat {latitude} · Lng {longitude}</p>
+      <MapLink href={googleMapsPlaceUrl({ latitude, longitude })} label="Ver ubicación en Google Maps" variant="outline" />
+    </div>
   );
 }
 
