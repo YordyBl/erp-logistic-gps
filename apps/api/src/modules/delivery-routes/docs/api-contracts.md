@@ -1,10 +1,13 @@
 # Route planning HTTP contract
 
 `POST /api/v1/delivery-routes` requires a JWT role ADMIN or DISPATCHER and a
-strict JSON body with `publicCode`, `plannedDate` (`YYYY-MM-DD`), `driverId`,
+strict JSON body with an optional `publicCode`, `plannedDate` (`YYYY-MM-DD`), `driverId`,
 `vehicleId`, and non-empty `stops`. A stop supplies positive `sequence`,
 `addressLine`, non-empty `orderIds`, and either both `latitude`/`longitude` or
 neither. The organization and actor are taken from the verified token.
+When `publicCode` is omitted the API generates the next code from the global
+`delivery_route_public_code_seq` sequence, formatted as `RUT-00000001`; the
+web planner always omits it.
 
 ```json
 {

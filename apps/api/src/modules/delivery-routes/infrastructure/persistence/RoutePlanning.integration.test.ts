@@ -454,6 +454,14 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     expect((await orders.findById(id))?.status).toBe('created');
   });
 
+  it('generates increasing RUT- route codes from the database sequence', async () => {
+    const first = await store.nextPublicCode();
+    const second = await store.nextPublicCode();
+
+    expect(first).toMatch(/^RUT-\d{8}$/);
+    expect(Number(second.slice(4))).toBeGreaterThan(Number(first.slice(4)));
+  });
+
   it('lists only active drivers without a linked account as simulation candidates', async () => {
     const { organizationId, driverId } = await seed();
     const linkedId = randomUUID();

@@ -19,7 +19,10 @@ const input = {
 };
 
 function makeUseCase(mapLinkResolver: MapLinkResolver, simulationEnabled = false) {
-  const store = { plan: vi.fn(async (route: RoutePlanDraft) => route as unknown as PlannedRoute) };
+  const store = {
+    plan: vi.fn(async (route: RoutePlanDraft) => route as unknown as PlannedRoute),
+    nextPublicCode: vi.fn(async () => 'RUT-00000007'),
+  };
   const getDriver = { execute: vi.fn().mockResolvedValue({ driver: { status: 'active' } }) };
   const getVehicle = { execute: vi.fn().mockResolvedValue({ vehicle: { status: 'active' } }) };
   const clock: Clock = { now: () => '2026-11-03T10:00:00.000Z' };
@@ -117,6 +120,37 @@ describe('PlanRouteUseCase Google Maps coordinates', () => {
       .rejects.toMatchObject({ details: { issues: [
         { path: 'origin.googleMapsUrl', message: 'Use a Google Maps link to a specific location', reason: 'no_coordinates' },
       ] } });
+  });
+});
+
+describe('PlanRouteUseCase route code', () => {
+  const withoutCode: Partial<typeof input> = { ...input };
+  delete withoutCode.publicCode;
+
+  it('generates the route code when the request omits it', async () => {
+    const { useCase, store } = makeUseCase({ resolve: vi.fn() });
+
+    await useCase.execute(withoutCode);
+
+    expect(store.nextPublicCode).toHaveBeenCalledTimes(1);
+    expect(store.plan).toHaveBeenCalledWith(expect.objectContaining({ publicCode: 'RUT-00000007' }), input.actorUserId);
+  });
+
+  it('keeps an explicit route code without consuming a generated one', async () => {
+    const { useCase, store } = makeUseCase({ resolve: vi.fn() });
+
+    await useCase.execute(input);
+
+    expect(store.nextPublicCode).not.toHaveBeenCalled();
+    expect(store.plan).toHaveBeenCalledWith(expect.objectContaining({ publicCode: 'ROUTE-001' }), input.actorUserId);
+  });
+
+  it('does not consume a code when the request is rejected', async () => {
+    const { useCase, store } = makeUseCase({ resolve: vi.fn() });
+
+    await expect(useCase.execute({ ...withoutCode, simulatedCompletionEnabled: true }))
+      .rejects.toMatchObject({ code: 'DELIVERY_ROUTE_INVALID_INPUT' });
+    expect(store.nextPublicCode).not.toHaveBeenCalled();
   });
 });
 

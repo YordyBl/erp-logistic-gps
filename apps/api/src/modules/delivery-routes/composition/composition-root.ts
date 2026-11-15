@@ -20,11 +20,16 @@ import { GoogleMapsLinkResolver } from '../infrastructure/GoogleMapsLinkResolver
 /** In-memory adapter for tests and demo; production uses the database transaction adapter. */
 export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRouteExecutionStore {
   private readonly routes = new Map<string, PlannedRoute & { readonly startedAt?: string }>();
+  private nextRouteNumber = 1;
 
   constructor(private readonly orders: InMemoryDeliveryOrderRepository,
     private readonly bindings?: DriverAccountBindingStore,
     private readonly users?: UserRepository,
     private readonly getDriver?: GetDriverUseCase) {}
+
+  async nextPublicCode(): Promise<string> {
+    return `RUT-${String(this.nextRouteNumber++).padStart(8, '0')}`;
+  }
 
   async plan(draft: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute> {
     // Mirror the database adapter: every stop copies its single order's location.

@@ -170,6 +170,13 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
     }
   }
 
+  async nextPublicCode(): Promise<string> {
+    const rows = await this.dataSource.query(
+      'SELECT nextval(\'delivery_route_public_code_seq\') AS value',
+    ) as { value: string }[];
+    return formatRouteCode(Number(rows[0]?.value));
+  }
+
   async findById(organizationId: string, routeId: string): Promise<PlannedRoute | null> {
     return this.readPlannedRoute(this.dataSource.manager, organizationId, routeId);
   }
@@ -296,4 +303,8 @@ function isUniqueViolation(error: unknown): boolean {
   const driverError = error.driverError;
   return typeof driverError === 'object' && driverError !== null &&
     'code' in driverError && driverError.code === '23505';
+}
+
+function formatRouteCode(value: number): string {
+  return `RUT-${String(value).padStart(8, '0')}`;
 }

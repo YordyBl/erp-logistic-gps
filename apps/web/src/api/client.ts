@@ -251,7 +251,8 @@ export interface DispatchDashboardSummary {
 }
 
 export interface CreateDispatchRouteInput {
-  readonly publicCode: string;
+  /** Optional: the API generates `RUT-00000001` codes when it is omitted. */
+  readonly publicCode?: string;
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;

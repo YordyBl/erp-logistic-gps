@@ -81,7 +81,6 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const [reassignRouteId, setReassignRouteId] = useState<string | null>(null);
   // One stop per order, in visiting order. Each stop takes its address and coordinates from the order.
   const [stopOrderIds, setStopOrderIds] = useState<readonly string[]>([]);
-  const [routeCode, setRouteCode] = useState('');
   const [plannedDate, setPlannedDate] = useState('');
   const [driverId, setDriverId] = useState('');
   const [vehicleId, setVehicleId] = useState('');
@@ -228,7 +227,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     setSaving(true);
     try {
       const created = await client.createDispatchRoute({
-        publicCode: routeCode.trim(), plannedDate, driverId, vehicleId,
+        plannedDate, driverId, vehicleId,
         ...(simulating ? {
           simulatedCompletionEnabled: true,
           // Previewed coordinates are sent as-is so the route stores exactly what was shown.
@@ -243,7 +242,6 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       setRoutes((current) => [...current, created]);
       setOrders((current) => current.map((order) => stopOrderIds.includes(order.id)
         ? { ...order, status: nextOrderStatus } : order));
-      setRouteCode('');
       setPlannedDate('');
       setDriverId('');
       setVehicleId('');
@@ -410,6 +408,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
           </>
         )}>
             <DocumentTitle title="HOJA DE RUTA" aside={<IconChip icon={Route} tone="primary" />}>
+              <span>N°: <span className="text-foreground">se genera al crear</span></span>
               <span>Paradas: <span className="text-foreground">{stopOrderIds.length}</span></span>
               <span>Pedidos asignados: <span className="text-foreground">{stopOrderIds.length}</span></span>
             </DocumentTitle>
@@ -455,8 +454,6 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
               </FieldSet>
             )}
             <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-              <TextField id="route-code" label="Código de ruta" placeholder="Ej. R-2041" required minLength={3} maxLength={32} value={routeCode}
-                onChange={(event) => setRouteCode(event.target.value)} />
               <DateField id="route-date" label="Fecha planificada" placeholder="Elige una fecha" value={plannedDate} onChange={setPlannedDate}
                 error={showMissing && plannedDate === '' ? 'Elige la fecha planificada.' : null} />
               <SelectField id="route-driver" label="Conductor" placeholder="Selecciona un conductor" value={driverId}

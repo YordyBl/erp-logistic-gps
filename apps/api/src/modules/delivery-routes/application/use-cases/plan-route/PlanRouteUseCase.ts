@@ -31,7 +31,8 @@ const originSchema = z.strictObject({
 });
 
 export const planRouteBodySchema = z.strictObject({
-  publicCode: z.string().trim().toUpperCase().min(3).max(32).regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/),
+  /** Optional: when omitted the store generates the next `RUT-00000001` code. */
+  publicCode: z.string().trim().toUpperCase().min(3).max(32).regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/).optional(),
   plannedDate: z.iso.date(),
   driverId: z.uuid(),
   vehicleId: z.uuid(),
@@ -89,8 +90,10 @@ export class PlanRouteUseCase {
     }
     const originWithCoordinates = origin === undefined
       ? undefined : await this.resolveLocation(origin, 'origin');
+    // Generated last, after every validation, so a rejected request does not consume a code.
+    const publicCode = parsed.data.publicCode ?? await this.store.nextPublicCode();
     const route: RoutePlanDraft = {
-      id: randomUUID(), organizationId, publicCode: parsed.data.publicCode,
+      id: randomUUID(), organizationId, publicCode,
       plannedDate: parsed.data.plannedDate, driverId, vehicleId, status: 'planned',
       ...(originWithCoordinates === undefined ? {} : { origin: originWithCoordinates }),
       simulatedCompletionEnabled,

@@ -44,6 +44,8 @@ export interface RoutePlanDraft extends Omit<PlannedRoute, 'stops'> {
 
 /** One atomic decision: route, links, and audited transitions commit together. */
 export interface RoutePlanningStore {
+  /** Reserves the next generated route code (`RUT-00000001`) for a route planned without one. */
+  nextPublicCode(): Promise<string>;
   /**
    * Copies each order's delivery address and coordinates into its stop while the
    * order row is locked (a snapshot), and rejects orders without coordinates.
