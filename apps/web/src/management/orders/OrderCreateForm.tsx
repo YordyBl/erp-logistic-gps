@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/button.js';
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../../components/ui/field.js';
 import { Input } from '../../components/ui/input.js';
 import { formatDateOnly } from '../../lib/format.js';
+import { mapLinkErrorMessage } from '../../lib/googleMaps.js';
 import { PHONE_PATTERN } from '../../lib/patterns.js';
 
 type CreateClient = Pick<ApiClient, 'createDeliveryOrder' | 'resolveGoogleMapsLink'>;
@@ -123,7 +124,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
       setLongitude(String(coordinates.longitude));
       setNotice('Coordenadas obtenidas del enlace. Puedes ajustarlas manualmente.');
     } catch (cause) {
-      setFormError(cause instanceof Error ? `No se pudo obtener la ubicación. ${cause.message}` : 'No se pudo obtener la ubicación del enlace.');
+      setFormError(mapLinkErrorMessage(cause));
     } finally {
       setResolvingMapLink(false);
     }

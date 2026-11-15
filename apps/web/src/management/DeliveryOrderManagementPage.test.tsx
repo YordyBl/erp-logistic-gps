@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
 
-import type { Customer, DeliveryOrder, DeliveryOrderImportResult, DeliveryOrderStatusHistory } from '../api/client.js';
+import { ApiError, type Customer, type DeliveryOrder, type DeliveryOrderImportResult, type DeliveryOrderStatusHistory } from '../api/client.js';
 import { DeliveryOrderManagementPage } from './DeliveryOrderManagementPage.js';
 
 const customer: Customer = {
@@ -126,6 +126,21 @@ describe('DeliveryOrderManagementPage', () => {
     await waitFor(() => expect(client.createDeliveryOrder).toHaveBeenCalledWith(expect.objectContaining({
       deliveryAddress: expect.objectContaining({ googleMapsUrl: link, latitude: -12.2, longitude: -77.02 }),
     })));
+  });
+
+  it('explains why a Google Maps link gave no coordinates', async () => {
+    const user = setupUser();
+    const client = makeClient({
+      resolveGoogleMapsLink: vi.fn().mockRejectedValue(new ApiError('unresolved', 422, 'GOOGLE_MAPS_LINK_UNRESOLVED',
+        { reason: 'no_coordinates' })),
+    });
+    render(<DeliveryOrderManagementPage client={client} />);
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+    await user.type(screen.getByLabelText(/Enlace de Google Maps/), 'https://maps.app.goo.gl/sin-lugar');
+    await user.click(screen.getByRole('button', { name: 'Obtener coordenadas' }));
+
+    expect(await screen.findByText(/El enlace no trae coordenadas/)).toBeTruthy();
   });
 
   it('offers CSV/XLSX import and the Excel template', async () => {

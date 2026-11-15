@@ -255,7 +255,9 @@ export interface CreateDispatchRouteInput {
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;
-  readonly origin?: { readonly addressLine: string; readonly googleMapsUrl: string };
+  /** Start of a simulated route: a Google Maps link, or coordinates already resolved from it. */
+  readonly origin?: { readonly addressLine: string; readonly googleMapsUrl: string }
+    | { readonly addressLine: string; readonly latitude: number; readonly longitude: number };
   readonly simulatedCompletionEnabled?: boolean;
   /** One stop per order; the API copies each order's address and coordinates into its stop. */
   readonly stops: readonly {
@@ -287,6 +289,8 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code: string | undefined,
+    /** Structured, client-safe context from the API (`error.details`), when present. */
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -636,13 +640,13 @@ export class ApiClient {
       ? (body as { readonly error?: unknown; readonly message?: unknown })
       : undefined;
     const nested = typeof error?.error === 'object' && error.error !== null
-      ? error.error as { readonly code?: unknown; readonly message?: unknown }
+      ? error.error as { readonly code?: unknown; readonly message?: unknown; readonly details?: unknown }
       : undefined;
     const message = typeof nested?.message === 'string' ? nested.message
       : typeof error?.message === 'string' ? error.message
         : 'No se pudo completar la solicitud. Inténtalo de nuevo.';
     const code = typeof nested?.code === 'string' ? nested.code : undefined;
-    return new ApiError(message, response.status, code);
+    return new ApiError(message, response.status, code, nested?.details);
   }
 }
 

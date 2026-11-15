@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chooseOption, chooseRowAction, pickDay, setupUser } from '../test/ui.js';
 
 import { DispatchPlanningPage } from './DispatchPlanningPage.js';
-import type { DeliveryOrder } from '../api/client.js';
+import { ApiError, type DeliveryOrder } from '../api/client.js';
 
 const orders: readonly DeliveryOrder[] = [
   { id: 'order-1', organizationId: 'org-1', customerId: 'customer-1', publicCode: 'PED-001', timeWindow: 'AM', status: 'created',
@@ -92,6 +92,31 @@ describe('DispatchPlanningPage', () => {
     await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
       plannedDate, stops: [{ sequence: 1, orderId: 'order-2' }],
     })));
+  });
+
+  it('opens each order and the stops in visiting order in Google Maps', async () => {
+    const user = setupUser();
+    const located = orders.map((order, index) => ({ ...order,
+      deliveryAddress: { ...order.deliveryAddress, latitude: -12.1 + index / 100, longitude: -77.03 } }));
+    render(<DispatchPlanningPage client={makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue(located) })} />);
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
+    await screen.findByText(/PED-001/);
+
+    const orderLink = screen.getByRole('link', { name: 'Ver PED-001 en Google Maps' });
+    expect(orderLink.getAttribute('href')).toBe('https://www.google.com/maps/search/?api=1&query=-12.1%2C-77.03');
+    expect(orderLink.getAttribute('target')).toBe('_blank');
+    expect(screen.queryByRole('link', { name: 'Ver ruta en Google Maps' })).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: /PED-001/ }));
+    await user.click(screen.getByRole('checkbox', { name: /PED-002/ }));
+
+    const routeUrl = () => new URL(screen.getByRole('link', { name: 'Ver ruta en Google Maps' }).getAttribute('href')!);
+    expect(routeUrl().searchParams.get('origin')).toBe('-12.1,-77.03');
+    expect(routeUrl().searchParams.get('destination')).toBe('-12.09,-77.03');
+    expect(screen.getByRole('link', { name: 'Ver parada 2 en Google Maps' }).getAttribute('href'))
+      .toBe('https://www.google.com/maps/search/?api=1&query=-12.09%2C-77.03');
+    await user.click(screen.getByRole('button', { name: 'Subir parada 2' }));
+    expect(routeUrl().searchParams.get('origin')).toBe('-12.09,-77.03');
+    expect(routeUrl().searchParams.get('destination')).toBe('-12.1,-77.03');
   });
 
   it('asks for at least one order before calling the API', async () => {
@@ -266,6 +291,49 @@ describe('DispatchPlanningPage', () => {
 
       expect(await screen.findByText('Indica la dirección y el enlace de Google Maps del origen de la simulación.')).toBeTruthy();
       expect(client.createDispatchRoute).not.toHaveBeenCalled();
+    });
+
+    it('previews the origin coordinates and sends them instead of the link', async () => {
+      const user = setupUser();
+      const resolveGoogleMapsLink = vi.fn().mockResolvedValue({ latitude: -12.084, longitude: -77.035 });
+      const client = simulationClient({ resolveGoogleMapsLink });
+      render(<DispatchPlanningPage client={client} />);
+      await fillSimulatedRoute(user);
+      await chooseOption(user, screen.getByLabelText('Conductor'), 'Bruno Simulado');
+      await user.type(screen.getByLabelText('Dirección de origen'), 'Almacén Lince');
+      await user.type(screen.getByLabelText('Enlace de Google Maps del origen'), 'https://maps.app.goo.gl/origin');
+
+      await user.click(screen.getByRole('button', { name: 'Obtener coordenadas del origen' }));
+
+      expect(resolveGoogleMapsLink).toHaveBeenCalledWith('https://maps.app.goo.gl/origin');
+      expect(await screen.findByText('Lat -12.084 · Lng -77.035')).toBeTruthy();
+      const originLink = screen.getByRole('link', { name: 'Ver origen en Google Maps' });
+      expect(originLink.getAttribute('href')).toBe('https://www.google.com/maps/search/?api=1&query=-12.084%2C-77.035');
+      expect(originLink.getAttribute('target')).toBe('_blank');
+      expect(originLink.getAttribute('rel')).toBe('noopener noreferrer');
+      await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
+
+      await waitFor(() => expect(client.createDispatchRoute).toHaveBeenCalledWith(expect.objectContaining({
+        origin: { addressLine: 'Almacén Lince', latitude: -12.084, longitude: -77.035 },
+      })));
+    });
+
+    it('explains why the origin link gave no coordinates and forgets a preview when the link changes', async () => {
+      const user = setupUser();
+      const resolveGoogleMapsLink = vi.fn()
+        .mockResolvedValueOnce({ latitude: -12.084, longitude: -77.035 })
+        .mockRejectedValueOnce(new ApiError('unresolved', 422, 'GOOGLE_MAPS_LINK_UNRESOLVED', { reason: 'no_coordinates' }));
+      render(<DispatchPlanningPage client={simulationClient({ resolveGoogleMapsLink })} />);
+      await fillSimulatedRoute(user);
+      await user.type(screen.getByLabelText('Enlace de Google Maps del origen'), 'https://maps.app.goo.gl/origin');
+      await user.click(screen.getByRole('button', { name: 'Obtener coordenadas del origen' }));
+      await screen.findByText('Lat -12.084 · Lng -77.035');
+
+      await user.type(screen.getByLabelText('Enlace de Google Maps del origen'), '-otro');
+      expect(screen.queryByText('Lat -12.084 · Lng -77.035')).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Obtener coordenadas del origen' }));
+
+      expect(await screen.findByText(/El enlace no trae coordenadas/)).toBeTruthy();
     });
 
     it('labels simulated routes in the route list', async () => {

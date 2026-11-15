@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table';
-import { ArrowDown, ArrowLeftRight, ArrowUp, Eye, Plus, RefreshCw, Route, X } from 'lucide-react';
+import { ArrowDown, ArrowLeftRight, ArrowUp, ExternalLink, Eye, MapPin, Plus, RefreshCw, Route, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
@@ -25,6 +25,9 @@ import { Separator } from '../components/ui/separator.js';
 import { ORDER_STATUS_LABELS, ROUTE_BADGES, ROUTE_STATUS_LABELS } from '../delivery/orderStatus.js';
 import { formatPlannedDate } from '../lib/dates.js';
 import { countLabel, formatDateTime, initials } from '../lib/format.js';
+import {
+  googleMapsPlaceUrl, googleMapsRouteUrl, mapLinkErrorMessage, mapLinkFailureMessage, type MapPoint,
+} from '../lib/googleMaps.js';
 import { RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 
@@ -49,6 +52,8 @@ interface DispatchClient {
   createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute>;
   /** Development-only availability; omitted or failing means simulation is unavailable. */
   getRouteSimulation?(): Promise<RouteSimulationAvailability>;
+  /** Previews the coordinates of a Google Maps link before the route is created. */
+  resolveGoogleMapsLink?(url: string): Promise<{ readonly latitude: number; readonly longitude: number }>;
   reassignDispatchRoute(routeId: string, input: {
     readonly driverId?: string;
     readonly vehicleId?: string;
@@ -84,6 +89,10 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const [simulate, setSimulate] = useState(false);
   const [originAddress, setOriginAddress] = useState('');
   const [originMapsUrl, setOriginMapsUrl] = useState('');
+  // Coordinates the dispatcher saw for the origin link; they are what the route stores.
+  const [originPoint, setOriginPoint] = useState<MapPoint | null>(null);
+  const [resolvingOrigin, setResolvingOrigin] = useState(false);
+  const [originError, setOriginError] = useState<string | null>(null);
   const [showMissing, setShowMissing] = useState(false);
   const [history, setHistory] = useState<Record<string, readonly DeliveryOrderStatusHistory[]>>({});
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
@@ -141,11 +150,41 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   }
   const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
   const orderById = new Map(orders.map((order) => [order.id, order]));
+  // Stops in visiting order (and the previewed origin of a simulation) as one Google Maps route.
+  const plannedRouteLink = googleMapsRouteUrl([
+    ...(simulating && originPoint !== null ? [originPoint] : []),
+    ...stopOrderIds.flatMap((id) => {
+      const order = orderById.get(id);
+      const point = order === undefined ? null : orderPoint(order);
+      return point === null ? [] : [point];
+    }),
+  ]);
 
   function toggleOrder(orderId: string, checked: boolean) {
     setStopOrderIds((current) => checked
       ? (current.includes(orderId) ? current : [...current, orderId])
       : current.filter((id) => id !== orderId));
+  }
+
+  function changeOriginLink(value: string) {
+    setOriginMapsUrl(value);
+    // A preview belongs to the link it came from.
+    setOriginPoint(null);
+    setOriginError(null);
+  }
+
+  async function previewOrigin() {
+    if (client.resolveGoogleMapsLink === undefined) return;
+    setResolvingOrigin(true);
+    setOriginError(null);
+    try {
+      setOriginPoint(await client.resolveGoogleMapsLink(originMapsUrl.trim()));
+    } catch (cause) {
+      setOriginPoint(null);
+      setOriginError(mapLinkErrorMessage(cause));
+    } finally {
+      setResolvingOrigin(false);
+    }
   }
 
   function moveStop(index: number, offset: -1 | 1) {
@@ -192,7 +231,10 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
         publicCode: routeCode.trim(), plannedDate, driverId, vehicleId,
         ...(simulating ? {
           simulatedCompletionEnabled: true,
-          origin: { addressLine: originAddress.trim(), googleMapsUrl: originMapsUrl.trim() },
+          // Previewed coordinates are sent as-is so the route stores exactly what was shown.
+          origin: originPoint === null
+            ? { addressLine: originAddress.trim(), googleMapsUrl: originMapsUrl.trim() }
+            : { addressLine: originAddress.trim(), ...originPoint },
         } : {}),
         stops: stopOrderIds.map((orderId, index) => ({ sequence: index + 1, orderId })),
       });
@@ -208,14 +250,16 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       setStopOrderIds([]);
       setSimulate(false);
       setOriginAddress('');
-      setOriginMapsUrl('');
+      changeOriginLink('');
       setShowMissing(false);
       setCreateOpen(false);
       setNotice(created.simulatedCompletionEnabled === true
         ? `Ruta ${created.publicCode} creada. La simulación ya está en curso.`
         : `Ruta ${created.publicCode} creada.`);
     } catch (cause) {
-      setError(cause instanceof Error ? `No se pudo crear la ruta. ${cause.message}` : 'No se pudo crear la ruta.');
+      const linkFailure = mapLinkFailureMessage(cause);
+      setError(linkFailure !== null ? `No se pudo crear la ruta. ${linkFailure}`
+        : cause instanceof Error ? `No se pudo crear la ruta. ${cause.message}` : 'No se pudo crear la ruta.');
     } finally {
       setSaving(false);
     }
@@ -387,8 +431,25 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                     <Field>
                       <FieldLabel htmlFor="route-origin-maps">Enlace de Google Maps del origen</FieldLabel>
                       <Input id="route-origin-maps" type="url" maxLength={2048} placeholder="https://maps.app.goo.gl/..." value={originMapsUrl}
-                        onChange={(event) => setOriginMapsUrl(event.target.value)} />
+                        onChange={(event) => changeOriginLink(event.target.value)} />
                     </Field>
+                    {client.resolveGoogleMapsLink !== undefined && (
+                      <div className="flex flex-col gap-2 sm:col-span-2">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Button type="button" variant="outline" onClick={() => void previewOrigin()}
+                            disabled={resolvingOrigin || originMapsUrl.trim() === ''}>
+                            {resolvingOrigin ? 'Buscando ubicación…' : 'Obtener coordenadas del origen'}
+                          </Button>
+                          {originPoint !== null && (
+                            <>
+                              <span className="text-sm tabular-nums">Lat {originPoint.latitude} · Lng {originPoint.longitude}</span>
+                              <MapLink href={googleMapsPlaceUrl(originPoint)} label="Ver origen en Google Maps" />
+                            </>
+                          )}
+                        </div>
+                        {originError !== null && <ErrorNotice>{originError}</ErrorNotice>}
+                      </div>
+                    )}
                   </FieldGroup>
                 )}
               </FieldSet>
@@ -412,10 +473,27 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                 Cada pedido es una parada y usa la dirección y las coordenadas del pedido. Ordénalas en el orden de visita.
               </FieldDescription>
               {stopOrderIds.length === 0 && <FieldDescription>Aún no hay paradas. Marca los pedidos que irán en la ruta.</FieldDescription>}
+              {plannedRouteLink !== null && (
+                <div className="flex flex-col gap-1">
+                  <div>
+                    <Button asChild variant="outline">
+                      <a href={plannedRouteLink.url} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink data-icon="inline-start" aria-hidden="true" /> Ver ruta en Google Maps
+                      </a>
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    Abre el recorrido en el orden actual{simulating && originPoint !== null ? ', desde el origen' : ''}; Google Maps no lo reordena.
+                    En el móvil solo muestra hasta 3 paradas intermedias.
+                    {plannedRouteLink.omittedStops > 0 && ` Faltan ${plannedRouteLink.omittedStops} paradas al final: Google Maps admite hasta 11 puntos por enlace.`}
+                  </FieldDescription>
+                </div>
+              )}
               <ol className="flex flex-col gap-2">
                 {stopOrderIds.map((orderId, index) => {
                   const order = orderById.get(orderId);
                   const position = index + 1;
+                  const point = order === undefined ? null : orderPoint(order);
                   return (
                     <li key={orderId} className="flex items-center gap-3 rounded-md border px-3 py-2">
                       <span className="flex min-w-0 flex-1 flex-col">
@@ -424,6 +502,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                           {order === undefined ? 'Pedido no disponible' : `${order.deliveryAddress.addressLine}, ${order.deliveryAddress.district}`}
                         </span>
                       </span>
+                      {point !== null && <MapLink href={googleMapsPlaceUrl(point)} label={`Ver parada ${position} en Google Maps`} iconOnly />}
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Subir parada ${position}`}
                         disabled={index === 0} onClick={() => moveStop(index, -1)}><ArrowUp aria-hidden="true" /></Button>
                       <Button type="button" variant="ghost" size="icon-sm" aria-label={`Bajar parada ${position}`}
@@ -442,13 +521,17 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
               <FieldGroup className="gap-3">
                 {eligibleOrders.map((order) => {
                   const checkboxId = `route-order-${order.id}`;
+                  const point = orderPoint(order);
                   return (
                     <div key={order.id} className="flex flex-col gap-2">
-                      <Field orientation="horizontal">
-                        <Checkbox id={checkboxId} checked={stopOrderIds.includes(order.id)}
-                          onCheckedChange={(checked) => toggleOrder(order.id, checked === true)} />
-                        <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
-                      </Field>
+                      <div className="flex items-center gap-2">
+                        <Field orientation="horizontal">
+                          <Checkbox id={checkboxId} checked={stopOrderIds.includes(order.id)}
+                            onCheckedChange={(checked) => toggleOrder(order.id, checked === true)} />
+                          <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
+                        </Field>
+                        {point !== null && <MapLink href={googleMapsPlaceUrl(point)} label={`Ver ${order.publicCode} en Google Maps`} iconOnly />}
+                      </div>
                       {order.status === 'returned' && (
                         <div className="flex flex-wrap items-center gap-2 pl-6">
                           <Badge variant="destructive">Devuelto · incidencia registrada</Badge>
@@ -565,4 +648,21 @@ function ReassignSheet({ route, drivers, vehicles, busy, onClose, onSubmit }: {
 
 function orderStatusLabel(status: DeliveryOrder['status']): string {
   return status === 'returned' ? 'Devuelto · incidencia registrada' : ORDER_STATUS_LABELS[status];
+}
+
+function orderPoint(order: DeliveryOrder): MapPoint | null {
+  const { latitude, longitude } = order.deliveryAddress;
+  return latitude === null || longitude === null ? null : { latitude, longitude };
+}
+
+/** Opens Google Maps in a new tab without giving it access to this window. */
+function MapLink({ href, label, iconOnly = false }: { readonly href: string; readonly label: string; readonly iconOnly?: boolean }) {
+  return (
+    <Button asChild variant="ghost" size={iconOnly ? 'icon-sm' : 'sm'}>
+      <a href={href} target="_blank" rel="noopener noreferrer" aria-label={label} title={label}>
+        <MapPin aria-hidden="true" {...(iconOnly ? {} : { 'data-icon': 'inline-start' })} />
+        {!iconOnly && label}
+      </a>
+    </Button>
+  );
 }
