@@ -4,28 +4,56 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlTowerPage } from './ControlTowerPage.js';
 
+type MapHandler = (event?: unknown) => void;
+
 const mapMock = vi.hoisted(() => ({
   options: undefined as unknown,
   load: undefined as (() => void) | undefined,
+  /** Handlers by `event` or `event:layer`, as maplibre delegates layer events. */
+  handlers: new Map<string, MapHandler>(),
+  /** Features under the pointer for the next `queryRenderedFeatures` call. */
+  renderedFeatures: [] as unknown[],
   setWorkerUrl: vi.fn(),
   source: { setData: vi.fn() },
+  trackSource: { setData: vi.fn() },
   addSource: vi.fn(),
   addLayer: vi.fn(),
   addImage: vi.fn(),
+  flyTo: vi.fn(),
   remove: vi.fn(),
+  popup: { setLngLat: vi.fn(), setDOMContent: vi.fn(), addTo: vi.fn(), remove: vi.fn() },
+  canvas: { style: { cursor: '' } },
 }));
 
 vi.mock('maplibre-gl', () => ({
   setWorkerUrl: mapMock.setWorkerUrl,
   Map: class {
     constructor(options: unknown) { mapMock.options = options; }
-    on(event: string, handler: () => void) { if (event === 'load') mapMock.load = handler; }
+    on(event: string, layerOrHandler: string | MapHandler, handler?: MapHandler) {
+      if (typeof layerOrHandler === 'string') mapMock.handlers.set(`${event}:${layerOrHandler}`, handler!);
+      else if (event === 'load') mapMock.load = layerOrHandler as () => void;
+      else mapMock.handlers.set(event, layerOrHandler);
+    }
     addControl() {}
     addSource = mapMock.addSource;
     addLayer = mapMock.addLayer;
     addImage = mapMock.addImage;
-    getSource() { return mapMock.addSource.mock.calls.length > 0 ? mapMock.source : undefined; }
+    flyTo = mapMock.flyTo;
+    getZoom() { return 10; }
+    getCanvas() { return mapMock.canvas; }
+    getLayer(id: string) { return mapMock.addLayer.mock.calls.some(([layer]) => (layer as { id: string }).id === id) ? {} : undefined; }
+    queryRenderedFeatures() { return mapMock.renderedFeatures; }
+    getSource(id: string) {
+      if (!mapMock.addSource.mock.calls.some(([source]) => source === id)) return undefined;
+      return id === 'control-tower-track' ? mapMock.trackSource : mapMock.source;
+    }
     remove = mapMock.remove;
+  },
+  Popup: class {
+    setLngLat(...args: unknown[]) { mapMock.popup.setLngLat(...args); return this; }
+    setDOMContent(...args: unknown[]) { mapMock.popup.setDOMContent(...args); return this; }
+    addTo(...args: unknown[]) { mapMock.popup.addTo(...args); return this; }
+    remove() { mapMock.popup.remove(); return this; }
   },
   NavigationControl: class {},
 }));
@@ -64,6 +92,9 @@ describe('ControlTowerPage', () => {
     vi.clearAllMocks();
     mapMock.options = undefined;
     mapMock.load = undefined;
+    mapMock.handlers.clear();
+    mapMock.renderedFeatures = [];
+    mapMock.canvas.style.cursor = '';
     vi.stubGlobal('Image', class {
       onload: (() => void) | null = null;
       onerror: (() => void) | null = null;
@@ -93,7 +124,7 @@ describe('ControlTowerPage', () => {
     await waitFor(() => expect(mapMock.addImage).toHaveBeenCalledWith('control-tower-motorcycle',
       expect.objectContaining({ src: '/motorcycle-marker.svg' }), { pixelRatio: 2 }));
     expect(mapMock.addLayer.mock.calls.map(([layer]) => (layer as { id: string }).id))
-      .toEqual(['control-tower-stops', 'control-tower-stop-labels', 'control-tower-positions']);
+      .toEqual(['control-tower-traveled', 'control-tower-pending', 'control-tower-stops', 'control-tower-stop-labels', 'control-tower-positions']);
     expect(mapMock.addLayer.mock.calls.map(([layer]) => layer))
       .toContainEqual(expect.objectContaining({ id: 'control-tower-positions', type: 'symbol', layout: expect.objectContaining({ 'icon-image': 'control-tower-motorcycle' }) }));
   });
@@ -156,5 +187,135 @@ describe('ControlTowerPage', () => {
       expect.objectContaining({ geometry: { type: 'Point', coordinates: [-77.01, -12.07] },
         properties: expect.objectContaining({ kind: 'last-known-position' }) }),
     ]) });
+  });
+});
+
+describe('ControlTowerPage driver selection and route track', () => {
+  const track = {
+    traveled: [
+      { latitude: -12.06, longitude: -77.04, recordedAt: '2026-11-02T11:50:00.000Z' },
+      { latitude: -12.08, longitude: -77.02, recordedAt: '2026-11-02T12:00:00.000Z' },
+    ],
+    pending: [{ latitude: -12.08, longitude: -77.02 }, { latitude: -12.1, longitude: -77.03 }],
+    pendingSource: 'straight' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mapMock.options = undefined;
+    mapMock.load = undefined;
+    mapMock.handlers.clear();
+    mapMock.renderedFeatures = [];
+    vi.stubGlobal('Image', class {
+      onload: (() => void) | null = null;
+      src = '';
+      constructor() { queueMicrotask(() => this.onload?.()); }
+    });
+  });
+  afterEach(() => cleanup());
+
+  async function renderTower(overrides: Record<string, unknown> = {}) {
+    const harness = createSocketHarness();
+    const client = {
+      createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
+      listDispatchRoutes: vi.fn().mockResolvedValue([{ ...snapshot.routes[0], organizationId: 'org-1', createdAt: '2026-11-01T10:00:00.000Z' }]),
+      listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
+      listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
+      getRouteTrack: vi.fn().mockResolvedValue(track),
+      ...overrides,
+    };
+    render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
+    await waitFor(() => expect(mapMock.options).toBeDefined());
+    act(() => mapMock.load?.());
+    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
+    await screen.findByText('Ana Quispe');
+    await waitFor(() => expect(mapMock.addLayer.mock.calls.some(([layer]) => (layer as { id: string }).id === 'control-tower-positions')).toBe(true));
+    return { client, harness };
+  }
+
+  const driverFeature = { geometry: { type: 'Point', coordinates: [-77.02, -12.08] }, properties: { routeId: 'route-1' } };
+
+  it('shows the driver, plate, route and signal age when the pointer is over the driver marker', async () => {
+    await renderTower();
+
+    act(() => mapMock.handlers.get('mouseenter:control-tower-positions')?.({ features: [driverFeature] }));
+
+    expect(mapMock.canvas.style.cursor).toBe('pointer');
+    expect(mapMock.popup.setLngLat).toHaveBeenCalledWith([-77.02, -12.08]);
+    const content = mapMock.popup.setDOMContent.mock.lastCall?.[0] as HTMLElement;
+    expect(content.textContent).toContain('Ana Quispe');
+    expect(content.textContent).toContain('Placa ABC-123');
+    expect(content.textContent).toContain('Ruta R-100');
+    expect(content.textContent).toContain('Señal');
+    act(() => mapMock.handlers.get('mouseleave:control-tower-positions')?.());
+    expect(mapMock.popup.remove).toHaveBeenCalled();
+    expect(mapMock.canvas.style.cursor).toBe('');
+  });
+
+  it('highlights the route card and draws its driven and pending path when the driver marker is clicked', async () => {
+    const { client } = await renderTower();
+    const scrollIntoView = vi.fn();
+    const card = screen.getByText('R-100', { selector: 'h3' }).closest('li')!;
+    card.scrollIntoView = scrollIntoView;
+
+    mapMock.renderedFeatures = [driverFeature];
+    act(() => mapMock.handlers.get('click')?.({ point: { x: 1, y: 1 } }));
+
+    await waitFor(() => expect(card.getAttribute('aria-current')).toBe('true'));
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(client.getRouteTrack).toHaveBeenCalledWith('route-1');
+    await waitFor(() => expect(mapMock.trackSource.setData.mock.lastCall?.[0]).toMatchObject({ features: [
+      { geometry: { type: 'LineString', coordinates: [[-77.04, -12.06], [-77.02, -12.08]] }, properties: { kind: 'traveled' } },
+      { geometry: { type: 'LineString', coordinates: [[-77.02, -12.08], [-77.03, -12.1]] }, properties: { kind: 'pending' } },
+    ] }));
+    expect(screen.getByText('Recorrido realizado')).toBeTruthy();
+    expect(screen.getByText(/Recorrido pendiente \(en línea recta\)/)).toBeTruthy();
+
+    // A click on the empty map clears the selection and the path.
+    mapMock.renderedFeatures = [];
+    act(() => mapMock.handlers.get('click')?.({ point: { x: 5, y: 5 } }));
+    await waitFor(() => expect(card.getAttribute('aria-current')).toBeNull());
+    expect(mapMock.trackSource.setData.mock.lastCall?.[0]).toEqual({ type: 'FeatureCollection', features: [] });
+  });
+
+  it('centres the map on the driver when a route card is selected, and toggles it off on a second click', async () => {
+    const { client } = await renderTower();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver la ruta R-100 en el mapa' }));
+
+    expect(mapMock.flyTo).toHaveBeenCalledWith({ center: [-77.02, -12.08], zoom: 13 });
+    expect(client.getRouteTrack).toHaveBeenCalledWith('route-1');
+    const toggle = screen.getByRole('button', { name: 'Quitar selección de la ruta R-100' });
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Ver la ruta R-100 en el mapa' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('extends the driven path with live positions and refetches it when deliveries change', async () => {
+    const { client, harness } = await renderTower();
+    fireEvent.click(screen.getByRole('button', { name: 'Ver la ruta R-100 en el mapa' }));
+    await waitFor(() => expect(mapMock.trackSource.setData).toHaveBeenCalled());
+
+    const moved = { ...snapshot, positions: [{ ...snapshot.positions[0]!, latitude: -12.09, longitude: -77.025,
+      recordedAt: '2026-11-02T12:01:00.000Z', receivedAt: '2026-11-02T12:01:01.000Z' }] };
+    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot: moved }));
+
+    await waitFor(() => expect(mapMock.trackSource.setData.mock.lastCall?.[0]).toMatchObject({ features: [
+      { geometry: { coordinates: [[-77.04, -12.06], [-77.02, -12.08], [-77.025, -12.09]] } },
+      { geometry: { coordinates: [[-77.025, -12.09], [-77.03, -12.1]] } },
+    ] }));
+    expect(client.getRouteTrack).toHaveBeenCalledOnce();
+
+    act(() => harness.emit({ type: 'update', sequence: 2, kind: 'order', snapshot: moved }));
+    await waitFor(() => expect(client.getRouteTrack).toHaveBeenCalledTimes(2));
+  });
+
+  it('keeps selection working without the track endpoint', async () => {
+    await renderTower({ getRouteTrack: undefined });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver la ruta R-100 en el mapa' }));
+
+    expect(screen.getByText('R-100', { selector: 'h3' }).closest('li')?.getAttribute('aria-current')).toBe('true');
+    expect(screen.queryByText('Recorrido realizado')).toBeNull();
   });
 });

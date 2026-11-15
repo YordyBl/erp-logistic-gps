@@ -1,4 +1,4 @@
-import { ChevronDown, MapPinOff, Satellite, Truck, UserRound } from 'lucide-react';
+import { ChevronDown, LocateFixed, MapPinOff, Satellite, Truck, UserRound } from 'lucide-react';
 
 import { TableProgress } from '../../components/data-table/columnHelpers.js';
 import { Badge } from '../../components/ui/badge.js';
@@ -14,8 +14,16 @@ import { RouteTimeline } from './RouteTimeline.js';
 /** A partir de este tiempo sin posición, la señal se marca para que alguien la revise. */
 const STALE_SIGNAL_MS = 15 * 60_000;
 
+/** Conductor y placa de una ruta, si los catálogos cargaron. */
+export function routeCrew(details: RouteDetails, routeId: string): { readonly driver?: string; readonly plate?: string } {
+  const dispatch = details.routes.find((item) => item.id === routeId);
+  const driver = details.drivers.find((item) => item.id === dispatch?.driverId)?.fullName;
+  const plate = details.vehicles.find((item) => item.id === dispatch?.vehicleId)?.plate;
+  return { ...(driver === undefined ? {} : { driver }), ...(plate === undefined ? {} : { plate }) };
+}
+
 /** Una ruta de la Torre de control: quién la lleva, su señal, su avance y sus paradas. */
-export function ActiveRouteItem({ route, position, details }: {
+export function ActiveRouteItem({ route, position, details, selected = false, onSelect, elementRef }: {
   readonly route: {
     readonly id: string;
     readonly publicCode: string;
@@ -25,21 +33,38 @@ export function ActiveRouteItem({ route, position, details }: {
   };
   readonly position: { readonly receivedAt: string } | undefined;
   readonly details: RouteDetails;
+  /** Ruta elegida en el mapa o en la lista: se resalta y su recorrido se dibuja. */
+  readonly selected?: boolean;
+  readonly onSelect?: () => void;
+  readonly elementRef?: (element: HTMLLIElement | null) => void;
 }) {
   const dispatch = details.routes.find((item) => item.id === route.id);
   const orderById = new Map(details.orders.map((order) => [order.id, order]));
   const progress = dispatch === undefined ? null : summarizeRoute(dispatch, orderById);
-  const driver = details.drivers.find((item) => item.id === dispatch?.driverId)?.fullName;
-  const plate = details.vehicles.find((item) => item.id === dispatch?.vehicleId)?.plate;
+  const { driver, plate } = routeCrew(details, route.id);
 
   return (
-    <li className="flex flex-col gap-3 rounded-lg border p-3">
+    // Clicking anywhere on the card selects it; its own buttons (stops, map) keep their action.
+    <li ref={elementRef} aria-current={selected ? 'true' : undefined}
+      onClick={onSelect === undefined ? undefined : (event) => {
+        if (!(event.target instanceof Element) || event.target.closest('button, a') === null) onSelect();
+      }}
+      className={`flex scroll-my-2 flex-col gap-3 rounded-lg border p-3 transition-shadow ${onSelect === undefined ? '' : 'cursor-pointer'} ${selected ? 'border-primary ring-2 ring-primary' : ''}`}>
       <header className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col">
           <h3 className="text-sm font-medium tabular-nums">{route.publicCode}</h3>
           <span className="text-xs text-muted-foreground">{formatPlannedDate(route.plannedDate)}</span>
         </div>
-        <Badge variant={ROUTE_BADGES[route.status]}>{ROUTE_STATUS_LABELS[route.status]}</Badge>
+        <div className="flex shrink-0 items-center gap-1">
+          <Badge variant={ROUTE_BADGES[route.status]}>{ROUTE_STATUS_LABELS[route.status]}</Badge>
+          {onSelect !== undefined && (
+            <Button type="button" variant={selected ? 'secondary' : 'ghost'} size="icon-sm" onClick={onSelect} aria-pressed={selected}
+              aria-label={selected ? `Quitar selección de la ruta ${route.publicCode}` : `Ver la ruta ${route.publicCode} en el mapa`}
+              title={selected ? 'Quitar selección' : 'Ver en el mapa'}>
+              <LocateFixed aria-hidden="true" />
+            </Button>
+          )}
+        </div>
       </header>
 
       {(driver !== undefined || plate !== undefined) && (

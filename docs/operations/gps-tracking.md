@@ -170,3 +170,31 @@ replay is stored, so reconnecting clients must use the new snapshot rather than
 expecting missed updates to be replayed. Driver snapshots contain only that
 driver's assigned route; ADMIN and DISPATCHER snapshots are limited to their
 organization.
+
+## Route track (driven and pending path)
+
+`GET /api/v1/tracking/routes/{routeId}/track` (ADMIN or DISPATCHER, Bearer
+token; `Cache-Control: private, no-store`) returns the path of one route of the
+caller's organization; a route of another organization answers `404`:
+
+```json
+{ "data": {
+  "traveled": [{ "latitude": -12.06, "longitude": -77.04, "recordedAt": "<ISO-8601>" }],
+  "pending": [{ "latitude": -12.08, "longitude": -77.02 }, { "latitude": -12.1, "longitude": -77.03 }],
+  "pendingSource": "roads"
+} }
+```
+
+- `traveled` holds the newest 2,000 persisted positions, oldest first (subject to
+  `GPS_POSITION_RETENTION_DAYS`).
+- `pending` starts at the latest position (or the route origin before any
+  position) and passes through the stops, in sequence, that still hold an order
+  without a final outcome (`delivered`, `returned`, `cancelled`). With
+  `VALHALLA_URL` configured it follows the roads (`pendingSource: "roads"`);
+  otherwise, or if routing fails, it joins the stops in straight lines
+  (`"straight"`). A completed route has no pending path.
+
+The control tower requests it only for the route selected on the map or in the
+list, appends live socket positions to `traveled` client-side, and requests it
+again after order or route updates. Without the track port the endpoint answers
+`503 TRACKING_UNAVAILABLE`.

@@ -1,19 +1,24 @@
 import { Route } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
+import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, Popup } from 'maplibre-gl';
 
-import type { DispatchRoute } from '../api/client.js';
+import type { DispatchRoute, RouteTrack } from '../api/client.js';
 import { ErrorNotice, LoadingRows } from '../components/Notices.js';
 import { Card } from '../components/ui/card.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
-import { ActiveRouteItem } from './routes/ActiveRouteItem.js';
+import { formatTimeAgo } from '../lib/format.js';
+import { ActiveRouteItem, routeCrew } from './routes/ActiveRouteItem.js';
 import { loadRouteDetails, NO_ROUTE_DETAILS, type RouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 export const OPENFREEMAP_STYLE = import.meta.env.VITE_MAP_STYLE_URL?.trim() ||
   'https://tiles.openfreemap.org/styles/bright';
 const DATA_SOURCE = 'control-tower-data';
+const TRACK_SOURCE = 'control-tower-track';
+const POSITIONS_LAYER = 'control-tower-positions';
 const MAP_STOP_COLOR = '#ef8b36';
+const TRAVELED_COLOR = '#1d6fb8';
+const PENDING_COLOR = '#5f7480';
 
 export interface TrackingPosition {
   readonly routeId: string;
@@ -50,9 +55,24 @@ interface TrackingSocketMessage {
 
 interface TicketClient extends RouteDetailsClient {
   createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }>;
+  /** Optional: without it (or if it fails) the map shows no driven or pending path. */
+  getRouteTrack?(routeId: string): Promise<RouteTrack>;
 }
 
 type MapSocket = Pick<WebSocket, 'addEventListener' | 'removeEventListener' | 'close'>;
+
+/** A selected route and whether the choice came from the map (then its card scrolls into view). */
+interface Selection {
+  readonly routeId: string;
+  readonly from: 'map' | 'list';
+}
+
+/** The fetched track of the selected route plus the live positions received after the fetch. */
+interface SelectedTrack extends RouteTrack {
+  readonly routeId: string;
+}
+
+type TrailPoint = RouteTrack['traveled'][number];
 
 export function ControlTowerPage({ client, socketFactory = openTrackingSocket }: {
   readonly client: TicketClient;
@@ -64,6 +84,13 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState<RouteDetails>(NO_ROUTE_DETAILS);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [track, setTrack] = useState<SelectedTrack | null>(null);
+  const [liveTrail, setLiveTrail] = useState<readonly TrailPoint[]>([]);
+  // Bumped by order and route news, which can settle stops and shorten the pending path.
+  const [trackVersion, setTrackVersion] = useState(0);
+  const cardRefs = useRef(new Map<string, HTMLLIElement>());
+  const selectedRouteId = selection?.routeId ?? null;
 
   const refreshDetails = useCallback(async () => setDetails(await loadRouteDetails(client)), [client]);
   useEffect(() => { void refreshDetails(); }, [refreshDetails]);
@@ -71,11 +98,21 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const geoJson = useMemo(() => toFeatureCollection(snapshot), [snapshot]);
   const geoJsonRef = useRef(geoJson);
   geoJsonRef.current = geoJson;
+  const trackGeoJson = useMemo(() => toTrackCollection(track, liveTrail), [track, liveTrail]);
+  const trackGeoJsonRef = useRef(trackGeoJson);
+  trackGeoJsonRef.current = trackGeoJson;
+
+  // Map event handlers are bound once, so they read the latest data through refs.
+  const popupContentRef = useRef<(routeId: string) => HTMLElement>(() => document.createElement('div'));
+  popupContentRef.current = (routeId) => popupContent(routeId, snapshot, details);
+  const selectFromMapRef = useRef<(routeId: string | null) => void>(() => undefined);
+  selectFromMapRef.current = (routeId) => setSelection(routeId === null ? null : { routeId, from: 'map' });
 
   useEffect(() => {
     if (mapContainer.current === null) return;
     let disposed = false;
     let map: MapLibreMap | undefined;
+    let popup: Popup | undefined;
     void Promise.all([import('maplibre-gl'), import('maplibre-gl/dist/maplibre-gl.css')]).then(([maplibre]) => {
       if (disposed || mapContainer.current === null) return;
       maplibre.setWorkerUrl(maplibreWorkerUrl);
@@ -86,9 +123,24 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
         zoom: 10,
       });
       mapRef.current = map;
+      popup = new maplibre.Popup({ closeButton: false, closeOnClick: false, offset: 18, className: 'control-tower-popup' });
       map.addControl(new maplibre.NavigationControl({ showCompass: false }), 'top-right');
       const addOperationalLayers = () => {
         if (map?.getSource(DATA_SOURCE) !== undefined) return;
+        // Paths go first so stops and the driver marker are drawn on top of them.
+        map?.addSource(TRACK_SOURCE, { type: 'geojson', data: trackGeoJsonRef.current });
+        map?.addLayer({
+          id: 'control-tower-traveled', type: 'line', source: TRACK_SOURCE,
+          filter: ['==', ['get', 'kind'], 'traveled'],
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': TRAVELED_COLOR, 'line-width': 4, 'line-opacity': 0.9 },
+        });
+        map?.addLayer({
+          id: 'control-tower-pending', type: 'line', source: TRACK_SOURCE,
+          filter: ['==', ['get', 'kind'], 'pending'],
+          layout: { 'line-join': 'round' },
+          paint: { 'line-color': PENDING_COLOR, 'line-width': 3, 'line-dasharray': [2, 2] },
+        });
         map?.addSource(DATA_SOURCE, { type: 'geojson', data: geoJsonRef.current });
         map?.addLayer({
           id: 'control-tower-stops', type: 'circle', source: DATA_SOURCE,
@@ -105,27 +157,76 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
           if (map === undefined) return;
           map.addImage('control-tower-motorcycle', image, { pixelRatio: 2 });
           map.addLayer({
-            id: 'control-tower-positions', type: 'symbol', source: DATA_SOURCE,
+            id: POSITIONS_LAYER, type: 'symbol', source: DATA_SOURCE,
             filter: ['==', ['get', 'kind'], 'last-known-position'],
             layout: { 'icon-image': 'control-tower-motorcycle', 'icon-size': 0.75, 'icon-allow-overlap': true },
           });
         }).catch(() => setError('No se pudo cargar el icono de la moto.'));
       };
       map.on('load', addOperationalLayers);
+      map.on('mouseenter', POSITIONS_LAYER, (event: MapLayerMouseEvent) => {
+        const feature = event.features?.[0];
+        const routeId = feature?.properties?.routeId;
+        if (map === undefined || feature?.geometry.type !== 'Point' || typeof routeId !== 'string') return;
+        map.getCanvas().style.cursor = 'pointer';
+        const [longitude, latitude] = feature.geometry.coordinates as [number, number];
+        popup?.setLngLat([longitude, latitude]).setDOMContent(popupContentRef.current(routeId)).addTo(map);
+      });
+      map.on('mouseleave', POSITIONS_LAYER, () => {
+        if (map !== undefined) map.getCanvas().style.cursor = '';
+        popup?.remove();
+      });
+      // A click on a driver selects its route; a click anywhere else clears the selection.
+      map.on('click', (event) => {
+        if (map === undefined) return;
+        const hit = map.getLayer(POSITIONS_LAYER) === undefined ? []
+          : map.queryRenderedFeatures(event.point, { layers: [POSITIONS_LAYER] });
+        const routeId = hit[0]?.properties?.routeId;
+        selectFromMapRef.current(typeof routeId === 'string' ? routeId : null);
+      });
       map.on('error', () => setError('No se pudo cargar el mapa base. La lista de rutas sigue disponible.'));
     }).catch(() => setError('No se pudo inicializar el mapa. La lista de rutas sigue disponible.'));
     return () => {
       disposed = true;
+      popup?.remove();
       map?.remove();
       mapRef.current = null;
     };
-    // The map instance is created once; changing route data updates its GeoJSON source below.
+    // The map instance is created once; changing route data updates its GeoJSON sources below.
   }, []);
 
   useEffect(() => {
     const source = mapRef.current?.getSource(DATA_SOURCE) as GeoJSONSource | undefined;
     source?.setData(geoJson);
   }, [geoJson]);
+
+  useEffect(() => {
+    const source = mapRef.current?.getSource(TRACK_SOURCE) as GeoJSONSource | undefined;
+    source?.setData(trackGeoJson);
+  }, [trackGeoJson]);
+
+  // Fetch the selected route's path; refetch when deliveries or incidents change what is left.
+  useEffect(() => {
+    setTrack(null);
+    setLiveTrail([]);
+    if (selectedRouteId === null || client.getRouteTrack === undefined) return;
+    let active = true;
+    client.getRouteTrack(selectedRouteId)
+      .then((loaded) => { if (active) { setTrack({ ...loaded, routeId: selectedRouteId }); setLiveTrail([]); } })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [client, selectedRouteId, trackVersion]);
+
+  // Positions that arrive after the fetch extend the driven path without asking the API again.
+  const selectedPosition = snapshot.positions.find((position) => position.routeId === selectedRouteId);
+  useEffect(() => {
+    if (selectedPosition === undefined || track?.routeId !== selectedPosition.routeId) return;
+    const point = { latitude: selectedPosition.latitude, longitude: selectedPosition.longitude, recordedAt: selectedPosition.recordedAt };
+    setLiveTrail((current) => {
+      const last = current.at(-1) ?? track.traveled.at(-1);
+      return last !== undefined && Date.parse(last.recordedAt) >= Date.parse(point.recordedAt) ? current : [...current, point];
+    });
+  }, [selectedPosition, track]);
 
   const receiveMessage = useCallback((event: MessageEvent) => {
     try {
@@ -136,8 +237,11 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
         setSnapshot(raw);
         setConnection('connected');
         setError(null);
-        // Una posición no cambia los pedidos; otras novedades pueden cambiar el avance.
-        if (message.type === 'update' && message.kind !== 'position') void refreshDetails();
+        // Una posición no cambia los pedidos; otras novedades pueden cambiar el avance y lo pendiente.
+        if (message.type === 'update' && message.kind !== 'position') {
+          void refreshDetails();
+          setTrackVersion((version) => version + 1);
+        }
       }
     } catch {
       setError('Se recibió una actualización de seguimiento inválida.');
@@ -197,6 +301,30 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
     .sort((left, right) => Number(right.status === 'in_progress') - Number(left.status === 'in_progress'));
   const latestPositionByRoute = new Map(snapshot.positions.map((position) => [position.routeId, position]));
 
+  // A route that finished or left the snapshot can no longer be followed.
+  const selectionVisible = selectedRouteId === null || routes.some((route) => route.id === selectedRouteId);
+  useEffect(() => { if (!selectionVisible) setSelection(null); }, [selectionVisible]);
+
+  // Only a selection made on the map scrolls the list; a click on the card is already in view.
+  useEffect(() => {
+    if (selection?.from !== 'map') return;
+    cardRefs.current.get(selection.routeId)?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [selection]);
+
+  function selectFromList(route: TrackingRoute): void {
+    if (selectedRouteId === route.id) {
+      setSelection(null);
+      return;
+    }
+    setSelection({ routeId: route.id, from: 'list' });
+    const position = latestPositionByRoute.get(route.id);
+    const firstStop = route.stops.find((stop) => isCoordinate(stop.longitude, stop.latitude));
+    const center = position !== undefined ? [position.longitude, position.latitude] as [number, number]
+      : firstStop !== undefined ? [firstStop.longitude!, firstStop.latitude!] as [number, number] : undefined;
+    const map = mapRef.current;
+    if (map !== null && center !== undefined) map.flyTo({ center, zoom: Math.max(map.getZoom(), 13) });
+  }
+
   return (
     <section className="flex flex-col gap-6" aria-label="Torre de control">
       {error !== null && <ErrorNotice>{error}</ErrorNotice>}
@@ -207,6 +335,15 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
             <div className="absolute top-4 left-4 flex flex-col gap-2 rounded-lg border bg-background p-3 text-xs" aria-label="Leyenda del mapa">
               <span className="flex items-center gap-2"><span className="size-2.5 rounded-full" style={{ background: MAP_STOP_COLOR }} />Parada planificada</span>
               <span className="flex items-center gap-2"><img src="/motorcycle-marker.svg" alt="" className="size-4" />Última posición recibida</span>
+              {track !== null && (
+                <>
+                  <span className="flex items-center gap-2"><span className="h-1 w-4 rounded-full" style={{ background: TRAVELED_COLOR }} />Recorrido realizado</span>
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 border-t-2 border-dashed" style={{ borderColor: PENDING_COLOR }} />
+                    Recorrido pendiente{track.pendingSource === 'straight' ? ' (en línea recta)' : ''}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </Card>
@@ -223,9 +360,14 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
               </Empty>
             )}
             {routes.length > 0 && (
-              <ul className="flex flex-col gap-3">
+              <ul className="flex flex-col gap-3 p-1">
                 {routes.map((route) => (
-                  <ActiveRouteItem key={route.id} route={route} position={latestPositionByRoute.get(route.id)} details={details} />
+                  <ActiveRouteItem key={route.id} route={route} position={latestPositionByRoute.get(route.id)} details={details}
+                    selected={route.id === selectedRouteId} onSelect={() => selectFromList(route)}
+                    elementRef={(element) => {
+                      if (element === null) cardRefs.current.delete(route.id);
+                      else cardRefs.current.set(route.id, element);
+                    }} />
                 ))}
               </ul>
             )}
@@ -235,6 +377,26 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
       <p className="text-sm text-muted-foreground">La posición mostrada es la última recibida; no garantiza que el conductor esté allí ahora. ETA no disponible.</p>
     </section>
   );
+}
+
+/** Hover card for a driver marker. Built with text nodes only: names come from user data. */
+function popupContent(routeId: string, snapshot: TrackingSnapshot, details: RouteDetails): HTMLElement {
+  const route = snapshot.routes.find((item) => item.id === routeId);
+  const position = snapshot.positions.find((item) => item.routeId === routeId);
+  const { driver, plate } = routeCrew(details, routeId);
+  const container = document.createElement('div');
+  container.className = 'flex flex-col gap-0.5 text-xs';
+  const line = (text: string, className = '') => {
+    const element = document.createElement('span');
+    element.className = className;
+    element.textContent = text;
+    container.append(element);
+  };
+  line(driver ?? 'Conductor no disponible', 'font-medium text-sm');
+  line(`Placa ${plate ?? '—'}`, 'tabular-nums');
+  if (route !== undefined) line(`Ruta ${route.publicCode}`, 'tabular-nums');
+  if (position !== undefined) line(`Señal ${formatTimeAgo(position.receivedAt)}`, 'text-muted-foreground');
+  return container;
 }
 
 function loadImageElement(src: string): Promise<HTMLImageElement> {
@@ -298,6 +460,26 @@ function toFeatureCollection(snapshot: TrackingSnapshot): GeoJSON.FeatureCollect
         recordedAt: position.recordedAt, receivedAt: position.receivedAt } });
   }
   return { type: 'FeatureCollection', features };
+}
+
+/**
+ * Driven path (fetched trail plus live positions) and pending path of the selected route.
+ * A straight pending path starts again at the newest position, so it never lags behind the driver.
+ */
+export function toTrackCollection(track: SelectedTrack | null, liveTrail: readonly TrailPoint[]): GeoJSON.FeatureCollection<GeoJSON.LineString> {
+  if (track === null) return { type: 'FeatureCollection', features: [] };
+  const traveled = [...track.traveled, ...liveTrail];
+  const newest = traveled.at(-1);
+  const pending = track.pendingSource === 'straight' && newest !== undefined && track.pending.length > 0
+    ? [newest, ...track.pending.slice(1)] : track.pending;
+  const line = (kind: 'traveled' | 'pending', points: readonly { latitude: number; longitude: number }[]) => {
+    const coordinates = points.filter((point) => isCoordinate(point.longitude, point.latitude))
+      .map((point) => [point.longitude, point.latitude]);
+    return coordinates.length < 2 ? [] : [{
+      type: 'Feature' as const, geometry: { type: 'LineString' as const, coordinates }, properties: { kind, routeId: track.routeId },
+    }];
+  };
+  return { type: 'FeatureCollection', features: [...line('traveled', traveled), ...line('pending', pending)] };
 }
 
 function isCoordinate(longitude: number | null, latitude: number | null): longitude is number {

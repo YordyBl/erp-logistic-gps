@@ -175,6 +175,17 @@ describe.skipIf(url === null)('Driver route execution (PostgreSQL)', () => {
     await expect(positions.findLatestForRoutes(randomUUID(), [route.id])).resolves.toEqual([]);
     await expect(positions.pruneReceivedBefore('2026-10-28T00:00:00.000Z')).resolves.toBe(1);
     await expect(positions.pruneReceivedBefore('2026-10-28T00:00:00.000Z')).resolves.toBe(0);
+    // The trail keeps the newest positions up to the limit, returned oldest first and tenant-scoped.
+    const at = (minutes: number) => new Date(Date.parse(AT) + minutes * 60_000).toISOString();
+    for (const [minutes, latitude] of [[2, -12.07], [0, -12.05], [1, -12.06]] as const) {
+      await positions.record({ ...position, latitude, recordedAt: at(minutes), receivedAt: at(minutes) });
+    }
+    await expect(positions.findTrail(ctx.organizationId, route.id, 2)).resolves.toEqual([
+      { latitude: -12.06, longitude: -77.03, recordedAt: at(1) },
+      { latitude: -12.07, longitude: -77.03, recordedAt: at(2) },
+    ]);
+    await expect(positions.findTrail(randomUUID(), route.id, 10)).resolves.toEqual([]);
+    await source.query('DELETE FROM route_positions WHERE organization_id=$1', [ctx.organizationId]);
     const attempts = await source.query<{ id: string; order_id: string; attempt_number: number; status: string }[]>(
       `SELECT id, order_id, attempt_number, status FROM delivery_attempts
         WHERE organization_id=$1 AND route_id=$2 ORDER BY order_id`,

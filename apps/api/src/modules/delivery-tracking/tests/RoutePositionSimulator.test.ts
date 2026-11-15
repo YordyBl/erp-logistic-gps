@@ -7,6 +7,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([]),
       record: vi.fn().mockResolvedValue(true),
     };
@@ -31,6 +32,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([{
         organizationId: 'org', routeId: 'route', driverId: 'driver',
         startedAt: '2026-11-02T12:00:00.000Z', stops: [],
@@ -72,6 +74,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([route]),
       record: vi.fn().mockResolvedValue(true),
     };
@@ -108,6 +111,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([route]),
       record: vi.fn().mockResolvedValue(true),
     };
@@ -141,6 +145,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([route]),
       record: vi.fn().mockResolvedValue(recorded),
     };
@@ -175,6 +180,7 @@ describe('RoutePositionSimulator', () => {
     const store = {
       pruneReceivedBefore: vi.fn().mockResolvedValue(0),
       findLatestForRoutes: vi.fn().mockResolvedValue([]),
+      findTrail: vi.fn().mockResolvedValue([]),
       findActiveRoutes: vi.fn().mockResolvedValue([route]),
       record: vi.fn().mockResolvedValue(true),
     };

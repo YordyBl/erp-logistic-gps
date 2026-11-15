@@ -10,6 +10,7 @@ import { createDataSource } from './infrastructure/database/data-source.js';
 import { composeApiModules } from './infrastructure/composition/composition-root.js';
 import { SystemClock } from './shared/clock.js';
 import { RoutePositionSimulator } from './modules/delivery-tracking/application/RoutePositionSimulator.js';
+import { GetRouteTrackUseCase } from './modules/delivery-tracking/application/GetRouteTrackUseCase.js';
 import { SimulatedPositionProvider } from './modules/delivery-tracking/application/SimulatedPositionProvider.js';
 import { RoutePositionTypeOrmStore } from './modules/delivery-tracking/infrastructure/RoutePositionTypeOrmStore.js';
 import { ValhallaRouteGeometryProvider } from './modules/delivery-tracking/infrastructure/ValhallaRouteGeometryProvider.js';
@@ -123,7 +124,15 @@ const trackingHubPort = {
     return trackingHubRef.current?.publish(organizationId, kind) ?? Promise.resolve();
   },
 };
-const app = buildApp({ ...dependencies, trackingHub: trackingHubPort, readiness, logger });
+const routeTrack = new GetRouteTrackUseCase({
+  findRoute: async (organizationId, routeId) =>
+    (await composed.deliveryRoutes.getRoute.execute({ organizationId, routeId })).route,
+  findOrderStatus: async (orderId) =>
+    (await dependencies.deliveryOrders.repository.findById(orderId))?.status ?? null,
+  findTrail: (organizationId, routeId, limit) => positionStore.findTrail(organizationId, routeId, limit),
+  geometry: geometryProvider,
+});
+const app = buildApp({ ...dependencies, trackingHub: trackingHubPort, routeTrack, readiness, logger });
 const server = createServer(app);
 
 const trackingHub = new TrackingWebSocketHub(server, {

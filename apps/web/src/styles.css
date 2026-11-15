@@ -251,3 +251,17 @@
 .doc-form [data-slot="popover-trigger"][data-empty="true"]:not(:focus, :focus-visible, [data-state="open"]) :not(svg) {
   color: transparent;
 }
+/* Driver hover card on the control tower map, in the app theme instead of maplibre's white. */
+.control-tower-popup .maplibregl-popup-content {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.12);
+}
+
+.control-tower-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--border); }
+.control-tower-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--border); }
+.control-tower-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--border); }
+.control-tower-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--border); }

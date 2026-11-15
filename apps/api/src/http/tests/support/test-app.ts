@@ -112,6 +112,7 @@ export interface TestAppOptions {
   readonly cookieSecure?: boolean;
   readonly loginRateLimit?: LoginRateLimitConfig;
   readonly trackingHub?: AppDependencies['trackingHub'];
+  readonly routeTrack?: AppDependencies['routeTrack'];
   readonly deliveryExecution?: AppDependencies['deliveryExecution'];
 }
 
@@ -193,6 +194,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     deliveryOrders: module,
     ...(deliveryRoutes === undefined ? {} : { deliveryRoutes }),
     ...(options.deliveryExecution === undefined ? {} : { deliveryExecution: options.deliveryExecution }),
+    ...(options.routeTrack === undefined ? {} : { routeTrack: options.routeTrack }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,

@@ -26,6 +26,8 @@ import {
   type DeliveryOrdersHttpPorts,
 } from './routes/delivery-orders.routes.js';
 import { createDeliveryRoutesRouter } from './routes/delivery-routes.routes.js';
+import { createTrackingRouter } from './routes/tracking.routes.js';
+import { HttpError } from './errors.js';
 import { createDeliveryExecutionRouter } from './routes/delivery-execution.routes.js';
 import type { DeliveryExecutionModule } from '../modules/delivery-execution/composition/composition-root.js';
 import {
@@ -90,6 +92,8 @@ export interface AppDependencies {
   readonly deliveryExecution?: DeliveryExecutionModule;
   /** Optional for HTTP-only test callers; production always binds the tracking socket hub. */
   readonly trackingHub?: Pick<TrackingWebSocketHub, 'issueTicket' | 'publish'>;
+  /** Driven and pending path of one route; without it the track endpoint answers 503. */
+  readonly routeTrack?: Pick<import('../modules/delivery-tracking/application/GetRouteTrackUseCase.js').GetRouteTrackUseCase, 'execute'>;
   /** Tenant-scoped dashboard read model; optional only for legacy HTTP test callers. */
   readonly dispatchDashboard?: DispatchDashboardQuery;
   /** Identity use cases and ports used by the auth and user routes. */
@@ -119,6 +123,7 @@ export function buildApp({
   deliveryRoutes,
   deliveryExecution,
   trackingHub,
+  routeTrack,
   dispatchDashboard,
   auth,
   catalogs,
@@ -165,6 +170,11 @@ export function buildApp({
     }, request.header('origin'));
     response.status(201).set('Cache-Control', 'private, no-store').json({ data: issued });
   });
+  app.use('/api/v1/tracking', createTrackingRouter({
+    getRouteTrack: routeTrack ?? {
+      execute: async () => { throw new HttpError(503, 'TRACKING_UNAVAILABLE', 'Route tracking is not available'); },
+    },
+  }, authenticate));
   app.use(
     '/api/v1/auth',
     createAuthRouter({

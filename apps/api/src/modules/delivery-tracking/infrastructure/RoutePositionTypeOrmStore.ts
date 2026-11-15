@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
+import type { TrailPoint } from '../application/GetRouteTrackUseCase.js';
 import type { PositionSource, RoutePositionContext, RoutePosition } from '../application/ports/PositionProvider.js';
 
 export interface RoutePositionStore {
   findActiveRoutes(): Promise<readonly RoutePositionContext[]>;
   findLatestForRoutes(organizationId: string, routeIds: readonly string[]): Promise<readonly RoutePosition[]>;
+  /** The latest `limit` positions of one route, oldest first. */
+  findTrail(organizationId: string, routeId: string, limit: number): Promise<readonly TrailPoint[]>;
   record(position: RoutePosition): Promise<boolean>;
   pruneReceivedBefore(cutoff: string): Promise<number>;
 }
@@ -96,6 +99,24 @@ export class RoutePositionTypeOrmStore implements RoutePositionStore {
       ...route,
       stops: route.stops,
       ...(route.origin === undefined ? {} : { origin: route.origin }),
+    }));
+  }
+
+  async findTrail(organizationId: string, routeId: string, limit: number): Promise<readonly TrailPoint[]> {
+    // Newest `limit` rows through the (organization, route, recorded_at DESC) index, then oldest first.
+    const rows = await this.dataSource.query<{ latitude: string | number; longitude: string | number; recordedAt: Date | string }[]>(`
+      SELECT latitude, longitude, "recordedAt" FROM (
+        SELECT latitude, longitude, recorded_at AS "recordedAt"
+        FROM route_positions
+        WHERE organization_id=$1 AND route_id=$2
+        ORDER BY recorded_at DESC
+        LIMIT $3
+      ) recent
+      ORDER BY "recordedAt" ASC`, [organizationId, routeId, limit]);
+    return rows.map((row) => ({
+      latitude: Number(row.latitude),
+      longitude: Number(row.longitude),
+      recordedAt: new Date(row.recordedAt).toISOString(),
     }));
   }
 

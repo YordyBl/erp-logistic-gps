@@ -63,6 +63,14 @@ export interface EditDeliveryOrderInput {
   readonly packages?: CreateDeliveryOrderInput['packages'];
 }
 
+/** Path a route already drove (GPS positions) and the path still ahead, for the control tower map. */
+export interface RouteTrack {
+  readonly traveled: readonly { readonly latitude: number; readonly longitude: number; readonly recordedAt: string }[];
+  readonly pending: readonly { readonly latitude: number; readonly longitude: number }[];
+  /** `roads` when a routing engine drew `pending`; `straight` when it joins the stops directly. */
+  readonly pendingSource: 'roads' | 'straight';
+}
+
 export interface DeliveryOrderImportIssue {
   readonly rowNumber: number;
   readonly field: string;
@@ -412,6 +420,10 @@ export class ApiClient {
 
   async createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }> {
     return this.requestData('/tracking/ticket', { method: 'POST', body: '{}' });
+  }
+
+  async getRouteTrack(routeId: string): Promise<RouteTrack> {
+    return this.requestData(`/tracking/routes/${encodeURIComponent(routeId)}/track`);
   }
 
   async getRouteSimulation(): Promise<RouteSimulationAvailability> {
