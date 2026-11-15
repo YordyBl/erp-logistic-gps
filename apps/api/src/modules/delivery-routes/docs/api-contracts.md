@@ -45,5 +45,61 @@ another active route.
 For `PATCH`, 409 also covers a driver or vehicle already active on another
 route; reassignment is allowed only while the route is `planned`.
 
-No route-list, editing of stops, redespacho, execution or tracking endpoint
-is claimed by the planning slice. OpenAPI remains the machine-readable source.
+## `GET /api/v1/delivery-routes`
+
+ADMIN or DISPATCHER. Lists one page of the organization's planned,
+in-progress and completed routes (cancelled routes are never listed), each one
+a full route DTO with its ordered stops; stops and links are loaded only for
+the page's routes. Offset pagination with total.
+
+| Parameter | Meaning |
+|---|---|
+| `page` | 1-based, default `1`. A page past the end returns `data: []` with the real `total`. |
+| `pageSize` | `1`–`100`, default `20`. |
+| `q` | Case-insensitive substring over the route `publicCode`, the driver's full name and the vehicle plate (same organization). Trimmed; `%` and `_` match literally. |
+| `sort` | `publicCode`, `plannedDate` or `status`, with `:asc`/`:desc` (bare field = ascending). Default `plannedDate:desc`; `createdAt` then `id`, in the same direction, break ties. |
+| `status` | Comma-separated `planned`, `in_progress`, `completed`. |
+| `ids` | Comma-separated route UUIDs (max 200). Foreign ids simply do not match. |
+| `driverId`, `vehicleId` | One UUID each. |
+| `plannedFrom`, `plannedTo` | Inclusive `YYYY-MM-DD` bounds on `plannedDate`; `plannedTo` may not precede `plannedFrom`. |
+
+Filters combine with AND. Response `200`:
+
+```json
+{
+  "data": [<route>, ...],
+  "meta": {
+    "page": 1, "pageSize": 20, "total": 12,
+    "counts": { "status": { "planned": 4, "in_progress": 1, "completed": 7 } }
+  }
+}
+```
+
+`counts.status` applies `q` and every filter except `status`, and lists every
+status with `0` when nothing matches. Unknown parameters, a sort outside the
+whitelist, `pageSize > 100`, an unknown status or a malformed id or date return
+`400 DELIVERY_ROUTE_INVALID_INPUT` with `details.issues` (`path`, `message`).
+
+## `GET /api/v1/vehicles/route-stats`
+
+ADMIN or DISPATCHER. Per-vehicle route aggregates for the fleet screen,
+computed in SQL (`VehicleRouteStatsTypeOrmQuery`); only planned, in-progress
+and completed routes count. `months` (`1`–`12`, default `6`) sets the length of
+the monthly series, which ends with the current month in America/Lima and
+groups routes by planned month. Every vehicle of the organization is listed,
+with zeros when it never had a route.
+
+```json
+{ "data": [{
+  "vehicleId": "44444444-4444-4444-8444-444444444444",
+  "routes": 3, "completed": 2, "stops": 7, "orders": 8, "lastRouteDay": "2026-11-06",
+  "monthly": [{ "month": "2026-06", "routes": 0 }, "...", { "month": "2026-11", "routes": 2 }]
+}] }
+```
+
+`orders` counts every order link of the vehicle's routes (an order replanned
+after a return counts on each route that carried it). Invalid or unknown
+parameters return `400 VEHICLE_INVALID_INPUT`.
+
+No editing of stops, redespacho, execution or tracking endpoint is claimed by
+the planning slice. OpenAPI remains the machine-readable source.

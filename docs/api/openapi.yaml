@@ -400,25 +400,78 @@ paths:
     get:
       tags: [delivery-routes]
       operationId: listDeliveryRoutes
-      summary: List routes and progress for the authenticated organization
-      description: ADMIN or DISPATCHER may list tenant-scoped planned, in-progress and completed routes.
+      summary: List one page of routes for the authenticated organization
+      description: |
+        ADMIN or DISPATCHER. Returns one page of the organization's planned,
+        in-progress and completed routes (cancelled routes are never listed),
+        each with its ordered stops, as `{ data, meta }`. Filters combine with
+        AND. `meta.counts.status` lists every status (0 when none match) and
+        applies every filter except `status`. `q` matches the route code, the
+        driver's full name and the vehicle plate. The default sort is
+        `plannedDate:desc`; `createdAt` then `id`, in the same direction, break
+        ties.
+
+        Unknown query parameters, a sort outside the whitelist,
+        `pageSize > 100` and malformed filters are rejected with 400
+        (`DELIVERY_ROUTE_INVALID_INPUT`, with `details.issues`).
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SearchText'
+        - name: sort
+          in: query
+          required: false
+          description: `field:asc|desc` (a bare field sorts ascending). Fields `publicCode`, `plannedDate`, `status`.
+          schema:
+            type: string
+            default: 'plannedDate:desc'
+            pattern: '^(publicCode|plannedDate|status)(:(asc|desc))?$'
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated route statuses (`planned`, `in_progress`, `completed`).
+          schema:
+            type: string
+          example: planned,in_progress
+        - $ref: '#/components/parameters/IdList'
+        - name: driverId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: vehicleId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: plannedFrom
+          in: query
+          required: false
+          description: Inclusive lower bound on `plannedDate`.
+          schema:
+            type: string
+            format: date
+        - name: plannedTo
+          in: query
+          required: false
+          description: Inclusive upper bound on `plannedDate`; may not precede `plannedFrom`.
+          schema:
+            type: string
+            format: date
       responses:
         '200':
-          description: Tenant-scoped planned, in-progress and completed routes.
+          description: One page of tenant routes with the status facet counts.
           content:
             application/json:
               schema:
-                type: object
-                required: [data]
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/DeliveryRouteResponse/properties/data'
+                $ref: '#/components/schemas/DeliveryRoutePage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1983,6 +2036,47 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/vehicles/route-stats:
+    get:
+      tags: [vehicles]
+      operationId: getVehicleRouteStats
+      summary: Route totals and monthly series per vehicle (ADMIN or DISPATCHER)
+      description: |
+        Aggregated in SQL for every vehicle of the caller organization (zeros
+        when a vehicle never had a route). Only planned, in-progress and
+        completed routes count. `monthly` has `months` entries ending with the
+        current month in America/Lima, grouped by planned month. `orders`
+        counts every order link of the vehicle's routes.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - name: months
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 12
+            default: 6
+      responses:
+        '200':
+          description: Route stats of every vehicle of the organization.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleRouteStatsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/vehicles/{vehicleId}:
     get:
       tags: [vehicles]
@@ -3045,6 +3139,65 @@ components:
           counts:
             status: { created: 0, planned: 0, assigned: 0, in_transit: 0, delivered: 0, returned: 0, cancelled: 0 }
             timeWindow: { AM: 0, PM: 0 }
+    DeliveryRoutePage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeliveryRouteResponse/properties/data'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+      example:
+        data: []
+        meta:
+          page: 1
+          pageSize: 20
+          total: 0
+          counts:
+            status: { planned: 0, in_progress: 0, completed: 0 }
+    VehicleRouteStatsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [vehicleId, routes, completed, stops, orders, lastRouteDay, monthly]
+            properties:
+              vehicleId:
+                type: string
+                format: uuid
+              routes:
+                type: integer
+                minimum: 0
+              completed:
+                type: integer
+                minimum: 0
+              stops:
+                type: integer
+                minimum: 0
+              orders:
+                type: integer
+                minimum: 0
+              lastRouteDay:
+                type: [string, 'null']
+                format: date
+                description: Planned day of the latest route, or null without routes.
+              monthly:
+                type: array
+                items:
+                  type: object
+                  required: [month, routes]
+                  properties:
+                    month:
+                      type: string
+                      pattern: '^\d{4}-\d{2}$'
+                    routes:
+                      type: integer
+                      minimum: 0
     DeliveryOrderImportResponse:
       type: object
       required: [data]

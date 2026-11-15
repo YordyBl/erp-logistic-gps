@@ -63,7 +63,7 @@ export interface PageResponse<T> {
  * Query-string integer in `[min, max]`; absent uses `fallback`. Only plain
  * digits are accepted (`z.coerce` would also take `1e1`, ` 2` or `''`).
  */
-function queryInt(min: number, max: number, fallback: number) {
+export function queryInt(min: number, max: number, fallback: number) {
   return z
     .string()
     .regex(/^\d{1,9}$/, 'must be a positive integer')

@@ -19,14 +19,25 @@ const VehicleRoutesChart = lazy(() => import('./VehicleRoutesChart.js'));
 const NUMBER = new Intl.NumberFormat('es-PE');
 const SINCE = new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeZone: 'America/Lima' });
 
-/** Detalle del vehículo elegido: actividad por mes, ficha, totales e historial de rutas. */
-export function VehicleDetail({ vehicle, stats, monthly, routes, drivers, routesError, onEdit }: {
+/**
+ * Detalle del vehículo elegido: actividad por mes, ficha, totales e historial de rutas. Los totales y la
+ * serie vienen agregados del servidor; el historial es solo la página más reciente de sus rutas.
+ */
+export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, drivers, routesError, historyError, historyLoading = false, onEdit }: {
   readonly vehicle: Vehicle;
   readonly stats: VehicleStats;
   readonly monthly: readonly MonthlyRoutes[];
+  /** Las rutas más recientes del vehículo (una página). */
   readonly routes: readonly DispatchRoute[];
+  /** Total de rutas del vehículo en el servidor; si supera las mostradas se avisa. */
+  readonly routesTotal: number;
   readonly drivers: ReadonlyMap<string, Driver>;
+  /** No llegaron los totales ni la serie mensual. */
   readonly routesError: boolean;
+  /** No llegó el historial de rutas. */
+  readonly historyError: boolean;
+  /** El historial del vehículo aún no llega. */
+  readonly historyLoading?: boolean;
   readonly onEdit: () => void;
 }) {
   const active = vehicle.status === 'active';
@@ -88,22 +99,27 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, drivers, routes
       <Card>
         <CardHeader>
           <CardTitle>Historial de rutas</CardTitle>
-          <CardDescription>Rutas asignadas a {vehicle.plate}, de la más reciente a la más antigua.</CardDescription>
+          <CardDescription>
+            Rutas asignadas a {vehicle.plate}, de la más reciente a la más antigua.
+            {!historyLoading && !historyError && routesTotal > routes.length && ` Mostrando las ${NUMBER.format(routes.length)} más recientes de ${NUMBER.format(routesTotal)}.`}
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <RouteHistory routes={routes} drivers={drivers} routesError={routesError} />
+          {historyLoading
+            ? <Skeleton className="h-24 w-full" aria-label="Cargando historial de rutas" />
+            : <RouteHistory routes={routes} drivers={drivers} historyError={historyError} />}
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function RouteHistory({ routes, drivers, routesError }: {
+function RouteHistory({ routes, drivers, historyError }: {
   readonly routes: readonly DispatchRoute[];
   readonly drivers: ReadonlyMap<string, Driver>;
-  readonly routesError: boolean;
+  readonly historyError: boolean;
 }) {
-  if (routesError) return <ErrorNotice>No se pudo cargar el historial de rutas. Actualiza la página para reintentar.</ErrorNotice>;
+  if (historyError) return <ErrorNotice>No se pudo cargar el historial de rutas. Actualiza la página para reintentar.</ErrorNotice>;
   if (routes.length === 0) {
     return (
       <Empty className="border">

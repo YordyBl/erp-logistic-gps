@@ -1,3 +1,28 @@
+import type { PageCriteria, PageResult } from '../../../../http/pagination.js';
+
+/** Statuses the planner lists (cancelled routes are never listed). */
+export const ROUTE_STATUSES = ['planned', 'in_progress', 'completed'] as const;
+export type RouteStatus = (typeof ROUTE_STATUSES)[number];
+
+/** Fields `listPage` may sort by; `createdAt` then `id`, in the same direction, always break ties. */
+export const ROUTE_SORT_FIELDS = ['publicCode', 'plannedDate', 'status'] as const;
+export type RouteSortField = (typeof ROUTE_SORT_FIELDS)[number];
+
+/**
+ * One page of a tenant's routes. Filters are optional and combine with AND;
+ * `q` matches (case-insensitive substring) the route code, the driver's full
+ * name and the vehicle plate. `plannedFrom`/`plannedTo` are inclusive
+ * `YYYY-MM-DD` dates.
+ */
+export interface RoutePageCriteria extends PageCriteria<RouteSortField> {
+  readonly status?: readonly RouteStatus[];
+  readonly ids?: readonly string[];
+  readonly driverId?: string;
+  readonly vehicleId?: string;
+  readonly plannedFrom?: string;
+  readonly plannedTo?: string;
+}
+
 /** Ordered stop data and actor/tenant identifiers are validated before persistence. */
 export interface PlannedStop {
   readonly id: string;
@@ -23,7 +48,7 @@ export interface PlannedRoute {
   readonly vehicleId: string;
   readonly origin?: PlannedRouteOrigin;
   readonly simulatedCompletionEnabled?: boolean;
-  readonly status: 'planned' | 'in_progress' | 'completed';
+  readonly status: RouteStatus;
   readonly stops: readonly PlannedStop[];
   readonly createdAt: string;
   readonly startedAt?: string;
@@ -52,6 +77,12 @@ export interface RoutePlanningStore {
    */
   plan(route: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute>;
   list(organizationId: string): Promise<readonly PlannedRoute[]>;
+  /**
+   * One page of the tenant's routes (stops loaded for the page only) with the
+   * filtered total and `counts.status`, which applies every filter except
+   * `status` and lists every status, with 0 when nothing matches.
+   */
+  listPage(organizationId: string, criteria: RoutePageCriteria): Promise<PageResult<PlannedRoute>>;
   findById(organizationId: string, routeId: string): Promise<PlannedRoute | null>;
   /** Active drivers without a linked account: the only drivers a simulated route may use. */
   listSimulationEligibleDriverIds(organizationId: string): Promise<readonly string[]>;

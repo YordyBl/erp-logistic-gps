@@ -232,6 +232,19 @@ export interface DispatchRoute {
   }[];
 }
 
+/** Actividad de rutas de un vehículo (`GET /vehicles/route-stats`); las rutas canceladas no cuentan. */
+export interface VehicleRouteStats {
+  readonly vehicleId: string;
+  readonly routes: number;
+  readonly completed: number;
+  readonly stops: number;
+  readonly orders: number;
+  /** Día planificado (`YYYY-MM-DD`) de la ruta más reciente, o `null` si nunca salió. */
+  readonly lastRouteDay: string | null;
+  /** Rutas por mes planificado (`YYYY-MM`), del más antiguo al mes actual en Lima. */
+  readonly monthly: readonly { readonly month: string; readonly routes: number }[];
+}
+
 /** Whether route simulation is available (development only) and which drivers it may use. */
 export interface RouteSimulationAvailability {
   readonly enabled: boolean;
@@ -453,8 +466,19 @@ export class ApiClient {
     return this.requestData('/delivery-routes/mine');
   }
 
-  async listDispatchRoutes(): Promise<readonly DispatchRoute[]> {
-    return this.requestData('/delivery-routes');
+  /**
+   * Una página de rutas con sus paradas. Filtros: `status`, `ids`, `driverId`, `vehicleId`,
+   * `plannedFrom`/`plannedTo` (`YYYY-MM-DD`, inclusivos); `q` busca en el código, el conductor y la
+   * placa; orden por `publicCode`, `plannedDate` (por defecto `plannedDate:desc`) o `status`.
+   * `meta.counts` trae `status`.
+   */
+  listDispatchRoutesPage(params: PageParams, signal?: AbortSignal): Promise<Page<DispatchRoute>> {
+    return this.requestPage('/delivery-routes', params, signal);
+  }
+
+  /** Totales y serie mensual de rutas por vehículo, agregados en el servidor (1 a 12 meses, por defecto 6). */
+  async getVehicleRouteStats(months?: number): Promise<readonly VehicleRouteStats[]> {
+    return this.requestData(`/vehicles/route-stats${buildQuery({ months })}`);
   }
 
   async getDispatchDashboardSummary(): Promise<DispatchDashboardSummary> {
@@ -590,9 +614,9 @@ export class ApiClient {
   /**
    * Descarga todos los pedidos recorriendo las páginas de 100 en 100.
    *
-   * @deprecated Solo para las pantallas que aún trabajan con el catálogo completo
-   * (Planificación, detalle de rutas/Dashboard, Bóveda y Evidencias). Las fases 3 y 5 de la
-   * paginación las pasan a `listDeliveryOrdersPage` (con `ids`) y eliminan este método.
+   * @deprecated Solo para las pantallas que aún trabajan con el catálogo completo (Bóveda y
+   * Evidencias). La fase 5 de la paginación las pasa a su endpoint propio o a
+   * `listDeliveryOrdersPage` (con `ids`) y elimina este método.
    */
   async listDeliveryOrders(): Promise<readonly DeliveryOrder[]> {
     const pageSize = 100;

@@ -3,7 +3,7 @@ import { ArrowDown, ArrowLeftRight, ArrowUp, ExternalLink, Eye, Plus, RefreshCw,
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
-  CreateDispatchRouteInput, DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver,
+  CreateDispatchRouteInput, DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver, Page, PageParams,
   RouteSimulationAvailability, Vehicle,
 } from '../api/client.js';
 import { RowActions, SortableHeader, TableProgress } from '../components/data-table/columnHelpers.js';
@@ -23,12 +23,16 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../components/ui/field.js';
 import { Input } from '../components/ui/input.js';
 import { Separator } from '../components/ui/separator.js';
+import { SearchInput } from '../components/SearchInput.js';
 import { ORDER_STATUS_LABELS, ROUTE_BADGES, ROUTE_STATUS_LABELS } from '../delivery/orderStatus.js';
+import { useDebouncedValue } from '../hooks/use-debounced-value.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { formatPlannedDate } from '../lib/dates.js';
 import { countLabel, formatDateTime, initials } from '../lib/format.js';
 import {
   googleMapsPlaceUrl, googleMapsRouteUrl, mapLinkErrorMessage, mapLinkFailureMessage, type MapPoint,
 } from '../lib/googleMaps.js';
+import { fetchByIds, routeOrderIds } from './routes/routeDetails.js';
 import { RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 
@@ -45,9 +49,16 @@ const ROUTE_STATUS_FILTER: DataTableFilter = {
   options: (['planned', 'in_progress', 'completed'] as const).map((status) => ({ value: status, label: ROUTE_STATUS_LABELS[status] })),
 };
 
+/** `columnId` ordenable de la tabla de rutas → campo de `sort` en `GET /delivery-routes`. */
+const ROUTE_SORT_FIELDS: Readonly<Record<string, string>> = { code: 'publicCode', status: 'status' };
+/** `columnId` de faceta → parámetro de `GET /delivery-routes` (y clave de `meta.counts`). */
+const ROUTE_FILTER_PARAMS: Readonly<Record<string, string>> = { status: 'status' };
+/** Pedidos elegibles que muestra el selector de paradas; si hay más, se pide refinar la búsqueda. */
+const PICKER_PAGE_SIZE = 50;
+
 interface DispatchClient {
-  listDispatchRoutes(): Promise<readonly DispatchRoute[]>;
-  listDeliveryOrders(): Promise<readonly DeliveryOrder[]>;
+  listDispatchRoutesPage(params: PageParams, signal?: AbortSignal): Promise<Page<DispatchRoute>>;
+  listDeliveryOrdersPage(params: PageParams, signal?: AbortSignal): Promise<Page<DeliveryOrder>>;
   listDrivers(): Promise<readonly Driver[]>;
   listVehicles(): Promise<readonly Vehicle[]>;
   createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute>;
@@ -73,8 +84,24 @@ function vehicleOptions(vehicles: readonly Vehicle[]) {
 }
 
 export function DispatchPlanningPage({ client }: { readonly client: DispatchClient }) {
-  const [routes, setRoutes] = useState<readonly DispatchRoute[]>([]);
-  const [orders, setOrders] = useState<readonly DeliveryOrder[]>([]);
+  const table = useServerTable<DispatchRoute>(
+    (params, signal) => client.listDispatchRoutesPage(params, signal),
+    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS },
+  );
+  const { rows: routes, meta, reload: reloadRoutes } = table;
+  // Pedidos de las paradas de la página visible, para su avance y su detalle.
+  const [routeOrders, setRouteOrders] = useState<ReadonlyMap<string, DeliveryOrder>>(new Map());
+  // Selector de paradas: pedidos creados o devueltos que coinciden con la búsqueda, una página.
+  const [pickerQuery, setPickerQuery] = useState('');
+  const pickerSearch = useDebouncedValue(pickerQuery.trim(), 300);
+  const [picker, setPicker] = useState<Page<DeliveryOrder> | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(true);
+  const [pickerFailed, setPickerFailed] = useState(false);
+  const [pickerToken, setPickerToken] = useState(0);
+  // Total de pedidos por asignar sin búsqueda, para la cabecera.
+  const [eligibleTotal, setEligibleTotal] = useState<number | null>(null);
+  // Los pedidos elegidos se conservan aunque salgan de los resultados del selector.
+  const [selectedOrders, setSelectedOrders] = useState<ReadonlyMap<string, DeliveryOrder>>(new Map());
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -96,34 +123,74 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
   const [showMissing, setShowMissing] = useState(false);
   const [history, setHistory] = useState<Record<string, readonly DeliveryOrderStatusHistory[]>>({});
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [catalogsLoading, setCatalogsLoading] = useState(true);
+  const [catalogsFailed, setCatalogsFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyRouteId, setBusyRouteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setLoadFailed(false);
-    setError(null);
+  // Conductores y vehículos siguen siendo catálogos completos.
+  const loadCatalogs = useCallback(async () => {
+    setCatalogsLoading(true);
+    setCatalogsFailed(false);
     try {
-      const [loadedRoutes, loadedOrders, loadedDrivers, loadedVehicles] = await Promise.all([
-        client.listDispatchRoutes(), client.listDeliveryOrders(), client.listDrivers(), client.listVehicles(),
-      ]);
-      setRoutes(loadedRoutes);
-      setOrders(loadedOrders);
+      const [loadedDrivers, loadedVehicles] = await Promise.all([client.listDrivers(), client.listVehicles()]);
       setDrivers(loadedDrivers);
       setVehicles(loadedVehicles);
     } catch {
-      setLoadFailed(true);
-      setError('No se pudo cargar la información de despacho. Comprueba la conexión e inténtalo de nuevo.');
+      setCatalogsFailed(true);
     } finally {
-      setLoading(false);
+      setCatalogsLoading(false);
     }
   }, [client]);
 
-  useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => { void loadCatalogs(); }, [loadCatalogs]);
+
+  const reloadPicker = useCallback(() => setPickerToken((token) => token + 1), []);
+  const refresh = () => {
+    setError(null);
+    reloadRoutes();
+    reloadPicker();
+    void loadCatalogs();
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setPickerLoading(true);
+    client.listDeliveryOrdersPage({
+      status: ['created', 'returned'], pageSize: PICKER_PAGE_SIZE, sort: 'createdAt:asc',
+      ...(pickerSearch === '' ? {} : { q: pickerSearch }),
+    }, controller.signal).then((page) => {
+      if (controller.signal.aborted) return;
+      setPicker(page);
+      setPickerFailed(false);
+      if (pickerSearch === '') setEligibleTotal(page.meta.total);
+      setPickerLoading(false);
+    }, () => {
+      if (controller.signal.aborted) return;
+      setPickerFailed(true);
+      setPickerLoading(false);
+    });
+    return () => controller.abort();
+  }, [client, pickerSearch, pickerToken]);
+
+  // Tras cada página de rutas se piden, por `ids`, solo los pedidos de sus paradas.
+  useEffect(() => {
+    const ids = routeOrderIds(routes);
+    if (ids.length === 0) return undefined;
+    const controller = new AbortController();
+    fetchByIds((params, signal) => client.listDeliveryOrdersPage(params, signal), ids, controller.signal).then((loaded) => {
+      if (!controller.signal.aborted) setRouteOrders(new Map(loaded.map((order) => [order.id, order])));
+    }, () => {
+      // Sin los pedidos, el avance queda en cero, pero las rutas se siguen viendo.
+    });
+    return () => controller.abort();
+  }, [client, routes]);
+
+  const loadFailed = table.error !== null || catalogsFailed;
+  const loadError = loadFailed ? 'No se pudo cargar la información de despacho. Comprueba la conexión e inténtalo de nuevo.' : null;
+  const eligibleOrders = picker?.data ?? [];
 
   // Simulation availability is optional: a missing method or a failed request
   // simply hides the controls instead of blocking regular planning.
@@ -137,7 +204,6 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     return () => { cancelled = true; };
   }, [client]);
 
-  const eligibleOrders = orders.filter((order) => order.status === 'created' || order.status === 'returned');
   const activeDrivers = drivers.filter((driver) => driver.status === 'active');
   const simulating = simulation.enabled && simulate;
   const selectableDrivers = simulating
@@ -149,7 +215,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     if (checked && driverId !== '' && !simulation.eligibleDriverIds.includes(driverId)) setDriverId('');
   }
   const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
-  const orderById = new Map(orders.map((order) => [order.id, order]));
+  const orderById = selectedOrders;
   // Stops in visiting order (and the previewed origin of a simulation) as one Google Maps route.
   const plannedRouteLink = googleMapsRouteUrl([
     ...(simulating && originPoint !== null ? [originPoint] : []),
@@ -160,10 +226,17 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     }),
   ]);
 
-  function toggleOrder(orderId: string, checked: boolean) {
+  function toggleOrder(order: DeliveryOrder | string, checked: boolean) {
+    const orderId = typeof order === 'string' ? order : order.id;
     setStopOrderIds((current) => checked
       ? (current.includes(orderId) ? current : [...current, orderId])
       : current.filter((id) => id !== orderId));
+    setSelectedOrders((current) => {
+      const next = new Map(current);
+      if (checked && typeof order !== 'string') next.set(orderId, order);
+      else if (!checked) next.delete(orderId);
+      return next;
+    });
   }
 
   function changeOriginLink(value: string) {
@@ -238,15 +311,15 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
         } : {}),
         stops: stopOrderIds.map((orderId, index) => ({ sequence: index + 1, orderId })),
       });
-      // A simulated route starts at planning, so its orders are already in transit.
-      const nextOrderStatus = created.simulatedCompletionEnabled === true ? 'in_transit' : 'assigned';
-      setRoutes((current) => [...current, created]);
-      setOrders((current) => current.map((order) => stopOrderIds.includes(order.id)
-        ? { ...order, status: nextOrderStatus } : order));
+      // The new route and its orders' new status come from the server.
+      reloadRoutes();
+      reloadPicker();
       setPlannedDate('');
       setDriverId('');
       setVehicleId('');
       setStopOrderIds([]);
+      setSelectedOrders(new Map());
+      setPickerQuery('');
       setSimulate(false);
       setOriginAddress('');
       changeOriginLink('');
@@ -277,7 +350,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     setError(null);
     try {
       const updated = await client.reassignDispatchRoute(route.id, changes);
-      setRoutes((current) => current.map((item) => item.id === updated.id ? updated : item));
+      reloadRoutes();
+      reloadPicker();
       setNotice(`Recursos de ${updated.publicCode} actualizados.`);
     } catch (cause) {
       setError(cause instanceof Error ? `No se pudo reasignar la ruta. ${cause.message}` : 'No se pudo reasignar la ruta.');
@@ -286,15 +360,12 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     }
   }
 
-  const routeRows = useMemo<readonly RouteRow[]>(() => {
-    const orderMap = new Map(orders.map((order) => [order.id, order]));
-    return routes.map((route) => ({
-      route,
-      progress: summarizeRoute(route, orderMap),
-      driver: drivers.find((driver) => driver.id === route.driverId)?.fullName ?? 'Conductor no disponible',
-      plate: vehicles.find((vehicle) => vehicle.id === route.vehicleId)?.plate ?? 'Vehículo no disponible',
-    }));
-  }, [drivers, orders, routes, vehicles]);
+  const routeRows = useMemo<readonly RouteRow[]>(() => routes.map((route) => ({
+    route,
+    progress: summarizeRoute(route, routeOrders),
+    driver: drivers.find((driver) => driver.id === route.driverId)?.fullName ?? 'Conductor no disponible',
+    plate: vehicles.find((vehicle) => vehicle.id === route.vehicleId)?.plate ?? 'Vehículo no disponible',
+  })), [drivers, routeOrders, routes, vehicles]);
 
   const columns = useMemo<readonly ColumnDef<RouteRow, unknown>[]>(() => [
     {
@@ -315,7 +386,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     {
       id: 'driver',
       accessorFn: (row) => row.driver,
-      header: ({ column }) => <SortableHeader column={column} title="Conductor" />,
+      header: 'Conductor',
+      enableSorting: false,
       meta: { title: 'Conductor', className: 'hidden md:table-cell' },
       cell: ({ row }) => (
         <span className="flex items-center gap-2">
@@ -328,19 +400,21 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       id: 'plate',
       accessorFn: (row) => row.plate,
       header: 'Vehículo',
+      enableSorting: false,
       meta: { title: 'Vehículo', className: 'hidden md:table-cell tabular-nums' },
     },
     {
       id: 'stops',
       accessorFn: (row) => row.route.stops.length,
       header: 'Paradas',
+      enableSorting: false,
       enableGlobalFilter: false,
       meta: { title: 'Paradas', className: 'hidden md:table-cell tabular-nums' },
     },
     {
       id: 'status',
       accessorFn: (row) => row.route.status,
-      header: 'Estado',
+      header: ({ column }) => <SortableHeader column={column} title="Estado" />,
       filterFn: 'arrIncludesSome',
       enableGlobalFilter: false,
       meta: { title: 'Estado' },
@@ -349,7 +423,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     {
       id: 'progress',
       accessorFn: (row) => row.progress.percent,
-      header: ({ column }) => <SortableHeader column={column} title="Avance" />,
+      header: 'Avance',
+      enableSorting: false,
       enableGlobalFilter: false,
       meta: { title: 'Avance' },
       cell: ({ row }) => {
@@ -360,6 +435,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     {
       id: 'actions',
       enableHiding: false,
+      enableSorting: false,
       cell: ({ row }) => (
         <RowActions label={`Acciones de ${row.original.route.publicCode}`}>
           <DropdownMenuItem onSelect={() => setDetailRouteId(row.original.route.id)}><Eye aria-hidden="true" /> Ver detalle</DropdownMenuItem>
@@ -380,22 +456,28 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     setCreateOpen(true);
   }
 
+  // Conteos del servidor: aplican la búsqueda, pero no el filtro de estado.
+  const statusCounts = meta?.counts?.status ?? {};
   const routeCounts = {
-    inProgress: routes.filter((route) => route.status === 'in_progress').length,
-    planned: routes.filter((route) => route.status === 'planned').length,
-    completed: routes.filter((route) => route.status === 'completed').length,
+    inProgress: statusCounts.in_progress ?? 0,
+    planned: statusCounts.planned ?? 0,
+    completed: statusCounts.completed ?? 0,
   };
+  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0;
+  const isEmpty = meta !== null && meta.total === 0 && !hasCriteria;
+  const eligibleCount = eligibleTotal ?? 0;
+  const pickerTotal = picker?.meta.total ?? 0;
 
   return (
     <section className="flex flex-col gap-6">
-      <PageHeader title="Planificación de rutas" description={!loading && !loadFailed ? `${countLabel(eligibleOrders.length, 'pedido', 'pedidos')} por asignar · ${countLabel(routeCounts.inProgress, 'ruta', 'rutas')} en curso · ${countLabel(routeCounts.planned, 'planificada', 'planificadas')} · ${countLabel(routeCounts.completed, 'finalizada', 'finalizadas')}.` : 'Organiza pedidos en paradas, asigna recursos y consulta el avance de las rutas.'}>
-        <Button type="button" variant="outline" onClick={() => void loadData()} disabled={loading}>
+      <PageHeader title="Planificación de rutas" description={meta !== null && eligibleTotal !== null && !loadFailed ? `${countLabel(eligibleCount, 'pedido', 'pedidos')} por asignar · ${countLabel(routeCounts.inProgress, 'ruta', 'rutas')} en curso · ${countLabel(routeCounts.planned, 'planificada', 'planificadas')} · ${countLabel(routeCounts.completed, 'finalizada', 'finalizadas')}.` : 'Organiza pedidos en paradas, asigna recursos y consulta el avance de las rutas.'}>
+        <Button type="button" variant="outline" onClick={refresh} disabled={table.loading}>
           <RefreshCw data-icon="inline-start" aria-hidden="true" /> Actualizar
         </Button>
         <Button type="button" onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Nueva ruta</Button>
       </PageHeader>
 
-      {!createOpen && error !== null && <ErrorNotice>{error}</ErrorNotice>}
+      {!createOpen && (error ?? loadError) !== null && <ErrorNotice>{error ?? loadError}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
       <FormSheet open={createOpen} onOpenChange={setCreateOpen} width="wide" paper title="Crear ruta manual"
         description="Asigna conductor y vehículo, y elige los pedidos: cada pedido es una parada."
@@ -403,7 +485,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
         footer={(
           <>
             <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancelar</Button>
-            <Button type="submit" disabled={saving || loading || selectableDrivers.length === 0 || activeVehicles.length === 0}>
+            <Button type="submit" disabled={saving || catalogsLoading || selectableDrivers.length === 0 || activeVehicles.length === 0}>
               {saving ? 'Creando ruta…' : 'Crear ruta'}
             </Button>
           </>
@@ -515,7 +597,20 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
             <Separator />
             <FieldSet>
               <FieldLegend variant="label">Pedidos elegibles</FieldLegend>
-              {eligibleOrders.length === 0 && <FieldDescription>No hay pedidos creados o devueltos disponibles.</FieldDescription>}
+              <SearchInput value={pickerQuery} onChange={setPickerQuery} label="Buscar pedidos elegibles"
+                placeholder="Buscar código, destinatario, dirección o distrito" className="w-full"
+                busy={pickerLoading || pickerQuery.trim() !== pickerSearch} />
+              {pickerFailed && <ErrorNotice>No se pudieron cargar los pedidos elegibles. Inténtalo de nuevo.</ErrorNotice>}
+              {!pickerFailed && picker !== null && eligibleOrders.length === 0 && (
+                <FieldDescription>
+                  {pickerSearch === '' ? 'No hay pedidos creados o devueltos disponibles.' : 'Ningún pedido elegible coincide con la búsqueda.'}
+                </FieldDescription>
+              )}
+              {!pickerFailed && pickerTotal > eligibleOrders.length && (
+                <FieldDescription>
+                  Mostrando {eligibleOrders.length.toLocaleString('es-PE')} de {pickerTotal.toLocaleString('es-PE')}, refina la búsqueda.
+                </FieldDescription>
+              )}
               <FieldGroup className="gap-3">
                 {eligibleOrders.map((order) => {
                   const checkboxId = `route-order-${order.id}`;
@@ -525,7 +620,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                       <div className="flex items-center gap-2">
                         <Field orientation="horizontal">
                           <Checkbox id={checkboxId} checked={stopOrderIds.includes(order.id)}
-                            onCheckedChange={(checked) => toggleOrder(order.id, checked === true)} />
+                            onCheckedChange={(checked) => toggleOrder(order, checked === true)} />
                           <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
                         </Field>
                         {point !== null && <MapLink href={googleMapsPlaceUrl(point)} label={`Ver ${order.publicCode} en Google Maps`} iconOnly />}
@@ -551,23 +646,24 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
             </FieldSet>
       </FormSheet>
 
-      {loading && <LoadingRows label="Cargando rutas…" />}
-      {!loading && !loadFailed && routes.length === 0 && (
+      {meta === null && table.loading && <LoadingRows label="Cargando rutas…" />}
+      {isEmpty && !table.loading && !loadFailed && (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon"><Route aria-hidden="true" /></EmptyMedia>
             <EmptyTitle>No hay rutas para mostrar.</EmptyTitle>
             <EmptyDescription>
-              {eligibleOrders.length > 0
-                ? `Tienes ${eligibleOrders.length.toLocaleString('es-PE')} ${eligibleOrders.length === 1 ? 'pedido listo' : 'pedidos listos'} para agrupar en paradas.`
+              {eligibleCount > 0
+                ? `Tienes ${eligibleCount.toLocaleString('es-PE')} ${eligibleCount === 1 ? 'pedido listo' : 'pedidos listos'} para agrupar en paradas.`
                 : 'Cuando haya pedidos nuevos, podrás agruparlos en paradas y asignarlos a un conductor.'}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent><Button type="button" onClick={openCreate}>Crear primera ruta</Button></EmptyContent>
         </Empty>
       )}
-      {!loading && routes.length > 0 && (
-        <DataTable label="Rutas y progreso" columns={columns} data={routeRows} searchPlaceholder="Buscar ruta, conductor o placa"
+      {meta !== null && !isEmpty && (
+        <DataTable label="Rutas y progreso" columns={columns} data={routeRows} server={table.server}
+          searchPlaceholder="Buscar ruta, conductor o placa"
           filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)} />
       )}
 
@@ -592,7 +688,7 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
                 addressLine: stop.addressLine,
                 state: detailRow.progress.stopStates[index] ?? 'pending',
                 detail: stop.orderIds.map((id) => {
-                  const order = orderById.get(id);
+                  const order = routeOrders.get(id);
                   return order === undefined ? 'Pedido' : `${order.publicCode} (${orderStatusLabel(order.status)})`;
                 }).join(', '),
               }))} />

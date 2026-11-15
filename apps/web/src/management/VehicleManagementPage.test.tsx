@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, setupUser } from '../test/ui.js';
 
-import type { ApiClient, DispatchRoute, Driver, Vehicle } from '../api/client.js';
+import type { ApiClient, DispatchRoute, Driver, PageParams, Vehicle, VehicleRouteStats } from '../api/client.js';
 import { VehicleManagementPage } from './VehicleManagementPage.js';
 
 const vehicle: Vehicle = {
@@ -29,14 +29,25 @@ const route: DispatchRoute = {
   ],
 };
 
+const stats: VehicleRouteStats = {
+  vehicleId: vehicle.id, routes: 1, completed: 1, stops: 2, orders: 3, lastRouteDay: '2026-11-06',
+  monthly: ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']
+    .map((month) => ({ month, routes: month === '2026-11' ? 1 : 0 })),
+};
+
+const page = <T,>(data: readonly T[], total = data.length) => ({ data, meta: { page: 1, pageSize: 20, total } });
+
 function buildClient() {
   return {
     listVehicles: vi.fn().mockResolvedValue([vehicle]),
     createVehicle: vi.fn().mockResolvedValue({ ...vehicle, id: 'vehicle-2', plate: 'XYZ-987' }),
     updateVehicle: vi.fn().mockResolvedValue({ ...vehicle, status: 'inactive' }),
-    listDispatchRoutes: vi.fn().mockResolvedValue([route]),
+    getVehicleRouteStats: vi.fn().mockResolvedValue([stats]),
+    listDispatchRoutesPage: vi.fn().mockImplementation(async (params: PageParams) =>
+      page(params.vehicleId === vehicle.id ? [route] : [])),
     listDrivers: vi.fn().mockResolvedValue([driver]),
-  } satisfies Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'listDispatchRoutes' | 'listDrivers'>;
+  } satisfies Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
+    | 'listDispatchRoutesPage' | 'listDrivers'>;
 }
 
 afterEach(() => {
@@ -69,8 +80,9 @@ describe('VehicleManagementPage', () => {
     expect(await screen.findByRole('listitem', { name: /XYZ-987/ })).toBeTruthy();
   });
 
-  it('summarizes the selected vehicle routes from the API with its history', async () => {
-    render(<VehicleManagementPage client={buildClient()} />);
+  it('summarizes the selected vehicle routes from the server stats and pages its history', async () => {
+    const client = buildClient();
+    render(<VehicleManagementPage client={client} />);
 
     const item = await screen.findByRole('listitem', { name: /ABC-123/ });
     expect(within(item).getByText('Rutas').nextElementSibling?.textContent).toBe('1');
@@ -78,9 +90,32 @@ describe('VehicleManagementPage', () => {
     expect(within(item).getByText('Pedidos').nextElementSibling?.textContent).toBe('3');
 
     expect(screen.getByText('1 de 1')).toBeTruthy();
-    const history = screen.getByRole('row', { name: /RUT-0001/ });
+    const history = await screen.findByRole('row', { name: /RUT-0001/ });
     expect(within(history).getByText('Valeria Gomez')).toBeTruthy();
     expect(within(history).getByText('Completada')).toBeTruthy();
+    // Aggregates come from the server; only the selected vehicle's latest routes are listed.
+    expect(client.getVehicleRouteStats).toHaveBeenCalledOnce();
+    expect(client.listDispatchRoutesPage).toHaveBeenCalledWith(
+      { vehicleId: vehicle.id, pageSize: 20, sort: 'plannedDate:desc' }, expect.any(AbortSignal));
+    expect(screen.queryByText(/más recientes de/)).toBeNull();
+  });
+
+  it('says when the history shows only the latest routes', async () => {
+    const client = buildClient();
+    client.listDispatchRoutesPage.mockResolvedValue(page([route], 45));
+    render(<VehicleManagementPage client={client} />);
+
+    expect(await screen.findByText(/Mostrando las 1 más recientes de 45./)).toBeTruthy();
+  });
+
+  it('shows dashes for the totals when the server stats fail', async () => {
+    const client = buildClient();
+    client.getVehicleRouteStats.mockRejectedValueOnce(new Error('offline'));
+    render(<VehicleManagementPage client={client} />);
+
+    expect(await screen.findByText('Sin datos de rutas por ahora.')).toBeTruthy();
+    expect(screen.getAllByText('—')).toHaveLength(4);
+    expect(await screen.findByRole('row', { name: /RUT-0001/ })).toBeTruthy();
   });
 
   it('switches the detail to the vehicle chosen in the list', async () => {
@@ -94,7 +129,9 @@ describe('VehicleManagementPage', () => {
     await user.click(within(item).getByRole('button', { name: /MOT-001/ }));
     expect(within(item).getByRole('button', { name: /MOT-001/ }).getAttribute('aria-current')).toBe('true');
     expect(screen.getByText('No especificada')).toBeTruthy();
-    expect(screen.getByText('Aún no tiene rutas')).toBeTruthy();
+    expect(await screen.findByText('Aún no tiene rutas')).toBeTruthy();
+    expect(client.listDispatchRoutesPage).toHaveBeenLastCalledWith(
+      { vehicleId: 'vehicle-2', pageSize: 20, sort: 'plannedDate:desc' }, expect.any(AbortSignal));
   });
 
   it('supports an unknown capacity and updates type, capacity and active availability without changing plate', async () => {
@@ -136,11 +173,11 @@ describe('VehicleManagementPage', () => {
 
   it('still lists the fleet when route history cannot be loaded', async () => {
     const client = buildClient();
-    client.listDispatchRoutes.mockRejectedValueOnce(new Error('offline'));
+    client.listDispatchRoutesPage.mockRejectedValueOnce(new Error('offline'));
     render(<VehicleManagementPage client={client} />);
 
     expect(await screen.findByRole('listitem', { name: /ABC-123/ })).toBeTruthy();
-    expect(screen.getByText(/No se pudo cargar el historial de rutas/)).toBeTruthy();
+    expect(await screen.findByText(/No se pudo cargar el historial de rutas/)).toBeTruthy();
   });
 
   it('keeps loading errors, empty catalogs and retry accessible', async () => {

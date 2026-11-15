@@ -11,7 +11,9 @@ export class ListRoutesUseCase {
   async execute(input: unknown) {
     const parsed = querySchema.safeParse(input);
     if (!parsed.success) {
-      throw new DeliveryRouteValidationError('List routes query is invalid');
+      throw new DeliveryRouteValidationError('List routes query is invalid', {
+        issues: parsed.error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
+      });
     }
     return { routes: await this.store.list(parsed.data.organizationId) };
   }

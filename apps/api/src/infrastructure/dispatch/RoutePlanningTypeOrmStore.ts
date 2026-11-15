@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { In, type DataSource, type EntityManager } from 'typeorm';
+import { Brackets, In, type DataSource, type EntityManager, type SelectQueryBuilder } from 'typeorm';
 
-import type {
-  PlannedRoute, PlannedStop, RoutePlanDraft, RoutePlanningStore,
+import { pageOffset, type PageResult } from '../../http/pagination.js';
+import {
+  ROUTE_STATUSES,
+  type PlannedRoute, type PlannedStop, type RoutePageCriteria, type RoutePlanDraft, type RoutePlanningStore,
+  type RouteSortField,
 } from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import { DeliveryRouteEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryRouteEntity.js';
@@ -204,6 +207,41 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
   }
 
   /**
+   * Loads the page's route rows (filtered, sorted, `OFFSET`/`LIMIT`) and then
+   * only their stops and links in two batched queries. `q` LEFT JOINs the
+   * route's driver and vehicle within the organization; the status facet is a
+   * `GROUP BY` that leaves out the status filter.
+   */
+  async listPage(organizationId: string, criteria: RoutePageCriteria): Promise<PageResult<PlannedRoute>> {
+    const routes = this.dataSource.getRepository(DeliveryRouteEntity);
+    const filtered = (omitStatus = false): SelectQueryBuilder<DeliveryRouteEntity> =>
+      applyRoutePageFilters(routes.createQueryBuilder('r'), organizationId, criteria, omitStatus);
+    const direction = criteria.sort.direction === 'asc' ? 'ASC' : 'DESC';
+
+    const [[entities, total], statusRows] = await Promise.all([
+      filtered()
+        .orderBy(`r.${ROUTE_SORT_PROPERTIES[criteria.sort.field]}`, direction)
+        .addOrderBy('r.createdAt', direction)
+        .addOrderBy('r.id', direction)
+        .offset(pageOffset(criteria))
+        .limit(criteria.pageSize)
+        .getManyAndCount(),
+      filtered(true).select('r.status', 'value').addSelect('COUNT(*)::integer', 'count')
+        .groupBy('r.status').getRawMany<{ readonly value: string; readonly count: number | string }>(),
+    ]);
+
+    const { stopsByRoute } = await loadRouteStops(
+      this.dataSource, organizationId, entities.map((route) => route.id));
+    const status = Object.fromEntries(ROUTE_STATUSES.map((value) => [value, 0])) as Record<string, number>;
+    for (const row of statusRows) status[row.value] = Number(row.count);
+    return {
+      items: entities.map((route) => toPlannedRoute(route, stopsByRoute.get(route.id) ?? [])),
+      total,
+      counts: { status },
+    };
+  }
+
+  /**
    * Reads one planned route through the given manager. Transactional writers
    * must pass their transaction manager: a separate pooled connection cannot
    * observe the transaction's uncommitted writes.
@@ -273,6 +311,51 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       throw error;
     }
   }
+}
+
+const ROUTE_SORT_PROPERTIES: Record<RouteSortField, keyof DeliveryRouteEntity> = {
+  publicCode: 'publicCode',
+  plannedDate: 'plannedDate',
+  status: 'status',
+};
+
+/** Escapes `ILIKE` wildcards so the search text matches literally. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+}
+
+/** Tenant scope, listed statuses and every page filter (the status filter unless `omitStatus`). */
+function applyRoutePageFilters(
+  query: SelectQueryBuilder<DeliveryRouteEntity>,
+  organizationId: string,
+  criteria: RoutePageCriteria,
+  omitStatus: boolean,
+): SelectQueryBuilder<DeliveryRouteEntity> {
+  query.where('r.organizationId = :organizationId', { organizationId })
+    .andWhere('r.status IN (:...listed)', { listed: ROUTE_STATUSES });
+  if (!omitStatus && criteria.status !== undefined) {
+    query.andWhere('r.status IN (:...status)', { status: criteria.status });
+  }
+  if (criteria.ids !== undefined) query.andWhere('r.id IN (:...ids)', { ids: criteria.ids });
+  if (criteria.driverId !== undefined) query.andWhere('r.driverId = :driverId', { driverId: criteria.driverId });
+  if (criteria.vehicleId !== undefined) query.andWhere('r.vehicleId = :vehicleId', { vehicleId: criteria.vehicleId });
+  if (criteria.plannedFrom !== undefined) {
+    query.andWhere('r.plannedDate >= :plannedFrom', { plannedFrom: criteria.plannedFrom });
+  }
+  if (criteria.plannedTo !== undefined) {
+    query.andWhere('r.plannedDate <= :plannedTo', { plannedTo: criteria.plannedTo });
+  }
+  if (criteria.q !== undefined) {
+    query
+      .leftJoin(DriverEntity, 'd', 'd.organizationId = r.organizationId AND d.id = r.driverId')
+      .leftJoin(VehicleEntity, 'v', 'v.organizationId = r.organizationId AND v.id = r.vehicleId')
+      .andWhere(new Brackets((search) => {
+        for (const column of ['r.publicCode', 'd.fullName', 'v.plate']) {
+          search.orWhere(`${column} ILIKE :q ESCAPE '\\'`, { q: likePattern(criteria.q!) });
+        }
+      }));
+  }
+  return query;
 }
 
 function assertSupportedStatus(route: DeliveryRouteEntity): void {

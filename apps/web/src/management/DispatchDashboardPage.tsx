@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import type { ApiClient, DeliveryOrder, DeliveryOrderStatus, DispatchDashboardSummary } from '../api/client.js';
+import type { ApiClient, DeliveryOrder, DeliveryOrderStatus, DispatchDashboardSummary, DispatchRoute } from '../api/client.js';
 import { ActivityTimeline, type TimelineEvent } from '../components/ActivityTimeline.js';
 import { AnnouncementBanner } from '../components/AnnouncementBanner.js';
 import { ConfettiArt, SpheresArt } from '../components/CardArt.js';
@@ -26,7 +26,7 @@ import { formatDateTime, formatTime, formatTimeAgo, formatToday } from '../lib/f
 import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import { deliveredShare, openOrders, STATUS_BADGES, totalOrders } from './dashboard/orderStatus.js';
 import { OrderStatusBar } from './dashboard/OrderStatusBar.js';
-import { loadRouteDetails, NO_ROUTE_DETAILS, type FullRouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
+import { fetchByIds, routeOrderIds, type RouteDetails } from './routes/routeDetails.js';
 import { RouteStepper, RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 import type { MapRoute } from './dashboard/OperationsMap.js';
@@ -37,8 +37,35 @@ const OperationsMap = lazy(() => import('./dashboard/OperationsMap.js')
 /** A partir de este tiempo sin posición, la ruta se señala para que alguien la revise. */
 const STALE_SIGNAL_MINUTES = 15;
 
-type DashboardClient = Pick<ApiClient, 'getDispatchDashboardSummary'> & RouteDetailsClient;
+/** Los detalles de las rutas son opcionales: sin ellos (o si fallan) el resumen se muestra igual. */
+type DashboardClient = Pick<ApiClient, 'getDispatchDashboardSummary'>
+  & Partial<Pick<ApiClient, 'listDispatchRoutesPage' | 'listDeliveryOrdersPage' | 'listDrivers' | 'listVehicles'>>;
 type ActiveRoute = DispatchDashboardSummary['activeRoutes'][number];
+type DashboardDetails = RouteDetails<DispatchRoute, DeliveryOrder>;
+
+const NO_DETAILS: DashboardDetails = { routes: [], orders: [], drivers: [], vehicles: [] };
+
+/**
+ * Solo lo que muestra el resumen: las rutas activas por `ids`, los pedidos de sus paradas y los
+ * recientes por `ids`, y los catálogos de conductores y vehículos. Cada parte que falla queda vacía.
+ */
+async function loadDashboardDetails(client: DashboardClient, summary: DispatchDashboardSummary): Promise<DashboardDetails> {
+  const routeIds = summary.activeRoutes.map((route) => route.id);
+  const listRoutes = client.listDispatchRoutesPage?.bind(client);
+  const listOrders = client.listDeliveryOrdersPage?.bind(client);
+  const routesAndOrders = (async () => {
+    const routes = routeIds.length === 0 || listRoutes === undefined ? [] : await fetchByIds(listRoutes, routeIds).catch(() => []);
+    const orderIds = [...routeOrderIds(routes), ...summary.recentOrders.map((order) => order.id)];
+    const orders = orderIds.length === 0 || listOrders === undefined ? [] : await fetchByIds(listOrders, orderIds).catch(() => []);
+    return { routes, orders };
+  })();
+  const [{ routes, orders }, drivers, vehicles] = await Promise.all([
+    routesAndOrders,
+    client.listDrivers?.().catch(() => []) ?? [],
+    client.listVehicles?.().catch(() => []) ?? [],
+  ]);
+  return { routes, orders, drivers, vehicles };
+}
 
 interface DashboardProps {
   readonly client: DashboardClient;
@@ -50,7 +77,7 @@ interface DashboardProps {
 
 export function DispatchDashboardPage({ client, userName, onOpenOrders, onOpenDispatch, onOpenControlTower }: DashboardProps) {
   const [summary, setSummary] = useState<DispatchDashboardSummary | null>(null);
-  const [details, setDetails] = useState<FullRouteDetails>(NO_ROUTE_DETAILS);
+  const [details, setDetails] = useState<DashboardDetails>(NO_DETAILS);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,10 +85,11 @@ export function DispatchDashboardPage({ client, userName, onOpenOrders, onOpenDi
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    void loadRouteDetails(client).then(setDetails);
     try {
-      setSummary(await client.getDispatchDashboardSummary());
+      const loaded = await client.getDispatchDashboardSummary();
+      setSummary(loaded);
       setUpdatedAt(new Date().toISOString());
+      void loadDashboardDetails(client, loaded).then(setDetails);
     } catch {
       setError('No se pudo cargar el resumen operativo. Comprueba la conexión e inténtalo de nuevo.');
     } finally {
@@ -97,7 +125,7 @@ export function DispatchDashboardPage({ client, userName, onOpenOrders, onOpenDi
 
 function DashboardContent({ summary, details, userName, onOpenOrders, onOpenDispatch }: {
   readonly summary: DispatchDashboardSummary;
-  readonly details: FullRouteDetails;
+  readonly details: DashboardDetails;
   readonly userName: string | undefined;
   readonly onOpenOrders: () => void;
   readonly onOpenDispatch: () => void;
@@ -283,7 +311,7 @@ function buildActivity(summary: DispatchDashboardSummary, orderById: ReadonlyMap
 
 function RouteTracking({ summary, details, orderById, onOpenDispatch }: {
   readonly summary: DispatchDashboardSummary;
-  readonly details: FullRouteDetails;
+  readonly details: DashboardDetails;
   readonly orderById: ReadonlyMap<string, DeliveryOrder>;
   readonly onOpenDispatch: () => void;
 }) {

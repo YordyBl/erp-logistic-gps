@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, buildQuery, type Page, type PageParams } from './client.js';
 
 describe('ApiClient dispatch planning', () => {
-  it('uses the authenticated route list, create and reassignment contracts', async () => {
+  it('uses the authenticated route page, create and reassignment contracts', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     const client = new ApiClient({ fetcher, baseUrl: 'http://localhost:3000/api/v1' });
     client.setAccessToken('access-token');
 
-    await client.listDispatchRoutes();
+    await client.listDispatchRoutesPage({ page: 2, pageSize: 20, status: ['planned', 'in_progress'], ids: [], q: '' });
     await client.createDispatchRoute({
       publicCode: 'ROUTE-001', plannedDate: '2026-11-02', driverId: 'driver-1', vehicleId: 'vehicle-1',
       stops: [{ sequence: 1, orderId: 'order-1' }, { sequence: 2, orderId: 'order-2' }],
@@ -18,7 +18,7 @@ describe('ApiClient dispatch planning', () => {
     await client.reassignDispatchRoute('route/1', { driverId: 'driver-2' });
 
     const [listUrl, listInit] = fetcher.mock.calls[0] ?? [];
-    expect(listUrl).toBe('http://localhost:3000/api/v1/delivery-routes');
+    expect(listUrl).toBe('http://localhost:3000/api/v1/delivery-routes?page=2&pageSize=20&status=planned%2Cin_progress');
     expect(listInit?.method).toBeUndefined();
     expect(new Headers(listInit?.headers).get('Authorization')).toBe('Bearer access-token');
     const [createUrl, createInit] = fetcher.mock.calls[1] ?? [];
@@ -29,6 +29,22 @@ describe('ApiClient dispatch planning', () => {
     expect(reassignUrl).toBe('http://localhost:3000/api/v1/delivery-routes/route%2F1');
     expect(reassignInit?.method).toBe('PATCH');
     expect(JSON.parse(String(reassignInit?.body))).toEqual({ driverId: 'driver-2' });
+  });
+
+  it('reads vehicle route stats, with the server default when months is omitted', async () => {
+    const stats = [{ vehicleId: 'vehicle-1', routes: 1, completed: 1, stops: 2, orders: 3, lastRouteDay: '2026-11-06',
+      monthly: [{ month: '2026-11', routes: 1 }] }];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({ data: stats }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    await expect(client.getVehicleRouteStats()).resolves.toEqual(stats);
+    await client.getVehicleRouteStats(12);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/vehicles/route-stats', '/api/v1/vehicles/route-stats?months=12',
+    ]);
   });
 });
 

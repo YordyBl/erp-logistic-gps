@@ -40,6 +40,7 @@ import {
 } from './routes/health.routes.js';
 import { createUsersRouter } from './routes/users.routes.js';
 import { createDispatchDashboardRouter, type DispatchDashboardQuery } from './routes/dispatch-dashboard.routes.js';
+import { createVehicleRouteStatsRouter, type VehicleRouteStatsQuery } from './routes/vehicle-route-stats.routes.js';
 import type { TrackingWebSocketHub } from '../modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
 import {
   createVehiclesRouter,
@@ -96,6 +97,8 @@ export interface AppDependencies {
   readonly routeTrack?: Pick<import('../modules/delivery-tracking/application/GetRouteTrackUseCase.js').GetRouteTrackUseCase, 'execute'>;
   /** Tenant-scoped dashboard read model; optional only for legacy HTTP test callers. */
   readonly dispatchDashboard?: DispatchDashboardQuery;
+  /** Per-vehicle route aggregates (`GET /vehicles/route-stats`); optional only for HTTP test callers. */
+  readonly vehicleRouteStats?: VehicleRouteStatsQuery;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
   /** Customer, driver and vehicle catalogs. */
@@ -125,6 +128,7 @@ export function buildApp({
   trackingHub,
   routeTrack,
   dispatchDashboard,
+  vehicleRouteStats,
   auth,
   catalogs,
   readiness,
@@ -217,6 +221,10 @@ export function buildApp({
     createCustomersRouter(catalogs.customers, authenticate),
   );
   app.use('/api/v1/drivers', createDriversRouter(catalogs.drivers, authenticate));
+  if (vehicleRouteStats !== undefined) {
+    // Before the catalog router, whose `/:vehicleId` would otherwise take `route-stats`.
+    app.use('/api/v1/vehicles/route-stats', createVehicleRouteStatsRouter(vehicleRouteStats, authenticate));
+  }
   app.use(
     '/api/v1/vehicles',
     createVehiclesRouter(catalogs.vehicles, authenticate),

@@ -6,16 +6,57 @@ import type { GetRouteSimulationUseCase } from '../../modules/delivery-routes/ap
 import type { GetRouteUseCase } from '../../modules/delivery-routes/application/use-cases/get-route/GetRouteUseCase.js';
 import { reassignRouteBodySchema, type ReassignRouteUseCase } from '../../modules/delivery-routes/application/use-cases/reassign-route/ReassignRouteUseCase.js';
 import type { ExecuteDriverRouteUseCase } from '../../modules/delivery-routes/application/use-cases/execute-driver-route/ExecuteDriverRouteUseCase.js';
+import type { ListRoutesPageUseCase } from '../../modules/delivery-routes/application/use-cases/list-routes/ListRoutesPageUseCase.js';
+import {
+  ROUTE_SORT_FIELDS, ROUTE_STATUSES, type RoutePageCriteria,
+} from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { z } from 'zod';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { requireRole } from '../middleware/require-role.js';
+import { csvEnum, csvUuid, pageQueryShape, sortSchema, toPageResponse } from '../pagination.js';
 import { getAuthenticatedUser } from '../request-context.js';
-import { parseOrThrow } from '../validation.js';
+import { parseDeliveryRouteOrThrow, parseOrThrow } from '../validation.js';
+
+/** A real calendar day as `YYYY-MM-DD`. */
+const isoDate = z.iso.date();
+
+/**
+ * Paginated route catalog query (`GET /delivery-routes`). Unknown parameters
+ * are rejected; absent filters stay absent in the criteria
+ * (`exactOptionalPropertyTypes`).
+ */
+const listRoutesPageQuerySchema = z
+  .strictObject({
+    ...pageQueryShape,
+    sort: sortSchema(ROUTE_SORT_FIELDS, { field: 'plannedDate', direction: 'desc' }),
+    status: csvEnum(ROUTE_STATUSES).optional(),
+    ids: csvUuid().optional(),
+    driverId: z.uuid().optional(),
+    vehicleId: z.uuid().optional(),
+    plannedFrom: isoDate.optional(),
+    plannedTo: isoDate.optional(),
+  })
+  .refine(
+    ({ plannedFrom, plannedTo }) => plannedFrom === undefined || plannedTo === undefined || plannedFrom <= plannedTo,
+    { path: ['plannedTo'], message: 'plannedTo must not be before plannedFrom' },
+  )
+  .transform(({ page, pageSize, sort, q, status, ids, driverId, vehicleId, plannedFrom, plannedTo }): RoutePageCriteria => ({
+    page,
+    pageSize,
+    sort,
+    ...(q === undefined ? {} : { q }),
+    ...(status === undefined ? {} : { status }),
+    ...(ids === undefined ? {} : { ids }),
+    ...(driverId === undefined ? {} : { driverId }),
+    ...(vehicleId === undefined ? {} : { vehicleId }),
+    ...(plannedFrom === undefined ? {} : { plannedFrom }),
+    ...(plannedTo === undefined ? {} : { plannedTo }),
+  }));
 
 export function createDeliveryRoutesRouter(
   ports: {
     readonly planRoute: PlanRouteUseCase;
-    readonly listRoutes: { execute(input: unknown): Promise<{ routes: readonly unknown[] }> };
+    readonly listRoutesPage: ListRoutesPageUseCase;
     readonly getRoute: GetRouteUseCase;
     readonly getRouteSimulation: GetRouteSimulationUseCase;
     readonly reassignRoute: ReassignRouteUseCase;
@@ -25,9 +66,13 @@ export function createDeliveryRoutesRouter(
 ): Router {
   const router = Router();
   router.use(authenticate);
-  router.get('/', requireRole('ADMIN', 'DISPATCHER'), async (_request, response) => {
-    const result = await ports.listRoutes.execute({ organizationId: requireOrganizationId(response) });
-    response.status(200).json({ data: result.routes });
+  router.get('/', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
+    const criteria = parseDeliveryRouteOrThrow(listRoutesPageQuerySchema, request.query,
+      'List routes query is invalid');
+    const result = await ports.listRoutesPage.execute({
+      organizationId: requireOrganizationId(response), criteria,
+    });
+    response.status(200).json(toPageResponse(result, criteria.page, criteria.pageSize));
   });
   router.get('/simulation', requireRole('ADMIN', 'DISPATCHER'), async (_request, response) => {
     const result = await ports.getRouteSimulation.execute({ organizationId: requireOrganizationId(response) });

@@ -1,4 +1,4 @@
-import type { DispatchRoute, Vehicle } from '../../api/client.js';
+import type { DispatchRoute, Vehicle, VehicleRouteStats } from '../../api/client.js';
 
 export interface VehicleStats {
   readonly routes: number;
@@ -18,49 +18,24 @@ export interface MonthlyRoutes {
 
 export const EMPTY_STATS: VehicleStats = { routes: 0, completedRoutes: 0, stops: 0, orders: 0, lastRouteDay: null };
 
-/** Rutas de cada vehículo, de la más reciente a la más antigua. */
-export function groupRoutesByVehicle(routes: readonly DispatchRoute[]): ReadonlyMap<string, readonly DispatchRoute[]> {
-  const grouped = new Map<string, DispatchRoute[]>();
-  for (const route of routes) {
-    const list = grouped.get(route.vehicleId);
-    if (list === undefined) grouped.set(route.vehicleId, [route]);
-    else list.push(route);
-  }
-  for (const list of grouped.values()) list.sort(compareRoutesDesc);
-  return grouped;
+/** Los totales que el servidor agrega para un vehículo (`GET /vehicles/route-stats`), como los muestra la flota. */
+export function toVehicleStats(stats: VehicleRouteStats): VehicleStats {
+  return {
+    routes: stats.routes, completedRoutes: stats.completed, stops: stats.stops, orders: stats.orders,
+    lastRouteDay: stats.lastRouteDay,
+  };
 }
 
-export function summarizeVehicleRoutes(routes: readonly DispatchRoute[]): VehicleStats {
-  if (routes.length === 0) return EMPTY_STATS;
-  let completedRoutes = 0, stops = 0, orders = 0;
-  let lastRouteDay = '';
-  for (const route of routes) {
-    if (route.status === 'completed') completedRoutes += 1;
-    stops += route.stops.length;
-    orders += countOrders(route);
-    const day = routeDay(route);
-    if (day > lastRouteDay) lastRouteDay = day;
-  }
-  return { routes: routes.length, completedRoutes, stops, orders, lastRouteDay };
+/** La serie mensual del servidor con la etiqueta corta del mes (`jun`, `jul`...). */
+export function toMonthlyRoutes(monthly: VehicleRouteStats['monthly']): readonly MonthlyRoutes[] {
+  return monthly.map(({ month, routes }) => ({
+    month, routes,
+    label: MONTH_LABEL.format(new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, 1))).replace('.', ''),
+  }));
 }
 
-export function countOrders(route: DispatchRoute): number {
+export function countOrders(route: Pick<DispatchRoute, 'stops'>): number {
   return route.stops.reduce((total, stop) => total + stop.orderIds.length, 0);
-}
-
-/** Rutas planificadas en cada uno de los últimos `months` meses, terminando en el mes de `today`. */
-export function monthlyRoutes(routes: readonly DispatchRoute[], today: string, months = 6): readonly MonthlyRoutes[] {
-  const [year, month] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
-  const counts = new Map<string, number>();
-  for (const route of routes) {
-    const key = routeDay(route).slice(0, 7);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return Array.from({ length: months }, (_, index) => {
-    const date = new Date(Date.UTC(year, month - 1 - (months - 1 - index), 1));
-    const key = date.toISOString().slice(0, 7);
-    return { month: key, label: MONTH_LABEL.format(date).replace('.', ''), routes: counts.get(key) ?? 0 };
-  });
 }
 
 export type VehicleKind = 'car' | 'moto' | 'van' | 'truck';
@@ -81,18 +56,4 @@ export const VEHICLE_IMAGES: Record<VehicleKind, string> = {
   truck: '/vehicles/truck.svg',
 };
 
-/** Hoy en Lima como `YYYY-MM-DD`. */
-export function todayInLima(now: Date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Lima' }).format(now);
-}
-
 const MONTH_LABEL = new Intl.DateTimeFormat('es-PE', { month: 'short', timeZone: 'UTC' });
-
-/** La API puede devolver la fecha con hora; solo cuenta el día. */
-function routeDay(route: Pick<DispatchRoute, 'plannedDate'>): string {
-  return route.plannedDate.slice(0, 10);
-}
-
-function compareRoutesDesc(left: DispatchRoute, right: DispatchRoute): number {
-  return routeDay(right).localeCompare(routeDay(left)) || right.publicCode.localeCompare(left.publicCode);
-}

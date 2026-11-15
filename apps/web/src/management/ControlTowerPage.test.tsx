@@ -133,7 +133,7 @@ describe('ControlTowerPage', () => {
   function towerClient() {
     return {
       createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
-      listDispatchRoutes: vi.fn().mockResolvedValue([]),
+      listDispatchRoutesPage: vi.fn(),
       listDeliveryOrders: vi.fn().mockResolvedValue([]),
       listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
       listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
@@ -155,7 +155,7 @@ describe('ControlTowerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /1 parada/ }));
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 · Entregado')).toBeTruthy();
-    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
     expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 
@@ -173,7 +173,7 @@ describe('ControlTowerPage', () => {
     expect(await screen.findByText('1 de 1 pedido cerrado')).toBeTruthy();
     expect(client.listDrivers).toHaveBeenCalledOnce();
     expect(client.listVehicles).toHaveBeenCalledOnce();
-    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
     expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 
@@ -196,7 +196,7 @@ describe('ControlTowerPage', () => {
     // An older snapshot that arrives later does not move the marker back.
     act(() => harness.emit({ type: 'update', sequence: 2, kind: 'route', snapshot }));
     expect(screen.getByText(/07:00:05/)).toBeTruthy();
-    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
     expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 });

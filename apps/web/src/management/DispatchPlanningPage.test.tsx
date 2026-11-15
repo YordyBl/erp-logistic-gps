@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chooseOption, chooseRowAction, pickDay, setupUser } from '../test/ui.js';
 
 import { DispatchPlanningPage } from './DispatchPlanningPage.js';
-import { ApiError, type DeliveryOrder } from '../api/client.js';
+import { ApiError, type DeliveryOrder, type DispatchRoute, type PageParams } from '../api/client.js';
 
 const orders: readonly DeliveryOrder[] = [
   { id: 'order-1', organizationId: 'org-1', customerId: 'customer-1', publicCode: 'PED-001', timeWindow: 'AM', status: 'created',
@@ -19,10 +19,35 @@ const orders: readonly DeliveryOrder[] = [
 
 afterEach(cleanup);
 
-function makeClient(overrides: Record<string, unknown> = {}) {
+/** Una página del servidor con todas las filas, y conteos por estado si se dan. */
+function page<T>(data: readonly T[], counts?: Record<string, Record<string, number>>, total = data.length) {
+  return { data, meta: { page: 1, pageSize: 10, total, ...(counts === undefined ? {} : { counts }) } };
+}
+
+function routeStatusCounts(routes: readonly Pick<DispatchRoute, 'status'>[]) {
+  const status = { planned: 0, in_progress: 0, completed: 0 };
+  for (const route of routes) status[route.status] += 1;
+  return { status };
+}
+
+/**
+ * Cliente falso: `routes` responde a la tabla paginada y `orders` tanto al selector (creados o
+ * devueltos que contienen `q`) como a las búsquedas por `ids`.
+ */
+function makeClient({ routes = [], orders: catalog = orders, ...overrides }: {
+  readonly routes?: readonly Partial<DispatchRoute>[];
+  readonly orders?: readonly DeliveryOrder[];
+  readonly [method: string]: unknown;
+} = {}) {
   return {
-    listDispatchRoutes: vi.fn().mockResolvedValue([]),
-    listDeliveryOrders: vi.fn().mockResolvedValue(orders),
+    listDispatchRoutesPage: vi.fn().mockImplementation(async () =>
+      page(routes, routeStatusCounts(routes as readonly DispatchRoute[]))),
+    listDeliveryOrdersPage: vi.fn().mockImplementation(async (params: PageParams) => {
+      if (Array.isArray(params.ids)) return page(catalog.filter((order) => (params.ids as string[]).includes(order.id)));
+      const q = typeof params.q === 'string' ? params.q.toLowerCase() : '';
+      return page(catalog.filter((order) => (order.status === 'created' || order.status === 'returned')
+        && `${order.publicCode} ${order.deliveryAddress.addressLine}`.toLowerCase().includes(q)));
+    }),
     listDrivers: vi.fn().mockResolvedValue([
       { id: 'driver-1', fullName: 'Ana Driver', status: 'active' },
     ]),
@@ -97,7 +122,7 @@ describe('DispatchPlanningPage', () => {
     const user = setupUser();
     const located = orders.map((order, index) => ({ ...order,
       deliveryAddress: { ...order.deliveryAddress, latitude: -12.1 + index / 100, longitude: -77.03 } }));
-    render(<DispatchPlanningPage client={makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue(located) })} />);
+    render(<DispatchPlanningPage client={makeClient({ orders: located })} />);
     await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
     await screen.findByText(/PED-001/);
 
@@ -150,7 +175,7 @@ describe('DispatchPlanningPage', () => {
   });
 
   it('does not present a failed load as an empty route list', async () => {
-    const client = makeClient({ listDispatchRoutes: vi.fn().mockRejectedValue(new Error('offline')) });
+    const client = makeClient({ listDispatchRoutesPage: vi.fn().mockRejectedValue(new Error('offline')) });
     render(<DispatchPlanningPage client={client} />);
 
     expect(await screen.findByText(/No se pudo cargar la información de despacho/)).toBeTruthy();
@@ -179,7 +204,7 @@ describe('DispatchPlanningPage', () => {
       stops: [{ id: 'stop-1', sequence: 1, addressLine: 'Av. Arequipa 100', latitude: null, longitude: null, orderIds: ['order-1'] }],
     } as const;
     const client = makeClient({
-      listDispatchRoutes: vi.fn().mockResolvedValue([route]),
+      routes: [route],
       listDrivers: vi.fn().mockResolvedValue([
         { id: 'driver-1', fullName: 'Ana Driver', status: 'active' },
         { id: 'driver-2', fullName: 'Luis Driver', status: 'active' },
@@ -199,6 +224,8 @@ describe('DispatchPlanningPage', () => {
 
     await waitFor(() => expect(client.reassignDispatchRoute).toHaveBeenCalledWith('route-1', { driverId: 'driver-2' }));
     expect(await screen.findByRole('status')).toBeTruthy();
+    // The table and the picker are reloaded from the server instead of patched locally.
+    await waitFor(() => expect(client.listDispatchRoutesPage).toHaveBeenCalledTimes(2));
   });
 
   it('shows completed route progress and preserves historical route visibility', async () => {
@@ -208,7 +235,7 @@ describe('DispatchPlanningPage', () => {
       completedAt: '2026-11-01T18:00:00.000Z',
       stops: [{ id: 'stop-1', sequence: 1, addressLine: 'Av. Arequipa 100', latitude: null, longitude: null, orderIds: ['order-1'] }],
     } as const;
-    const client = makeClient({ listDispatchRoutes: vi.fn().mockResolvedValue([route]) });
+    const client = makeClient({ routes: [route] });
     const user = setupUser();
     render(<DispatchPlanningPage client={client} />);
 
@@ -217,10 +244,68 @@ describe('DispatchPlanningPage', () => {
     await chooseRowAction(user, 'Acciones de RUTA-DONE', 'Ver detalle');
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 (Creado)')).toBeTruthy();
+    // Only the orders of the visible page's stops are requested, by id.
+    expect(client.listDeliveryOrdersPage).toHaveBeenCalledWith({ ids: ['order-1'], pageSize: 100 }, expect.any(AbortSignal));
+  });
+
+  it('pages routes on the server and takes the header counts from meta.counts', async () => {
+    const routes = [
+      { id: 'route-1', organizationId: 'org-1', publicCode: 'RUTA-001', plannedDate: '2026-11-02', driverId: 'driver-1',
+        vehicleId: 'vehicle-1', status: 'in_progress', createdAt: '2026-11-01T10:00:00.000Z', stops: [] },
+    ] as const;
+    const listDispatchRoutesPage = vi.fn().mockResolvedValue(page(routes, { status: { planned: 4, in_progress: 1, completed: 7 } }, 12));
+    render(<DispatchPlanningPage client={makeClient({ listDispatchRoutesPage })} />);
+
+    expect(await screen.findByText('RUTA-001')).toBeTruthy();
+    expect(await screen.findByText('2 pedidos por asignar · 1 ruta en curso · 4 planificadas · 7 finalizadas.')).toBeTruthy();
+    expect(listDispatchRoutesPage).toHaveBeenCalledWith({ page: 1, pageSize: 10 }, expect.any(AbortSignal));
+  });
+
+  it('searches eligible orders on the server, asks to refine and keeps selected orders', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    client.listDeliveryOrdersPage.mockImplementation(async (params: PageParams) => {
+      if (params.q === 'ped-002') return page([orders[1]!]);
+      return page(orders, undefined, 120);
+    });
+    render(<DispatchPlanningPage client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
+    expect(await screen.findByText('Mostrando 2 de 120, refina la búsqueda.')).toBeTruthy();
+    expect(client.listDeliveryOrdersPage).toHaveBeenCalledWith(
+      { status: ['created', 'returned'], pageSize: 50, sort: 'createdAt:asc' }, expect.any(AbortSignal));
+    await user.click(screen.getByLabelText(/PED-001/));
+    await user.type(screen.getByLabelText('Buscar pedidos elegibles'), 'ped-002');
+
+    await waitFor(() => expect(client.listDeliveryOrdersPage).toHaveBeenCalledWith(
+      { status: ['created', 'returned'], pageSize: 50, sort: 'createdAt:asc', q: 'ped-002' }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: /PED-001/ })).toBeNull());
+    expect(screen.queryByText(/refina la búsqueda/)).toBeNull();
+    // PED-001 left the results but is still a stop of the route.
+    expect(screen.getByText('Parada 1 · PED-001')).toBeTruthy();
+  });
+
+  it('reloads the routes and the eligible orders after creating a route', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DispatchPlanningPage client={client} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Nueva ruta' }));
+    await screen.findByText(/PED-001/);
+    await pickDay(user, screen.getByLabelText('Fecha planificada'), 15);
+    await chooseOption(user, screen.getByLabelText('Conductor'), 'Ana Driver');
+    await chooseOption(user, screen.getByLabelText('Vehículo'), /ABC-123/);
+    await user.click(screen.getByLabelText(/PED-001/));
+    const pickerCalls = client.listDeliveryOrdersPage.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Crear ruta' }));
+
+    await screen.findByRole('status');
+    await waitFor(() => expect(client.listDispatchRoutesPage).toHaveBeenCalledTimes(2));
+    expect(client.listDeliveryOrdersPage.mock.calls.length).toBeGreaterThan(pickerCalls);
   });
 
   describe('route simulation', () => {
-    const simulationClient = (overrides: Record<string, unknown> = {}) => makeClient({
+    const simulationClient = (overrides: Parameters<typeof makeClient>[0] = {}) => makeClient({
       listDrivers: vi.fn().mockResolvedValue([
         { id: 'driver-1', fullName: 'Ana Driver', status: 'active' },
         { id: 'driver-2', fullName: 'Bruno Simulado', status: 'active' },
@@ -334,10 +419,10 @@ describe('DispatchPlanningPage', () => {
 
     it('labels simulated routes in the route list', async () => {
       render(<DispatchPlanningPage client={simulationClient({
-        listDispatchRoutes: vi.fn().mockResolvedValue([{
+        routes: [{
           id: 'route-sim', publicCode: 'RUTA-SIM', plannedDate: '2026-11-02', driverId: 'driver-2',
           vehicleId: 'vehicle-1', status: 'in_progress', simulatedCompletionEnabled: true, stops: [],
-        }]),
+        }],
       })} />);
 
       expect(await screen.findByText('Simulada')).toBeTruthy();

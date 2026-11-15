@@ -1,6 +1,4 @@
-import type { ApiClient, DeliveryOrder, DispatchRoute, Driver, Vehicle } from '../../api/client.js';
-
-export type RouteDetailsClient = Partial<Pick<ApiClient, 'listDispatchRoutes' | 'listDeliveryOrders' | 'listDrivers' | 'listVehicles'>>;
+import type { DeliveryOrder, DispatchRoute, Driver, Page, PageParams, Vehicle } from '../../api/client.js';
 
 /** Lo mínimo de una ruta para resolver su tripulación y su avance. */
 export type RouteDetailsRoute = Pick<DispatchRoute, 'id' | 'driverId' | 'vehicleId' | 'status'> & {
@@ -21,25 +19,28 @@ export interface RouteDetails<
   readonly vehicles: readonly Pick<Vehicle, 'id' | 'plate'>[];
 }
 
-/** Los catálogos completos, tal como los descarga {@link loadRouteDetails}. */
-export type FullRouteDetails = RouteDetails<DispatchRoute, DeliveryOrder> & {
-  readonly drivers: readonly Driver[];
-  readonly vehicles: readonly Vehicle[];
-};
+/** Página máxima del servidor: cada petición por `ids` pide como mucho estas filas. */
+export const IDS_CHUNK_SIZE = 100;
 
-export const NO_ROUTE_DETAILS: FullRouteDetails = { routes: [], orders: [], drivers: [], vehicles: [] };
+/**
+ * Trae por id, en lotes de {@link IDS_CHUNK_SIZE}, las filas que otra pantalla necesita (por ejemplo, los
+ * pedidos de las rutas visibles). Ignora ids repetidos; los de otra organización simplemente no llegan.
+ */
+export async function fetchByIds<T>(
+  fetchPage: (params: PageParams, signal?: AbortSignal) => Promise<Page<T>>,
+  ids: readonly string[],
+  signal?: AbortSignal,
+): Promise<readonly T[]> {
+  const unique = [...new Set(ids)];
+  const chunks: string[][] = [];
+  for (let start = 0; start < unique.length; start += IDS_CHUNK_SIZE) {
+    chunks.push(unique.slice(start, start + IDS_CHUNK_SIZE));
+  }
+  const pages = await Promise.all(chunks.map((chunk) => fetchPage({ ids: chunk, pageSize: IDS_CHUNK_SIZE }, signal)));
+  return pages.flatMap((page) => page.data);
+}
 
-export async function loadRouteDetails(client: RouteDetailsClient): Promise<FullRouteDetails> {
-  const [routes, orders, drivers, vehicles] = await Promise.allSettled([
-    client.listDispatchRoutes?.() ?? Promise.resolve([]),
-    client.listDeliveryOrders?.() ?? Promise.resolve([]),
-    client.listDrivers?.() ?? Promise.resolve([]),
-    client.listVehicles?.() ?? Promise.resolve([]),
-  ]);
-  return {
-    routes: routes.status === 'fulfilled' ? routes.value : [],
-    orders: orders.status === 'fulfilled' ? orders.value : [],
-    drivers: drivers.status === 'fulfilled' ? drivers.value : [],
-    vehicles: vehicles.status === 'fulfilled' ? vehicles.value : [],
-  };
+/** Ids de los pedidos de todas las paradas de las rutas dadas. */
+export function routeOrderIds(routes: readonly Pick<DispatchRoute, 'stops'>[]): readonly string[] {
+  return routes.flatMap((route) => route.stops.flatMap((stop) => stop.orderIds));
 }

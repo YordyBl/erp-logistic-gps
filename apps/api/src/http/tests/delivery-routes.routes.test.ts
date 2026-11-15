@@ -28,8 +28,110 @@ describe('GET /api/v1/delivery-routes', () => {
     const response = await request(ctx.testApp.app).get(ROUTES).set(bearer(ctx.token));
 
     expect(response.status).toBe(200);
-    expect(response.body.data).toEqual([created.body.data]);
-    expect((await request(ctx.testApp.app).get(ROUTES).set(bearer(ctx.otherToken))).body.data).toEqual([]);
+    expect(response.body).toEqual({
+      data: [created.body.data],
+      meta: { page: 1, pageSize: 20, total: 1, counts: { status: { planned: 1, in_progress: 0, completed: 0 } } },
+    });
+    const foreign = await request(ctx.testApp.app).get(ROUTES).set(bearer(ctx.otherToken));
+    expect(foreign.body).toEqual({
+      data: [],
+      meta: { page: 1, pageSize: 20, total: 0, counts: { status: { planned: 0, in_progress: 0, completed: 0 } } },
+    });
+    // A foreign id never leaks through the `ids` filter.
+    const foreignIds = await request(ctx.testApp.app).get(ROUTES).query({ ids: created.body.data.id })
+      .set(bearer(ctx.otherToken));
+    expect(foreignIds.body.data).toEqual([]);
+  });
+
+  it('pages, sorts, filters and searches routes with their stops and status counts', async () => {
+    const ctx = await seededRouteApp();
+    const third = await request(ctx.testApp.app).post('/api/v1/drivers').set(bearer(ctx.token))
+      .send({ fullName: 'Marta Paz', documentNumber: 'DNI-11223344',
+        phone: '+51 911 222 335', licenseNumber: 'Q-765432' });
+    const thirdVehicle = await request(ctx.testApp.app).post('/api/v1/vehicles').set(bearer(ctx.token))
+      .send({ plate: 'GHI-789', type: 'moto' });
+    expect(third.status).toBe(201);
+    expect(thirdVehicle.status).toBe(201);
+    const plan = async (publicCode: string, plannedDate: string, driverId: string, vehicleId: string) => {
+      const orderId = await ctx.createOrder(`ORD-${publicCode}`);
+      const created = await request(ctx.testApp.app).post(ROUTES).set(bearer(ctx.token))
+        .send({ publicCode, plannedDate, driverId, vehicleId, stops: stopsFor([orderId]) });
+      expect(created.status).toBe(201);
+      return { id: created.body.data.id as string, orderId };
+    };
+    const bravo = await plan('RUT-B', '2026-11-02', ctx.driverId, ctx.vehicleId);
+    const alpha = await plan('RUT-A', '2026-11-05', ctx.secondDriverId, ctx.secondVehicleId);
+    const charlie = await plan('RUT-C', '2026-11-03', third.body.data.id, thirdVehicle.body.data.id);
+    const list = (query: Record<string, string> = {}) =>
+      request(ctx.testApp.app).get(ROUTES).query(query).set(bearer(ctx.token));
+    const ids = async (query: Record<string, string>) => {
+      const response = await list(query);
+      expect(response.status).toBe(200);
+      return response.body.data.map((route: { id: string }) => route.id);
+    };
+
+    await expect(ids({})).resolves.toEqual([alpha.id, charlie.id, bravo.id]);
+    await expect(ids({ sort: 'plannedDate:asc' })).resolves.toEqual([bravo.id, charlie.id, alpha.id]);
+    await expect(ids({ sort: 'publicCode' })).resolves.toEqual([alpha.id, bravo.id, charlie.id]);
+    // Same status and creation instant: `id` breaks the tie.
+    await expect(ids({ sort: 'status:desc' })).resolves.toEqual([alpha.id, bravo.id, charlie.id].sort().reverse());
+
+    const second = await list({ pageSize: '1', page: '2' });
+    expect(second.body.meta).toEqual({
+      page: 2, pageSize: 1, total: 3, counts: { status: { planned: 3, in_progress: 0, completed: 0 } },
+    });
+    expect(second.body.data).toHaveLength(1);
+    expect(second.body.data[0]).toMatchObject({
+      id: charlie.id, publicCode: 'RUT-C', status: 'planned',
+      stops: [{ sequence: 1, ...ORDER_LOCATION, orderIds: [charlie.orderId] }],
+    });
+
+    // `q` matches the route code, the driver name and the plate, case-insensitively.
+    await expect(ids({ q: 'rut-b' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: 'ROSA' })).resolves.toEqual([alpha.id]);
+    await expect(ids({ q: 'ghi-7' })).resolves.toEqual([charlie.id]);
+    await expect(ids({ q: '%' })).resolves.toEqual([]);
+    await expect(ids({ q: '_' })).resolves.toEqual([]);
+
+    await expect(ids({ driverId: ctx.secondDriverId })).resolves.toEqual([alpha.id]);
+    await expect(ids({ vehicleId: ctx.vehicleId })).resolves.toEqual([bravo.id]);
+    await expect(ids({ ids: `${bravo.id},${alpha.id}` })).resolves.toEqual([alpha.id, bravo.id]);
+    await expect(ids({ plannedFrom: '2026-11-03' })).resolves.toEqual([alpha.id, charlie.id]);
+    await expect(ids({ plannedTo: '2026-11-03' })).resolves.toEqual([charlie.id, bravo.id]);
+    await expect(ids({ plannedFrom: '2026-11-03', plannedTo: '2026-11-03' })).resolves.toEqual([charlie.id]);
+
+    // The status facet ignores its own filter and applies the rest.
+    const inProgress = await list({ status: 'in_progress,completed', q: 'rut' });
+    expect(inProgress.body.data).toEqual([]);
+    expect(inProgress.body.meta).toEqual({
+      page: 1, pageSize: 20, total: 0, counts: { status: { planned: 3, in_progress: 0, completed: 0 } },
+    });
+    const planned = await list({ status: 'planned', plannedTo: '2026-11-02' });
+    expect(planned.body.meta.total).toBe(1);
+    expect(planned.body.meta.counts.status).toEqual({ planned: 1, in_progress: 0, completed: 0 });
+  });
+
+  it.each([
+    ['an unknown sort field', { sort: 'driver:asc' }],
+    ['an unknown sort direction', { sort: 'plannedDate:up' }],
+    ['a page size above 100', { pageSize: '101' }],
+    ['a zero page', { page: '0' }],
+    ['a cancelled status', { status: 'cancelled' }],
+    ['a malformed id', { ids: 'not-a-uuid' }],
+    ['a malformed driver id', { driverId: 'driver-1' }],
+    ['a malformed vehicle id', { vehicleId: 'vehicle-1' }],
+    ['an impossible date', { plannedFrom: '2026-02-30' }],
+    ['a date with a time', { plannedTo: '2026-11-02T00:00:00Z' }],
+    ['a reversed date range', { plannedFrom: '2026-11-05', plannedTo: '2026-11-01' }],
+    ['an unknown parameter', { limit: '5' }],
+  ])('returns 400 with issue details for %s', async (_label, query) => {
+    const ctx = await seededRouteApp();
+    const response = await request(ctx.testApp.app).get(ROUTES).query(query).set(bearer(ctx.token));
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatchObject({
+      code: 'DELIVERY_ROUTE_INVALID_INPUT', message: 'List routes query is invalid',
+    });
+    expect(response.body.error.details.issues.length).toBeGreaterThan(0);
   });
 
   it('keeps route listing and route detail restricted to dispatch roles', async () => {

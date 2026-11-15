@@ -2,6 +2,7 @@ import type { ZodError, ZodType } from 'zod';
 
 import { CustomerValidationError } from '../modules/customers/domain/errors/CustomerError.js';
 import { DeliveryOrderValidationError } from '../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
+import { DeliveryRouteValidationError } from '../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import { DriverValidationError } from '../modules/drivers/domain/errors/DriverError.js';
 import { IdentityValidationError } from '../modules/identity-and-access/domain/errors/IdentityError.js';
 import { VehicleValidationError } from '../modules/vehicles/domain/errors/VehicleError.js';
@@ -89,6 +90,21 @@ export function parseVehicleOrThrow<T>(
 
   if (!result.success) {
     throw new VehicleValidationError(message, { issues: toIssues(result.error) });
+  }
+
+  return result.data;
+}
+
+/** Route planning commands and queries (`DELIVERY_ROUTE_INVALID_INPUT`). */
+export function parseDeliveryRouteOrThrow<T>(
+  schema: ZodType<T>,
+  input: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(input);
+
+  if (!result.success) {
+    throw new DeliveryRouteValidationError(message, { issues: toIssues(result.error) });
   }
 
   return result.data;

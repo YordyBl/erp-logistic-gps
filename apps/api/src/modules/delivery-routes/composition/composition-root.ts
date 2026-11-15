@@ -13,7 +13,13 @@ import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteU
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
 import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
 import { ListRoutesUseCase } from '../application/use-cases/list-routes/ListRoutesUseCase.js';
-import type { PlannedRoute, PlannedStop, RoutePlanDraft, RoutePlanningStore } from '../application/ports/RoutePlanningStore.js';
+import { ListRoutesPageUseCase } from '../application/use-cases/list-routes/ListRoutesPageUseCase.js';
+import {
+  ROUTE_STATUSES,
+  type PlannedRoute, type PlannedStop, type RoutePageCriteria, type RoutePlanDraft, type RoutePlanningStore,
+  type RouteSortField,
+} from '../application/ports/RoutePlanningStore.js';
+import { pageOffset, type PageResult } from '../../../http/pagination.js';
 import type { MapLinkResolver } from '../application/ports/MapLinkResolver.js';
 import { GoogleMapsLinkResolver } from '../infrastructure/GoogleMapsLinkResolver.js';
 
@@ -25,7 +31,9 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
   constructor(private readonly orders: InMemoryDeliveryOrderRepository,
     private readonly bindings?: DriverAccountBindingStore,
     private readonly users?: UserRepository,
-    private readonly getDriver?: GetDriverUseCase) {}
+    private readonly getDriver?: Pick<GetDriverUseCase, 'execute'>,
+    /** Resolves plates for the `q` search; without it only codes and driver names match. */
+    private readonly getVehicle?: Pick<GetVehicleUseCase, 'execute'>) {}
 
   async nextPublicCode(): Promise<string> {
     return `RUT-${String(this.nextRouteNumber++).padStart(8, '0')}`;
@@ -75,6 +83,56 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
       .filter((route) => route.status === 'planned' || route.status === 'in_progress' || route.status === 'completed')
       .sort((left, right) => left.plannedDate.localeCompare(right.plannedDate) ||
         left.createdAt.localeCompare(right.createdAt));
+  }
+
+  /** Same filters, facet counts, order and slicing as the PostgreSQL adapter. */
+  async listPage(organizationId: string, criteria: RoutePageCriteria): Promise<PageResult<PlannedRoute>> {
+    const tenantRoutes = await this.list(organizationId);
+    const needle = criteria.q?.toLocaleLowerCase();
+    const searchable = new Map<string, string[]>();
+    if (needle !== undefined) {
+      for (const route of tenantRoutes) {
+        searchable.set(route.id, [route.publicCode,
+          await this.resourceName(() => this.getDriver?.execute({ organizationId, driverId: route.driverId })
+            .then((result) => result.driver.fullName)),
+          await this.resourceName(() => this.getVehicle?.execute({ organizationId, vehicleId: route.vehicleId })
+            .then((result) => result.vehicle.plate)),
+        ].filter((value): value is string => value !== undefined));
+      }
+    }
+    const matching = (omitStatus = false) => tenantRoutes.filter((route) => {
+      if (!omitStatus && criteria.status !== undefined && !criteria.status.includes(route.status)) return false;
+      if (criteria.ids !== undefined && !criteria.ids.includes(route.id)) return false;
+      if (criteria.driverId !== undefined && route.driverId !== criteria.driverId) return false;
+      if (criteria.vehicleId !== undefined && route.vehicleId !== criteria.vehicleId) return false;
+      const day = route.plannedDate.slice(0, 10);
+      if (criteria.plannedFrom !== undefined && day < criteria.plannedFrom) return false;
+      if (criteria.plannedTo !== undefined && day > criteria.plannedTo) return false;
+      if (needle === undefined) return true;
+      return (searchable.get(route.id) ?? []).some((value) => value.toLocaleLowerCase().includes(needle));
+    });
+
+    const status = Object.fromEntries(ROUTE_STATUSES.map((value) => [value, 0])) as Record<string, number>;
+    for (const route of matching(true)) status[route.status] = (status[route.status] ?? 0) + 1;
+
+    const filtered = matching();
+    const sign = criteria.sort.direction === 'asc' ? 1 : -1;
+    const sorted = [...filtered].sort((left, right) => sign * (
+      compareText(routeSortValue(left, criteria.sort.field), routeSortValue(right, criteria.sort.field))
+      || compareText(left.createdAt, right.createdAt)
+      || compareText(left.id, right.id)
+    ));
+    const offset = pageOffset(criteria);
+    return { items: sorted.slice(offset, offset + criteria.pageSize), total: filtered.length, counts: { status } };
+  }
+
+  /** A missing lookup or an unknown resource simply does not match the search. */
+  private async resourceName(read: () => Promise<string> | undefined): Promise<string | undefined> {
+    try {
+      return await read();
+    } catch {
+      return undefined;
+    }
   }
 
   async reassign(organizationId: string, routeId: string, changes: {
@@ -155,6 +213,18 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
   }
 }
 
+function routeSortValue(route: PlannedRoute, field: RouteSortField): string {
+  switch (field) {
+    case 'publicCode': return route.publicCode;
+    case 'plannedDate': return route.plannedDate.slice(0, 10);
+    case 'status': return route.status;
+  }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function createDeliveryRoutesModule(options: {
   readonly store: RoutePlanningStore;
   readonly getDriver: GetDriverUseCase;
@@ -171,6 +241,7 @@ export function createDeliveryRoutesModule(options: {
     planRoute: new PlanRouteUseCase(options.store, options.getDriver,
       options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver(), simulation),
     listRoutes: new ListRoutesUseCase(options.store),
+    listRoutesPage: new ListRoutesPageUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
     getRouteSimulation: new GetRouteSimulationUseCase(options.store, simulation),
     reassignRoute: new ReassignRouteUseCase(options.store, options.getDriver, options.getVehicle),

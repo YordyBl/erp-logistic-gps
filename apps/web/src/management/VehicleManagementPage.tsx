@@ -1,7 +1,7 @@
 import { Plus, SearchX, Truck } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
-import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleStatus } from '../api/client.js';
+import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleRouteStats, VehicleStatus } from '../api/client.js';
 import { FormSheet } from '../components/FormSheet.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
@@ -14,9 +14,20 @@ import { FieldGroup } from '../components/ui/field.js';
 import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
 import { VehicleDetail } from './vehicles/VehicleDetail.js';
 import { VehicleListItem } from './vehicles/VehicleListItem.js';
-import { EMPTY_STATS, groupRoutesByVehicle, monthlyRoutes, summarizeVehicleRoutes, todayInLima } from './vehicles/vehicleStats.js';
+import { EMPTY_STATS, toMonthlyRoutes, toVehicleStats } from './vehicles/vehicleStats.js';
 
-type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'listDispatchRoutes' | 'listDrivers'>;
+type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
+  | 'listDispatchRoutesPage' | 'listDrivers'>;
+
+/** Rutas del historial del vehículo elegido: la página más reciente. */
+const HISTORY_PAGE_SIZE = 20;
+
+interface RouteHistoryState {
+  readonly vehicleId: string;
+  readonly routes: readonly DispatchRoute[];
+  readonly total: number;
+  readonly failed: boolean;
+}
 
 interface VehicleForm {
   plate: string;
@@ -33,7 +44,8 @@ const emptyForm = (): VehicleForm => ({ plate: '', type: '', capacityKg: '' });
 
 export function VehicleManagementPage({ client }: { readonly client: VehicleClient }) {
   const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
-  const [routes, setRoutes] = useState<readonly DispatchRoute[]>([]);
+  const [routeStats, setRouteStats] = useState<readonly VehicleRouteStats[]>([]);
+  const [history, setHistory] = useState<RouteHistoryState | null>(null);
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [routesError, setRoutesError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -57,18 +69,16 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     setLoading(true);
     setLoadError(null);
     try {
-      // El historial complementa la flota: si las rutas fallan, los vehículos se muestran igual.
-      const [loadedVehicles, activity] = await Promise.all([
+      // Las estadísticas complementan la flota: si fallan, los vehículos se muestran igual.
+      const [loadedVehicles, loadedStats, loadedDrivers] = await Promise.all([
         client.listVehicles(),
-        Promise.all([client.listDispatchRoutes(), client.listDrivers()]).then(
-          ([loadedRoutes, loadedDrivers]) => ({ loadedRoutes, loadedDrivers }),
-          () => null,
-        ),
+        client.getVehicleRouteStats().catch(() => null),
+        client.listDrivers().catch(() => [] as readonly Driver[]),
       ]);
       setVehicles(loadedVehicles);
-      setRoutes(activity?.loadedRoutes ?? []);
-      setDrivers(activity?.loadedDrivers ?? []);
-      setRoutesError(activity === null);
+      setRouteStats(loadedStats ?? []);
+      setDrivers(loadedDrivers);
+      setRoutesError(loadedStats === null);
     } catch {
       setLoadError('No se pudieron cargar los vehículos. Comprueba la conexión e inténtalo de nuevo.');
     } finally {
@@ -152,10 +162,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   const activeCapacity = activeVehicles.reduce((total, vehicle) => total + (vehicle.capacityKg ?? 0), 0);
   const ready = !loading && loadError === null;
 
-  const routesByVehicle = useMemo(() => groupRoutesByVehicle(routes), [routes]);
-  const statsByVehicle = useMemo(() => new Map(
-    [...routesByVehicle].map(([vehicleId, list]) => [vehicleId, summarizeVehicleRoutes(list)] as const),
-  ), [routesByVehicle]);
+  const statsByVehicle = useMemo(() => new Map(routeStats.map((item) => [item.vehicleId, item] as const)), [routeStats]);
   const driversById = useMemo(() => new Map(drivers.map((driver) => [driver.id, driver] as const)), [drivers]);
   const visibleVehicles = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('es-PE');
@@ -163,7 +170,25 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
       `${vehicle.plate} ${vehicle.type}`.toLocaleLowerCase('es-PE').includes(needle));
   }, [query, vehicles]);
   const selectedVehicle = visibleVehicles.find((vehicle) => vehicle.id === selectedId) ?? visibleVehicles[0];
-  const selectedRoutes = selectedVehicle === undefined ? [] : routesByVehicle.get(selectedVehicle.id) ?? [];
+  const selectedVehicleId = selectedVehicle?.id;
+  const selectedStats = selectedVehicleId === undefined ? undefined : statsByVehicle.get(selectedVehicleId);
+  // Un vehículo recién registrado aún no tiene serie: se usan los meses de otro, en cero.
+  const selectedMonthly = useMemo(() => toMonthlyRoutes(selectedStats?.monthly
+    ?? routeStats[0]?.monthly.map(({ month }) => ({ month, routes: 0 })) ?? []), [routeStats, selectedStats]);
+
+  // El historial se pide al servidor solo para el vehículo elegido, una página.
+  useEffect(() => {
+    if (selectedVehicleId === undefined) return undefined;
+    const controller = new AbortController();
+    client.listDispatchRoutesPage({ vehicleId: selectedVehicleId, pageSize: HISTORY_PAGE_SIZE, sort: 'plannedDate:desc' }, controller.signal)
+      .then((page) => {
+        if (!controller.signal.aborted) setHistory({ vehicleId: selectedVehicleId, routes: page.data, total: page.meta.total, failed: false });
+      }, () => {
+        if (!controller.signal.aborted) setHistory({ vehicleId: selectedVehicleId, routes: [], total: 0, failed: true });
+      });
+    return () => controller.abort();
+  }, [client, selectedVehicleId, routeStats]);
+  const selectedHistory = history?.vehicleId === selectedVehicleId ? history : null;
 
   function selectVehicle(vehicle: Vehicle) {
     setSelectedId(vehicle.id);
@@ -213,7 +238,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
             ) : (
               <ul aria-label="Flota registrada" className="flex flex-col gap-3 lg:max-h-[calc(100svh-12rem)] lg:overflow-y-auto lg:p-1">
                 {visibleVehicles.map((vehicle) => (
-                  <VehicleListItem key={vehicle.id} vehicle={vehicle} stats={statsByVehicle.get(vehicle.id) ?? EMPTY_STATS}
+                  <VehicleListItem key={vehicle.id} vehicle={vehicle} stats={statsOf(statsByVehicle.get(vehicle.id))}
                     selected={vehicle.id === selectedVehicle?.id} onSelect={() => selectVehicle(vehicle)} />
                 ))}
               </ul>
@@ -221,9 +246,11 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
           </div>
           <div ref={detailRef} className="scroll-mt-4">
             {selectedVehicle !== undefined && (
-              <VehicleDetail vehicle={selectedVehicle} stats={statsByVehicle.get(selectedVehicle.id) ?? EMPTY_STATS}
-                monthly={monthlyRoutes(selectedRoutes, todayInLima())} routes={selectedRoutes} drivers={driversById}
-                routesError={routesError} onEdit={() => startEditing(selectedVehicle)} />
+              <VehicleDetail vehicle={selectedVehicle} stats={statsOf(selectedStats)}
+                monthly={selectedMonthly} routes={selectedHistory?.routes ?? []} routesTotal={selectedHistory?.total ?? 0}
+                drivers={driversById} routesError={routesError} historyError={selectedHistory?.failed ?? false}
+                historyLoading={selectedHistory === null}
+                onEdit={() => startEditing(selectedVehicle)} />
             )}
           </div>
         </div>
@@ -271,6 +298,10 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
       </FormSheet>
     </section>
   );
+}
+
+function statsOf(stats: VehicleRouteStats | undefined) {
+  return stats === undefined ? EMPTY_STATS : toVehicleStats(stats);
 }
 
 const INVALID_CAPACITY = Symbol('invalid capacity');
