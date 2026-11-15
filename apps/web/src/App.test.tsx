@@ -87,23 +87,31 @@ describe('role-specific delivery workspace', () => {
     expect(login).not.toHaveBeenCalled();
   });
 
-  it('refreshes the Pedidos submenu each time it opens to include new orders', async () => {
+  it('opens Pedidos as a plain link and shows an order detail from the list, not from the menu', async () => {
     const user = userEvent.setup();
-    const listOrders = vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order]);
+    const secondOrder: DeliveryOrder = {
+      ...order,
+      id: 'order-2',
+      publicCode: 'LIM-2042',
+      status: 'in_transit',
+      recipient: { name: 'Luis Soto', phone: '999 222 333' },
+      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores', latitude: null, longitude: null },
+    };
+    vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order, secondOrder]);
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
 
     render(<App />);
-    const toggle = await screen.findByRole('button', { name: 'Pedidos' });
-    await user.click(toggle);
-    await screen.findByRole('button', { name: 'Pedido LIM-2041' });
-    const callsAfterFirstOpen = listOrders.mock.calls.length;
+    await screen.findByRole('heading', { name: 'Estado del reparto' });
 
-    listOrders.mockResolvedValue([order, { ...order, id: 'order-3', publicCode: 'LIM-2043' }]);
-    await user.click(toggle);
-    await user.click(toggle);
+    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
+    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
+    // With thousands of orders the menu must stay usable: it never lists order codes.
+    expect(screen.queryByRole('button', { name: 'Pedido LIM-2042' })).toBeNull();
 
-    expect(await screen.findByRole('button', { name: 'Pedido LIM-2043' })).toBeTruthy();
-    expect(listOrders.mock.calls.length).toBeGreaterThan(callsAfterFirstOpen);
+    await user.click(await screen.findByText('LIM-2042'));
+
+    expect(await screen.findByRole('heading', { name: 'LIM-2042' })).toBeTruthy();
+    expect(screen.getByText('999 222 333')).toBeTruthy();
   });
 
   it('shows the assigned driver route and start action without exposing operator evidence search', async () => {
@@ -141,36 +149,6 @@ describe('role-specific delivery workspace', () => {
     expect((await screen.findAllByText('LIM-2041')).length).toBeGreaterThan(0);
   });
 
-  it('lists order codes in the Pedidos submenu and opens the selected order detail', async () => {
-    const user = userEvent.setup();
-    const secondOrder: DeliveryOrder = {
-      ...order,
-      id: 'order-2',
-      publicCode: 'LIM-2042',
-      status: 'in_transit',
-      recipient: { name: 'Luis Soto', phone: '999 222 333' },
-      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores', latitude: null, longitude: null },
-    };
-    const listOrders = vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order, secondOrder]);
-    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
-
-    render(<App />);
-    await screen.findByRole('heading', { name: 'Estado del reparto' });
-    // El Resumen pide los pedidos para su tabla; el menú no los lista hasta que se abre.
-    await waitFor(() => expect(listOrders).toHaveBeenCalledOnce());
-    expect(screen.queryByRole('button', { name: 'Pedido LIM-2041' })).toBeNull();
-
-    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
-    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
-    await waitFor(() => expect(listOrders.mock.calls.length).toBeGreaterThan(1));
-
-    const secondCode = await screen.findByRole('button', { name: 'Pedido LIM-2042' });
-    expect(screen.getByRole('button', { name: 'Pedido LIM-2041' })).toBeTruthy();
-    await user.click(secondCode);
-
-    expect(await screen.findByRole('heading', { name: 'LIM-2042' })).toBeTruthy();
-    expect(screen.getByText('999 222 333')).toBeTruthy();
-  });
 
   it('opens the control tower for dispatchers while keeping it out of the driver workspace', async () => {
     const user = userEvent.setup();

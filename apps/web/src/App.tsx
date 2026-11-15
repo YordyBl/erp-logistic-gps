@@ -19,7 +19,6 @@ import { VehicleManagementPage } from './management/VehicleManagementPage.js';
 import { AppShell } from './shell/AppShell.js';
 import { IncidentNotifications } from './shell/IncidentNotifications.js';
 import type { OperatorView } from './shell/navigation.js';
-import { useSidebarOrders } from './shell/useSidebarOrders.js';
 
 export function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
@@ -70,11 +69,17 @@ function Workspace({ session, onSignOut }: { readonly session: AuthSession; read
   const isDriver = session.user.role === 'DRIVER';
   const [activeView, setActiveView] = useState<OperatorView>('dashboard');
   const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
-  const sidebarOrders = useSidebarOrders(api);
 
+  /** Incident notifications open one order's detail inside Pedidos. */
   function openOrder(code: string): void {
     setSelectedOrderCode(code);
     setActiveView('orders');
+  }
+
+  /** Navigating from the sidebar opens the plain list, without a previously opened detail. */
+  function navigate(view: OperatorView): void {
+    setSelectedOrderCode(null);
+    setActiveView(view);
   }
 
   return (
@@ -82,9 +87,7 @@ function Workspace({ session, onSignOut }: { readonly session: AuthSession; read
       headerActions={isDriver ? undefined : (
         <IncidentNotifications client={api} refreshKey={activeView} onOpenOrder={openOrder} onOpenDispatch={() => setActiveView('routes')} />
       )}
-      orders={sidebarOrders} selectedOrderCode={selectedOrderCode}
-      onNavigate={setActiveView} onOpenOrder={openOrder} onSignOut={() => void onSignOut()}
-      onToggleOrders={() => { setActiveView('orders'); void sidebarOrders.toggle(); }}>
+      onNavigate={navigate} onSignOut={() => void onSignOut()}>
       {isDriver ? <DriverWorkspace client={api} /> : <OperatorPage view={activeView} session={session} selectedOrderCode={selectedOrderCode}
         onNavigate={setActiveView} onSelectOrder={setSelectedOrderCode} />}
     </AppShell>
