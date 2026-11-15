@@ -4,7 +4,9 @@ import { In, type DataSource } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
+import type { DeliveryOrderPageCriteria } from '../../application/ports/DeliveryOrderRepository.js';
 import { GetDeliveryOrderUseCase } from '../../application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
+import { InMemoryDeliveryOrderRepository } from '../../composition/composition-root.js';
 import { DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
 import {
   DeliveryOrderForbiddenError,
@@ -287,6 +289,92 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     const foreignList = await repositoryOrThrow().list(foreignId);
     expect(foreignList.map((order) => order.id)).toEqual([foreign.id]);
     await expect(repositoryOrThrow().list(await newOrganizationId())).resolves.toEqual([]);
+  });
+
+  it('pages, filters, searches and counts like the in-memory adapter', async () => {
+    const ownerId = await newOrganizationId();
+    const foreignId = await newOrganizationId();
+    const memory = new InMemoryDeliveryOrderRepository();
+    const CANCELLED_AT = '2026-10-26T19:00:00.000Z';
+    const variant = (organizationId: string, publicCode: string, overrides: {
+      readonly name: string; readonly district: string; readonly createdAt: string;
+      readonly timeWindow?: 'AM' | 'PM'; readonly addressLine?: string;
+    }) => DeliveryOrder.create({
+      id: randomUUID(),
+      organizationId,
+      customerId: customerIds.get(organizationId)!,
+      timeWindow: overrides.timeWindow ?? 'AM',
+      publicCode,
+      recipient: Recipient.create({ name: overrides.name, phone: '+51 987 654 321' }),
+      deliveryAddress: DeliveryAddress.create({
+        addressLine: overrides.addressLine ?? 'Av. Arequipa 1234', district: overrides.district,
+        latitude: -12.0716, longitude: -77.0365,
+      }),
+      packages: [
+        Package.create({ code: 'PKG-002', description: 'Segundo' }),
+        Package.create({ code: 'PKG-001', description: 'Primero', weightKg: 1.25 }),
+      ],
+      createdAt: overrides.createdAt,
+    });
+    const orders = [
+      variant(ownerId, 'PAGE-001', { name: 'Ana Quispe', district: 'Lince', createdAt: '2026-10-26T15:00:00.000Z' }),
+      variant(ownerId, 'PAGE-002', {
+        name: 'Bruno Díaz', district: 'Surco', createdAt: '2026-10-26T16:00:00.000Z', timeWindow: 'PM',
+        addressLine: 'Calle 50% Descuento 12',
+      }),
+      variant(ownerId, 'PAGE-003', { name: 'Carla Ríos', district: 'Lince', createdAt: '2026-10-26T16:00:00.000Z' }),
+      variant(ownerId, 'PAGE-004', { name: 'Diego Paz', district: 'Barranco', createdAt: '2026-10-26T17:00:00.000Z' }),
+      variant(foreignId, 'PAGE-005', { name: 'Ana Foránea', district: 'Lince', createdAt: '2026-10-26T18:00:00.000Z' }),
+    ];
+    for (const order of orders) {
+      await repositoryOrThrow().save(order);
+      await memory.save(order);
+    }
+    await repositoryOrThrow().cancel(ownerId, orders[3]!.id, randomUUID(), CANCELLED_AT);
+    await memory.cancel(ownerId, orders[3]!.id, randomUUID(), CANCELLED_AT);
+
+    const base = { page: 1, pageSize: 20, sort: { field: 'createdAt', direction: 'desc' } } as const;
+    const scenarios: DeliveryOrderPageCriteria[] = [
+      base,
+      { ...base, page: 2, pageSize: 2 },
+      { ...base, sort: { field: 'createdAt', direction: 'asc' } },
+      { ...base, sort: { field: 'publicCode', direction: 'asc' } },
+      { ...base, sort: { field: 'recipientName', direction: 'desc' } },
+      { ...base, sort: { field: 'district', direction: 'asc' } },
+      { ...base, status: ['cancelled'] },
+      { ...base, status: ['created'], timeWindow: ['AM'] },
+      { ...base, timeWindow: ['PM'] },
+      { ...base, q: 'LINCE' },
+      { ...base, q: 'ana' },
+      { ...base, q: '50%' },
+      { ...base, q: '_' },
+      { ...base, ids: [orders[0]!.id, orders[4]!.id] },
+      { ...base, customerId: customerIds.get(ownerId)! },
+      { ...base, customerId: randomUUID() },
+      { ...base, page: 9 },
+    ];
+    for (const criteria of scenarios) {
+      const [stored, inMemory] = await Promise.all([
+        repositoryOrThrow().listPage(ownerId, criteria),
+        memory.listPage(ownerId, criteria),
+      ]);
+      expect({ ...stored, items: stored.items.map(toDeliveryOrderDto) }, JSON.stringify(criteria))
+        .toEqual({ ...inMemory, items: inMemory.items.map(toDeliveryOrderDto) });
+    }
+
+    const firstPage = await repositoryOrThrow().listPage(ownerId, { ...base, pageSize: 2 });
+    // createdAt desc, then id desc between the two 16:00 orders.
+    const tied = [orders[1]!.id, orders[2]!.id].sort().reverse();
+    expect(firstPage.items.map((order) => order.id)).toEqual([orders[3]!.id, tied[0]]);
+    expect(firstPage.total).toBe(4);
+    expect(firstPage.counts).toEqual({
+      status: { created: 3, planned: 0, assigned: 0, in_transit: 0, delivered: 0, returned: 0, cancelled: 1 },
+      timeWindow: { AM: 3, PM: 1 },
+    });
+    expect(firstPage.items[0]!.packages.map((item) => item.code)).toEqual(['PKG-002', 'PKG-001']);
+    const lince = await repositoryOrThrow().listPage(ownerId, { ...base, q: 'lince', status: ['cancelled'] });
+    expect(lince.items).toEqual([]);
+    expect(lince.counts?.status).toMatchObject({ created: 2, cancelled: 0 });
   });
 
   it('enforces public-code uniqueness per organization and scopes the lookup by organization', async () => {

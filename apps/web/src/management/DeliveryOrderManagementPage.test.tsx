@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
 
-import { ApiError, type Customer, type DeliveryOrder, type DeliveryOrderImportResult, type DeliveryOrderStatusHistory } from '../api/client.js';
+import { ApiError, type Customer, type DeliveryOrder, type DeliveryOrderImportResult, type DeliveryOrderStatusHistory, type Page, type PageParams } from '../api/client.js';
 import { DeliveryOrderManagementPage } from './DeliveryOrderManagementPage.js';
 
 const customer: Customer = {
@@ -23,6 +23,17 @@ const order: DeliveryOrder = {
   createdAt: '2026-10-29T12:00:00.000Z', updatedAt: '2026-10-29T12:00:00.000Z',
 };
 
+/** Una página del servidor con los conteos por faceta de esas filas. */
+function pageOf(orders: readonly DeliveryOrder[], total = orders.length): Page<DeliveryOrder> {
+  const status: Record<string, number> = {};
+  const timeWindow: Record<string, number> = { AM: 0, PM: 0 };
+  for (const item of orders) {
+    status[item.status] = (status[item.status] ?? 0) + 1;
+    timeWindow[item.timeWindow] = (timeWindow[item.timeWindow] ?? 0) + 1;
+  }
+  return { data: orders, meta: { page: 1, pageSize: 10, total, counts: { status, timeWindow } } };
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -30,7 +41,7 @@ afterEach(() => {
 
 function makeClient(overrides: Partial<{
   listCustomers: () => Promise<readonly Customer[]>;
-  listDeliveryOrders: () => Promise<readonly DeliveryOrder[]>;
+  listDeliveryOrdersPage: (params: PageParams, signal?: AbortSignal) => Promise<Page<DeliveryOrder>>;
   createDeliveryOrder: (input: unknown) => Promise<DeliveryOrder>;
   resolveGoogleMapsLink: (url: string) => Promise<{ latitude: number; longitude: number }>;
   editDeliveryOrder: (id: string, changes: unknown) => Promise<DeliveryOrder>;
@@ -41,7 +52,7 @@ function makeClient(overrides: Partial<{
 }> = {}) {
   return {
     listCustomers: vi.fn().mockResolvedValue([customer, inactiveCustomer]),
-    listDeliveryOrders: vi.fn().mockResolvedValue([order]),
+    listDeliveryOrdersPage: vi.fn().mockResolvedValue(pageOf([order])),
     createDeliveryOrder: vi.fn().mockResolvedValue(order),
     resolveGoogleMapsLink: vi.fn().mockResolvedValue({ latitude: -12.1, longitude: -77.02 }),
     editDeliveryOrder: vi.fn().mockResolvedValue(order),
@@ -60,7 +71,8 @@ describe('DeliveryOrderManagementPage', () => {
 
     await screen.findByText('LIM-2041');
     expect(client.listCustomers).toHaveBeenCalledOnce();
-    expect(client.listDeliveryOrders).toHaveBeenCalledOnce();
+    expect(client.listDeliveryOrdersPage).toHaveBeenCalledOnce();
+    expect(client.listDeliveryOrdersPage).toHaveBeenCalledWith({ page: 1, pageSize: 10 }, expect.any(AbortSignal));
     expect(screen.getByText('Acme Logística')).toBeTruthy();
     expect(screen.getByText(/María Pérez/)).toBeTruthy();
     expect(screen.getByText(/Av\. Arequipa 123/)).toBeTruthy();
@@ -158,6 +170,7 @@ describe('DeliveryOrderManagementPage', () => {
     const file = new File(['csv'], 'orders.csv', { type: 'text/csv' });
     const imported = { ...order, id: 'order-imported', publicCode: 'IMP-2' };
     const client = makeClient({
+      listDeliveryOrdersPage: vi.fn().mockResolvedValueOnce(pageOf([order])).mockResolvedValue(pageOf([imported, order])),
       importDeliveryOrders: vi.fn().mockResolvedValue({
         importedOrders: [imported],
         rejectedOrders: [{
@@ -177,7 +190,27 @@ describe('DeliveryOrderManagementPage', () => {
     expect(screen.getByText(/IMP-1/)).toBeTruthy();
     expect(screen.getByText(/filas 2, 3/)).toBeTruthy();
     expect(client.importDeliveryOrders).toHaveBeenCalledWith(file);
+    // La lista se vuelve a pedir al servidor en vez de editarse en local.
     expect(await screen.findByText('IMP-2')).toBeTruthy();
+    expect(client.listDeliveryOrdersPage).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends search, facet filters and server sort fields as page parameters', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DeliveryOrderManagementPage client={client} />);
+    await screen.findByText('LIM-2041');
+
+    await user.type(screen.getByPlaceholderText('Buscar pedido, destinatario, teléfono o dirección'), 'lince');
+    await waitFor(() => expect(client.listDeliveryOrdersPage).toHaveBeenLastCalledWith(
+      { page: 1, pageSize: 10, q: 'lince' }, expect.any(AbortSignal)));
+
+    await user.click(screen.getByRole('button', { name: /Destinatario/ }));
+    await waitFor(() => expect(client.listDeliveryOrdersPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: expect.stringMatching(/^recipientName:(asc|desc)$/) }), expect.any(AbortSignal)));
+    // Cliente y bultos no se pueden ordenar en el servidor.
+    expect(screen.queryByRole('button', { name: /^Cliente/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Bultos/ })).toBeNull();
   });
 
   it('loads and shows tenant-scoped status history on demand', async () => {
@@ -199,7 +232,7 @@ describe('DeliveryOrderManagementPage', () => {
   it('links the order detail to its stored coordinates in Google Maps to check them against the address', async () => {
     const user = setupUser();
     const located: DeliveryOrder = { ...order, deliveryAddress: { ...order.deliveryAddress, latitude: -12.0840, longitude: -77.0350 } };
-    const client = makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue([located]) });
+    const client = makeClient({ listDeliveryOrdersPage: vi.fn().mockResolvedValue(pageOf([located])) });
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
@@ -274,7 +307,7 @@ describe('DeliveryOrderManagementPage', () => {
   it('surfaces inactive customer conflict and allows retrying failed list loads', async () => {
     const user = setupUser();
     const client = makeClient({
-      listDeliveryOrders: vi.fn().mockRejectedValueOnce(new Error('fallo de red')).mockResolvedValue([order]),
+      listDeliveryOrdersPage: vi.fn().mockRejectedValueOnce(new Error('fallo de red')).mockResolvedValue(pageOf([order])),
       createDeliveryOrder: vi.fn().mockRejectedValue(Object.assign(new Error('Cliente inactivo'), {
         status: 409, code: 'CUSTOMER_INACTIVE',
       })),
@@ -364,7 +397,10 @@ describe('DeliveryOrderManagementPage', () => {
   it('asks for confirmation before cancelling and refreshes the order list', async () => {
     const user = setupUser();
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const client = makeClient();
+    const client = makeClient({
+      listDeliveryOrdersPage: vi.fn().mockResolvedValueOnce(pageOf([order]))
+        .mockResolvedValue(pageOf([{ ...order, status: 'cancelled' }])),
+    });
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
@@ -383,7 +419,7 @@ describe('DeliveryOrderManagementPage', () => {
     const located: DeliveryOrder = { ...order, deliveryAddress: { ...order.deliveryAddress, latitude: -12.08, longitude: -77.03 } };
     const updated: DeliveryOrder = { ...located, recipient: { name: 'Lucía Ramos', phone: '999 000 111' } };
     const client = makeClient({
-      listDeliveryOrders: vi.fn().mockResolvedValue([located]),
+      listDeliveryOrdersPage: vi.fn().mockResolvedValueOnce(pageOf([located])).mockResolvedValue(pageOf([updated])),
       editDeliveryOrder: vi.fn().mockResolvedValue(updated),
     });
     render(<DeliveryOrderManagementPage client={client} />);
@@ -411,7 +447,7 @@ describe('DeliveryOrderManagementPage', () => {
 
   it('offers editing only while the order is created', async () => {
     const user = setupUser();
-    const client = makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue([{ ...order, status: 'planned' }]) });
+    const client = makeClient({ listDeliveryOrdersPage: vi.fn().mockResolvedValue(pageOf([{ ...order, status: 'planned' }])) });
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');

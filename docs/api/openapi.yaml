@@ -973,15 +973,21 @@ paths:
       summary: List tenant orders or read one by public code
       description: |
         Only ADMIN and DISPATCHER may access this general order catalog; DRIVER
-        uses assigned-route execution endpoints. Without query parameters, lists
-        the caller's organization orders in
-        ascending creation time then id, including cancelled orders. An empty
-        organization returns `data: []`. With `publicCode`, looks up exactly one
-        order and preserves the existing single-resource response; unknown codes
-        and codes owned by another organization both return 404.
+        uses assigned-route execution endpoints.
 
-        Unknown query parameters are rejected with 400. Other filters and
-        pagination remain future work.
+        Without `publicCode`, returns one page of the caller's organization
+        orders (cancelled ones included) as `{ data, meta }`. Filters combine
+        with AND. `meta.counts.status` and `meta.counts.timeWindow` list every
+        value (0 when none match) and apply every filter except their own, so
+        they can label facet options. The default sort is `createdAt:desc`;
+        `id` in the same direction always breaks ties.
+
+        With `publicCode` (and no other parameter), looks up exactly one order
+        and preserves the single-resource response; unknown codes and codes
+        owned by another organization both return 404.
+
+        Unknown query parameters, a sort outside the whitelist and
+        `pageSize > 100` are rejected with 400.
       security:
         - bearerAuth: []
       parameters:
@@ -989,16 +995,50 @@ paths:
         - name: publicCode
           in: query
           required: false
-          description: Optional readable order code; when absent, return the tenant list.
+          description: Readable order code; when present it must be the only parameter and returns one order.
           schema:
             type: string
             minLength: 3
             maxLength: 32
             pattern: '^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$'
           example: ORD-2026-0001
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SearchText'
+        - name: sort
+          in: query
+          required: false
+          description: |
+            `field:asc|desc` (a bare field sorts ascending). Fields:
+            `publicCode`, `createdAt`, `recipientName`, `district`.
+          schema:
+            type: string
+            default: 'createdAt:desc'
+            pattern: '^(publicCode|createdAt|recipientName|district)(:(asc|desc))?$'
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated order statuses.
+          schema:
+            type: string
+          example: created,returned
+        - name: timeWindow
+          in: query
+          required: false
+          description: Comma-separated delivery windows (`AM`, `PM`).
+          schema:
+            type: string
+          example: AM
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/IdList'
       responses:
         '200':
-          description: Tenant order list or one order matching publicCode.
+          description: One page of tenant orders, or one order matching publicCode.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
@@ -1007,13 +1047,7 @@ paths:
               schema:
                 oneOf:
                   - $ref: '#/components/schemas/DeliveryOrderResponse'
-                  - type: object
-                    required: [data]
-                    properties:
-                      data:
-                        type: array
-                        items:
-                          $ref: '#/components/schemas/DeliveryOrder'
+                  - $ref: '#/components/schemas/DeliveryOrderPage'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2064,6 +2098,39 @@ components:
         maxLength: 128
         pattern: '^[A-Za-z0-9._:-]+$'
       example: dispatcher-request-42
+    PageNumber:
+      name: page
+      in: query
+      required: false
+      description: 1-based page number. A page past the end returns `data: []` with the real `total`.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: pageSize
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    SearchText:
+      name: q
+      in: query
+      required: false
+      description: Case-insensitive substring search over the resource's search columns; trimmed, empty means no search.
+      schema:
+        type: string
+        maxLength: 100
+    IdList:
+      name: ids
+      in: query
+      required: false
+      description: Comma-separated ids (at most 200) to restrict the page to.
+      schema:
+        type: string
   headers:
     XRequestId:
       description: Correlation id for this request and its logs.
@@ -2936,6 +3003,48 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/DeliveryOrder'
+    PageMeta:
+      type: object
+      required: [page, pageSize, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+          description: Rows matching every filter, across all pages.
+        counts:
+          type: object
+          description: Facet counts keyed by facet then value; each facet ignores its own filter.
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: integer
+              minimum: 0
+    DeliveryOrderPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeliveryOrder'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+      example:
+        data: []
+        meta:
+          page: 1
+          pageSize: 20
+          total: 0
+          counts:
+            status: { created: 0, planned: 0, assigned: 0, in_transit: 0, delivered: 0, returned: 0, cancelled: 0 }
+            timeWindow: { AM: 0, PM: 0 }
     DeliveryOrderImportResponse:
       type: object
       required: [data]

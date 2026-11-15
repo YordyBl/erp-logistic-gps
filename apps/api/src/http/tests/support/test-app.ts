@@ -301,6 +301,7 @@ export function createFailingRepository(
     findById: fail,
     findByPublicCode: fail,
     list: fail,
+    listPage: fail,
     editDetails: fail,
     cancel: fail,
     findStatusHistory: fail,

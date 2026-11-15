@@ -112,6 +112,18 @@ async function createOrder(
   return response.body.data.id as string;
 }
 
+function listOrders(app: Express, token: string, query: Record<string, string> = {}) {
+  return request(app).get('/api/v1/delivery-orders').query(query).set(bearer(token));
+}
+
+/** `meta.counts.status` lists every status, with 0 for the ones not given. */
+function statusCounts(counts: Record<string, number>): Record<string, number> {
+  return {
+    created: 0, planned: 0, assigned: 0, in_transit: 0, delivered: 0, returned: 0, cancelled: 0,
+    ...counts,
+  };
+}
+
 describe('POST /api/v1/delivery-orders', () => {
   it('allows dispatchers to create orders and rejects drivers without storing an order', async () => {
     const testApp = buildTestApp({ seedTestCustomer: true });
@@ -336,6 +348,9 @@ describe('POST /api/v1/delivery-orders', () => {
       },
       async list() {
         return [];
+      },
+      async listPage() {
+        return { items: [], total: 0 };
       },
       async editDetails() {
         throw new Error('Unexpected edit');
@@ -809,23 +824,148 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     expect(response.status).toBe(200);
     const first = await request(app).get(`/api/v1/delivery-orders/${firstId}`).set(bearer(token));
     const second = await request(app).get(`/api/v1/delivery-orders/${secondId}`).set(bearer(token));
+    // Default sort is createdAt:desc with id:desc as the tiebreak (same instant here).
     const sorted = [first.body.data, second.body.data].sort(
-      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      (left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
     );
-    expect(response.body).toEqual({ data: sorted });
-    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual(sorted.map((order) => order.id));
+    expect(response.body).toEqual({
+      data: sorted,
+      meta: {
+        page: 1, pageSize: 20, total: 2,
+        counts: { status: statusCounts({ created: 2 }), timeWindow: { AM: 2, PM: 0 } },
+      },
+    });
+    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual([secondId, firstId]);
 
     const foreignList = await request(app).get('/api/v1/delivery-orders').set(bearer(otherToken));
     expect(foreignList.status).toBe(200);
     expect(foreignList.body.data).toHaveLength(1);
     expect(foreignList.body.data[0].organizationId).toBe(OTHER_ORGANIZATION_ID);
+    expect(foreignList.body.meta.total).toBe(1);
+    expect(foreignList.body.meta.counts.status.created).toBe(1);
+
+    // A foreign id never leaks through the `ids` filter.
+    const foreignIds = await listOrders(app, otherToken, { ids: `${firstId},${secondId}` });
+    expect(foreignIds.body.data).toEqual([]);
+    expect(foreignIds.body.meta.total).toBe(0);
+  });
+
+  it('pages and sorts by the whitelisted fields with a stable order', async () => {
+    const { app, token } = await buildSeededApp();
+    const bruno = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0003', recipient: { name: 'Bruno Díaz', phone: '+51 911 111 111' },
+      deliveryAddress: { addressLine: 'Jr. Lampa 100', district: 'Cercado de Lima', latitude: -12.05, longitude: -77.03 },
+    }));
+    const ana = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0001', recipient: { name: 'Ana Torres', phone: '+51 922 222 222' },
+      deliveryAddress: { addressLine: 'Av. Larco 200', district: 'Miraflores', latitude: -12.12, longitude: -77.03 },
+    }));
+    const carla = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0002', recipient: { name: 'Carla Ríos', phone: '+51 933 333 333' },
+      deliveryAddress: { addressLine: 'Av. Brasil 300', district: 'Jesús María', latitude: -12.07, longitude: -77.05 },
+    }));
+    const ids = async (query: Record<string, string>) => {
+      const response = await listOrders(app, token, query);
+      expect(response.status).toBe(200);
+      return response.body.data.map((order: { id: string }) => order.id);
+    };
+
+    await expect(ids({})).resolves.toEqual([carla, ana, bruno]);
+    await expect(ids({ sort: 'createdAt:asc' })).resolves.toEqual([bruno, ana, carla]);
+    await expect(ids({ sort: 'publicCode:asc' })).resolves.toEqual([ana, carla, bruno]);
+    await expect(ids({ sort: 'recipientName' })).resolves.toEqual([ana, bruno, carla]);
+    await expect(ids({ sort: 'district:desc' })).resolves.toEqual([ana, carla, bruno]);
+
+    const middle = await listOrders(app, token, { sort: 'recipientName:asc', page: '2', pageSize: '1' });
+    expect(middle.body.data.map((order: { id: string }) => order.id)).toEqual([bruno]);
+    expect(middle.body.meta).toMatchObject({ page: 2, pageSize: 1, total: 3 });
+    expect(middle.body.data[0].packages.map((item: { code: string }) => item.code)).toEqual(['PKG-001', 'PKG-002']);
+
+    const beyond = await listOrders(app, token, { page: '5', pageSize: '2' });
+    expect(beyond.body.data).toEqual([]);
+    expect(beyond.body.meta).toMatchObject({ page: 5, pageSize: 2, total: 3 });
+  });
+
+  it('filters by status, time window, customer, ids and search text with facet counts', async () => {
+    const { app, token } = await buildSeededApp();
+    const morning = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0001' }));
+    const evening = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0002', timeWindow: 'PM',
+      recipient: { name: 'Luis Paz', phone: '+51 955 555 555' },
+      deliveryAddress: { addressLine: 'Calle 50% Descuento 12', district: 'Surco', latitude: -12.14, longitude: -76.99 },
+    }));
+    const cancelled = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0003' }));
+    const cancel = await request(app).post(`/api/v1/delivery-orders/${cancelled}/cancel`).set(bearer(token)).send({});
+    expect(cancel.status).toBe(200);
+    const ids = (response: request.Response) => response.body.data.map((order: { id: string }) => order.id);
+
+    const byStatus = await listOrders(app, token, { status: 'cancelled' });
+    expect(ids(byStatus)).toEqual([cancelled]);
+    // Facets ignore their own filter but apply the rest.
+    expect(byStatus.body.meta).toEqual({
+      page: 1, pageSize: 20, total: 1,
+      counts: { status: statusCounts({ created: 2, cancelled: 1 }), timeWindow: { AM: 1, PM: 0 } },
+    });
+
+    const severalStatuses = await listOrders(app, token, { status: 'created, cancelled' });
+    expect(ids(severalStatuses)).toEqual([cancelled, evening, morning]);
+
+    const byWindow = await listOrders(app, token, { timeWindow: 'PM' });
+    expect(ids(byWindow)).toEqual([evening]);
+    expect(byWindow.body.meta.counts).toEqual({
+      status: statusCounts({ created: 1 }), timeWindow: { AM: 2, PM: 1 },
+    });
+
+    const byIds = await listOrders(app, token, { ids: `${morning},${cancelled}` });
+    expect(ids(byIds)).toEqual([cancelled, morning]);
+    const byCustomer = await listOrders(app, token, { customerId: CUSTOMER_ID });
+    expect(byCustomer.body.meta.total).toBe(3);
+    const otherCustomer = await listOrders(app, token, { customerId: OTHER_CUSTOMER_ID });
+    expect(otherCustomer.body.meta.total).toBe(0);
+
+    // `q` searches code, recipient name and phone, address and district, case-insensitively.
+    expect(ids(await listOrders(app, token, { q: 'ord-2026-0002' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: 'luis' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '955 555' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: 'surco' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '  JAVIER prado ' }))).toEqual([cancelled, morning]);
+    // LIKE wildcards are literal characters.
+    expect(ids(await listOrders(app, token, { q: '50%' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '%' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '_' }))).toEqual([]);
+    const searched = await listOrders(app, token, { q: 'javier', status: 'created' });
+    expect(ids(searched)).toEqual([morning]);
+    expect(searched.body.meta.counts.status).toEqual(statusCounts({ created: 1, cancelled: 1 }));
+  });
+
+  it.each([
+    ['an unknown sort field', { sort: 'customer:asc' }],
+    ['an unknown sort direction', { sort: 'createdAt:up' }],
+    ['a page size above 100', { pageSize: '101' }],
+    ['a zero page size', { pageSize: '0' }],
+    ['a non-numeric page', { page: 'two' }],
+    ['an unknown status', { status: 'lost' }],
+    ['an unknown time window', { timeWindow: 'NOON' }],
+    ['a malformed id', { ids: 'not-a-uuid' }],
+    ['a malformed customer id', { customerId: 'not-a-uuid' }],
+    ['an unknown parameter', { limit: '5' }],
+    ['a publicCode combined with paging', { publicCode: 'ORD-2026-0001', page: '1' }],
+  ])('returns 400 for %s', async (_label, query) => {
+    const { app, token } = await buildSeededApp();
+    const response = await listOrders(app, token, query);
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+    expect(response.body.error.message).toBe('List delivery orders query is invalid');
   });
 
   it('returns an empty list for a new organization and rejects unrecognized filters', async () => {
     const { app, token } = await buildSeededApp();
     const empty = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
     expect(empty.status).toBe(200);
-    expect(empty.body).toEqual({ data: [] });
+    expect(empty.body).toEqual({
+      data: [],
+      meta: { page: 1, pageSize: 20, total: 0, counts: { status: statusCounts({}), timeWindow: { AM: 0, PM: 0 } } },
+    });
 
     const invalid = await request(app)
       .get('/api/v1/delivery-orders').query({ unknown: 'value' }).set(bearer(token));

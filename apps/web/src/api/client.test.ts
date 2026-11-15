@@ -229,7 +229,9 @@ describe('ApiClient customer and order management', () => {
       createdAt: '2026-11-02T10:00:00.000Z', updatedAt: '2026-11-02T10:00:00.000Z',
     };
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [order] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [order], meta: { page: 1, pageSize: 10, total: 1, counts: { status: { created: 1 } } },
+      }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: order }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { ...order, status: 'cancelled' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
@@ -238,7 +240,8 @@ describe('ApiClient customer and order management', () => {
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
     client.setAccessToken('access-token');
 
-    await expect(client.listDeliveryOrders()).resolves.toEqual([order]);
+    await expect(client.listDeliveryOrdersPage({ page: 1, pageSize: 10, q: 'lince', status: ['created', 'returned'] }))
+      .resolves.toMatchObject({ data: [order], meta: { total: 1, counts: { status: { created: 1 } } } });
     await expect(client.createDeliveryOrder({
       customerId: 'customer-1', timeWindow: 'AM', publicCode: 'ORD-001', recipient: order.recipient,
       deliveryAddress: { addressLine: 'Av. Lima 123', district: 'Lince', latitude: -12.084, longitude: -77.035 },
@@ -250,8 +253,26 @@ describe('ApiClient customer and order management', () => {
     ]);
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      '/api/v1/delivery-orders', '/api/v1/delivery-orders', '/api/v1/delivery-orders/order-1/cancel',
-      '/api/v1/delivery-orders/order-1/history',
+      '/api/v1/delivery-orders?page=1&pageSize=10&q=lince&status=created%2Creturned', '/api/v1/delivery-orders',
+      '/api/v1/delivery-orders/order-1/cancel', '/api/v1/delivery-orders/order-1/history',
+    ]);
+  });
+
+  it('keeps the deprecated full listing by walking pages of 100 until the total', async () => {
+    const orders = Array.from({ length: 150 }, (_, index) => ({ id: `order-${index}` }));
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: orders.slice(0, 100), meta: { page: 1, pageSize: 100, total: 150 },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: orders.slice(100), meta: { page: 2, pageSize: 100, total: 150 },
+      }), { status: 200 }));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    await expect(client.listDeliveryOrders()).resolves.toEqual(orders);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/delivery-orders?page=1&pageSize=100&sort=createdAt%3Aasc',
+      '/api/v1/delivery-orders?page=2&pageSize=100&sort=createdAt%3Aasc',
     ]);
   });
 });

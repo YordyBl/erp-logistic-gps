@@ -2,9 +2,16 @@ import type { DataSource } from 'typeorm';
 
 import { SystemClock, type Clock } from '../../../shared/clock.js';
 import { generateUuidV4 } from '../../../shared/ids.js';
-import type { DeliveryOrder } from '../domain/entities/DeliveryOrder.js';
+import { pageOffset, type PageResult } from '../../../http/pagination.js';
+import { DELIVERY_TIME_WINDOWS, type DeliveryOrder } from '../domain/entities/DeliveryOrder.js';
 import type { DomainEvent } from '../domain/events/DomainEvent.js';
-import type { DeliveryOrderRepository } from '../application/ports/DeliveryOrderRepository.js';
+import { DELIVERY_ORDER_STATUSES } from '../domain/policies/DeliveryOrderStatusPolicy.js';
+import type {
+  DeliveryOrderPageCriteria,
+  DeliveryOrderRepository,
+  DeliveryOrderSortField,
+} from '../application/ports/DeliveryOrderRepository.js';
+import { ListDeliveryOrdersPageUseCase } from '../application/use-cases/list-delivery-orders/ListDeliveryOrdersPageUseCase.js';
 import type { DeliveryOrderStatusHistory } from '../application/ports/DeliveryOrderStatusHistory.js';
 import type { EventPublisher } from '../application/ports/EventPublisher.js';
 import type { IdGenerator } from '../application/ports/IdGenerator.js';
@@ -71,6 +78,31 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     return [...this.orders.values()]
       .filter((order) => order.organizationId === organizationId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  }
+
+  /** Same filters, facet counts, order and slicing as the PostgreSQL adapter. */
+  async listPage(organizationId: string, criteria: DeliveryOrderPageCriteria): Promise<PageResult<DeliveryOrder>> {
+    const tenantOrders = [...this.orders.values()].filter((order) => order.organizationId === organizationId);
+    const matching = (omit?: 'status' | 'timeWindow') =>
+      tenantOrders.filter((order) => matchesPageCriteria(order, criteria, omit));
+
+    const status = Object.fromEntries(DELIVERY_ORDER_STATUSES.map((value) => [value, 0])) as Record<string, number>;
+    for (const order of matching('status')) status[order.status] = (status[order.status] ?? 0) + 1;
+    const timeWindow = Object.fromEntries(DELIVERY_TIME_WINDOWS.map((value) => [value, 0])) as Record<string, number>;
+    for (const order of matching('timeWindow')) timeWindow[order.timeWindow] = (timeWindow[order.timeWindow] ?? 0) + 1;
+
+    const filtered = matching();
+    const sign = criteria.sort.direction === 'asc' ? 1 : -1;
+    const sorted = filtered.sort((left, right) => sign * (
+      compareText(sortValue(left, criteria.sort.field), sortValue(right, criteria.sort.field))
+      || compareText(left.id, right.id)
+    ));
+    const offset = pageOffset(criteria);
+    return {
+      items: sorted.slice(offset, offset + criteria.pageSize),
+      total: filtered.length,
+      counts: { status, timeWindow },
+    };
   }
 
   async editDetails(organizationId: string, orderId: string, changes: Parameters<DeliveryOrderRepository['editDetails']>[2], occurredAt: string): Promise<DeliveryOrder> {
@@ -150,6 +182,38 @@ function formatGeneratedCode(prefix: string, value: number): string {
   return `${prefix}-${String(value).padStart(8, '0')}`;
 }
 
+/** `omit` skips one facet's own filter so its counts show every option. */
+function matchesPageCriteria(
+  order: DeliveryOrder,
+  criteria: DeliveryOrderPageCriteria,
+  omit?: 'status' | 'timeWindow',
+): boolean {
+  if (omit !== 'status' && criteria.status !== undefined && !criteria.status.includes(order.status)) return false;
+  if (omit !== 'timeWindow' && criteria.timeWindow !== undefined
+    && !criteria.timeWindow.includes(order.timeWindow)) return false;
+  if (criteria.customerId !== undefined && order.customerId !== criteria.customerId) return false;
+  if (criteria.ids !== undefined && !criteria.ids.includes(order.id)) return false;
+  if (criteria.q === undefined) return true;
+  const needle = criteria.q.toLocaleLowerCase();
+  return [
+    order.publicCode, order.recipient.name, order.recipient.phone,
+    order.deliveryAddress.addressLine, order.deliveryAddress.district,
+  ].some((value) => value.toLocaleLowerCase().includes(needle));
+}
+
+function sortValue(order: DeliveryOrder, field: DeliveryOrderSortField): string {
+  switch (field) {
+    case 'publicCode': return order.publicCode;
+    case 'createdAt': return order.createdAt;
+    case 'recipientName': return order.recipient.name;
+    case 'district': return order.deliveryAddress.district;
+  }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export class CryptoIdGenerator implements IdGenerator {
   nextId(): string {
     return generateUuidV4();
@@ -185,6 +249,7 @@ export interface DeliveryOrdersModule {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
   readonly listDeliveryOrders: ListDeliveryOrdersUseCase;
+  readonly listDeliveryOrdersPage: ListDeliveryOrdersPageUseCase;
   readonly editDeliveryOrder: EditDeliveryOrderUseCase;
   readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
@@ -216,6 +281,7 @@ export function createDeliveryOrdersModule(
     }),
     getDeliveryOrder: new GetDeliveryOrderUseCase({ repository }),
     listDeliveryOrders: new ListDeliveryOrdersUseCase(repository),
+    listDeliveryOrdersPage: new ListDeliveryOrdersPageUseCase(repository),
     editDeliveryOrder: new EditDeliveryOrderUseCase(repository, clock),
     cancelDeliveryOrder: new CancelDeliveryOrderUseCase(repository, clock),
     repository,

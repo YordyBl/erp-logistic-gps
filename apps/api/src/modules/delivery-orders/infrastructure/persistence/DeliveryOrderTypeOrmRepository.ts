@@ -1,15 +1,20 @@
-import type { DataSource } from 'typeorm';
+import { Brackets, In, type DataSource, type SelectQueryBuilder } from 'typeorm';
 import { randomUUID } from 'node:crypto';
 
-import type { DeliveryOrderRepository } from '../../application/ports/DeliveryOrderRepository.js';
+import { pageOffset, type PageResult } from '../../../../http/pagination.js';
+import type {
+  DeliveryOrderPageCriteria,
+  DeliveryOrderRepository,
+  DeliveryOrderSortField,
+} from '../../application/ports/DeliveryOrderRepository.js';
 import type { DeliveryOrderStatusHistory } from '../../application/ports/DeliveryOrderStatusHistory.js';
-import { DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
+import { DELIVERY_TIME_WINDOWS, DeliveryOrder } from '../../domain/entities/DeliveryOrder.js';
 import {
   DeliveryOrderForbiddenError,
   DeliveryOrderInvariantError,
   DeliveryOrderNotFoundError,
 } from '../../domain/errors/DeliveryOrderError.js';
-import { isDeliveryOrderStatus } from '../../domain/policies/DeliveryOrderStatusPolicy.js';
+import { DELIVERY_ORDER_STATUSES, isDeliveryOrderStatus } from '../../domain/policies/DeliveryOrderStatusPolicy.js';
 import { DeliveryOrderEntity } from './entities/DeliveryOrderEntity.js';
 import { DeliveryOrderPackageEntity } from './entities/DeliveryOrderPackageEntity.js';
 import { DeliveryOrderStatusHistoryEntity } from './entities/DeliveryOrderStatusHistoryEntity.js';
@@ -130,6 +135,52 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     return entities.map((entity) => toDomain(entity, entity.packages));
   }
 
+  /**
+   * Loads the page's order rows first (filtered, sorted, `OFFSET`/`LIMIT`) and
+   * then their packages in one `IN` query, so the limit applies to orders and
+   * not to joined package rows. Facet counts are `GROUP BY` queries that leave
+   * out the facet's own filter.
+   */
+  async listPage(organizationId: string, criteria: DeliveryOrderPageCriteria): Promise<PageResult<DeliveryOrder>> {
+    const orders = this.dataSource.getRepository(DeliveryOrderEntity);
+    const filtered = (omit?: 'status' | 'timeWindow'): SelectQueryBuilder<DeliveryOrderEntity> =>
+      applyPageFilters(orders.createQueryBuilder('o'), organizationId, criteria, omit);
+    const direction = criteria.sort.direction === 'asc' ? 'ASC' : 'DESC';
+
+    const [[entities, total], statusRows, timeWindowRows] = await Promise.all([
+      filtered()
+        .orderBy(`o.${SORT_PROPERTIES[criteria.sort.field]}`, direction)
+        .addOrderBy('o.id', direction)
+        .offset(pageOffset(criteria))
+        .limit(criteria.pageSize)
+        .getManyAndCount(),
+      filtered('status').select('o.status', 'value').addSelect('COUNT(*)::integer', 'count')
+        .groupBy('o.status').getRawMany<FacetRow>(),
+      filtered('timeWindow').select('o.timeWindow', 'value').addSelect('COUNT(*)::integer', 'count')
+        .groupBy('o.timeWindow').getRawMany<FacetRow>(),
+    ]);
+
+    const packages = entities.length === 0 ? [] : await this.dataSource.getRepository(DeliveryOrderPackageEntity).find({
+      where: { deliveryOrderId: In(entities.map((entity) => entity.id)) },
+    });
+    const packagesByOrder = new Map<string, DeliveryOrderPackageEntity[]>();
+    for (const item of packages) {
+      const list = packagesByOrder.get(item.deliveryOrderId) ?? [];
+      list.push(item);
+      packagesByOrder.set(item.deliveryOrderId, list);
+    }
+
+    return {
+      // `toDomain` restores package order from `position`.
+      items: entities.map((entity) => toDomain(entity, packagesByOrder.get(entity.id) ?? [])),
+      total,
+      counts: {
+        status: facetCounts(DELIVERY_ORDER_STATUSES, statusRows),
+        timeWindow: facetCounts(DELIVERY_TIME_WINDOWS, timeWindowRows),
+      },
+    };
+  }
+
   async editDetails(organizationId: string, orderId: string, changes: Parameters<DeliveryOrderRepository['editDetails']>[2], occurredAt: string): Promise<DeliveryOrder> {
     return this.dataSource.transaction(async (manager) => {
       const entity = await manager.findOne(DeliveryOrderEntity, {
@@ -206,6 +257,60 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
       };
     });
   }
+}
+
+const SORT_PROPERTIES: Record<DeliveryOrderSortField, keyof DeliveryOrderEntity> = {
+  publicCode: 'publicCode',
+  createdAt: 'createdAt',
+  recipientName: 'recipientName',
+  district: 'deliveryDistrict',
+};
+
+interface FacetRow {
+  readonly value: string;
+  readonly count: number | string;
+}
+
+/** Every possible value with its count, 0 when no row matched. */
+function facetCounts(values: readonly string[], rows: readonly FacetRow[]): Record<string, number> {
+  const counts = Object.fromEntries(values.map((value) => [value, 0])) as Record<string, number>;
+  for (const row of rows) counts[row.value] = Number(row.count);
+  return counts;
+}
+
+/** Escapes `ILIKE` wildcards so the search text matches literally. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+}
+
+/** Tenant scope plus every page filter except `omit` (a facet's own filter). */
+function applyPageFilters(
+  query: SelectQueryBuilder<DeliveryOrderEntity>,
+  organizationId: string,
+  criteria: DeliveryOrderPageCriteria,
+  omit?: 'status' | 'timeWindow',
+): SelectQueryBuilder<DeliveryOrderEntity> {
+  query.where('o.organizationId = :organizationId', { organizationId });
+  if (omit !== 'status' && criteria.status !== undefined) {
+    query.andWhere('o.status IN (:...status)', { status: criteria.status });
+  }
+  if (omit !== 'timeWindow' && criteria.timeWindow !== undefined) {
+    query.andWhere('o.timeWindow IN (:...timeWindow)', { timeWindow: criteria.timeWindow });
+  }
+  if (criteria.customerId !== undefined) {
+    query.andWhere('o.customerId = :customerId', { customerId: criteria.customerId });
+  }
+  if (criteria.ids !== undefined) {
+    query.andWhere('o.id IN (:...ids)', { ids: criteria.ids });
+  }
+  if (criteria.q !== undefined) {
+    query.andWhere(new Brackets((search) => {
+      for (const property of ['publicCode', 'recipientName', 'recipientPhone', 'deliveryAddressLine', 'deliveryDistrict']) {
+        search.orWhere(`o.${property} ILIKE :q ESCAPE '\\'`, { q: likePattern(criteria.q!) });
+      }
+    }));
+  }
+  return query;
 }
 
 function formatGeneratedCode(prefix: string, value: number): string {

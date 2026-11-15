@@ -1,6 +1,6 @@
 import type { ColumnDef } from '@tanstack/react-table';
 import { ArrowRight, Eye, Package, Undo2 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { ApiClient, DeliveryOrder } from '../api/client.js';
 import { AnnouncementBanner } from '../components/AnnouncementBanner.js';
@@ -12,11 +12,12 @@ import { PageHeader } from '../components/PageHeader.js';
 import { Button } from '../components/ui/button.js';
 import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { countLabel, formatDateTime } from '../lib/format.js';
-import { ORDER_STATUS_FILTER, TIME_WINDOW_FILTER } from './orders/orderFilters.js';
+import { ORDER_FILTER_PARAMS, ORDER_SORT_FIELDS, ORDER_STATUS_FILTER, TIME_WINDOW_FILTER } from './orders/orderFilters.js';
 import { OrderDetailSheet } from './orders/OrderDetailSheet.js';
 
-type OrdersClient = Pick<ApiClient, 'listDeliveryOrders' | 'listDeliveryOrderStatusHistory'>;
+type OrdersClient = Pick<ApiClient, 'listDeliveryOrdersPage' | 'findOrderByPublicCode' | 'listDeliveryOrderStatusHistory'>;
 
 export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
   readonly client: OrdersClient;
@@ -24,27 +25,36 @@ export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
   readonly onSelectOrder: (code: string | null) => void;
   readonly onManage: () => void;
 }) {
-  const [orders, setOrders] = useState<readonly DeliveryOrder[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const table = useServerTable<DeliveryOrder>(
+    (params, signal) => client.listDeliveryOrdersPage(params, signal),
+    { sortFields: ORDER_SORT_FIELDS, filterParams: ORDER_FILTER_PARAMS },
+  );
+  const { rows, meta, loading, reload } = table;
+  const error = table.error === null ? null : 'No se pudieron cargar los pedidos. Revisa la conexión e inténtalo de nuevo.';
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setOrders(await client.listDeliveryOrders());
-    } catch {
-      setError('No se pudieron cargar los pedidos. Revisa la conexión e inténtalo de nuevo.');
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
+  // El pedido abierto por enlace puede no estar en la página visible: se pide por su código.
+  const inPage = rows.find((order) => order.publicCode === selectedCode) ?? null;
+  const [fetched, setFetched] = useState<DeliveryOrder | null>(null);
+  useEffect(() => {
+    if (selectedCode === null || inPage !== null) return;
+    let cancelled = false;
+    client.findOrderByPublicCode(selectedCode).then((order) => {
+      if (!cancelled) setFetched(order);
+    }, () => {
+      // Un código desconocido o de otra organización simplemente no abre la ficha.
+      if (!cancelled) setFetched(null);
+    });
+    return () => { cancelled = true; };
+  }, [client, inPage, selectedCode]);
+  const selected = inPage ?? (fetched?.publicCode === selectedCode ? fetched : null);
 
-  useEffect(() => { void load(); }, [load]);
-
-  const selected = orders.find((order) => order.publicCode === selectedCode) ?? null;
-  const countOf = (status: DeliveryOrder['status']) => orders.filter((order) => order.status === status).length;
+  // Conteos del servidor: aplican la búsqueda y la franja, pero no el filtro de estado.
+  const statusCounts = meta?.counts?.status ?? {};
+  const countOf = (status: DeliveryOrder['status']) => statusCounts[status] ?? 0;
   const returned = countOf('returned');
+  const totalOrders = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0;
+  const isEmpty = meta !== null && meta.total === 0 && !hasCriteria;
 
   const columns = useMemo<readonly ColumnDef<DeliveryOrder, unknown>[]>(() => [
     {
@@ -56,7 +66,7 @@ export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
     {
       accessorKey: 'status',
       header: 'Estado',
-      filterFn: 'arrIncludesSome',
+      enableSorting: false,
       meta: { title: 'Estado' },
       cell: ({ row }) => <OrderStatusBadge status={row.original.status} />,
     },
@@ -75,19 +85,19 @@ export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
     {
       accessorKey: 'timeWindow',
       header: 'Franja',
-      filterFn: 'arrIncludesSome',
+      enableSorting: false,
       meta: { title: 'Franja', className: 'hidden md:table-cell' },
     },
     {
       accessorKey: 'createdAt',
       header: ({ column }) => <SortableHeader column={column} title="Creado" />,
-      enableGlobalFilter: false,
       meta: { title: 'Creado', className: 'hidden lg:table-cell' },
       cell: ({ row }) => <span className="text-muted-foreground">{formatDateTime(row.original.createdAt)}</span>,
     },
     {
       id: 'actions',
       enableHiding: false,
+      enableSorting: false,
       cell: ({ row }) => (
         <RowActions label={`Acciones de ${row.original.publicCode}`}>
           <DropdownMenuItem onSelect={() => onSelectOrder(row.original.publicCode)}><Eye aria-hidden="true" /> Ver detalle</DropdownMenuItem>
@@ -104,17 +114,17 @@ export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
         </AnnouncementBanner>
       )}
 
-      <PageHeader title="Pedidos" titleId="orders-page-title" description={orders.length > 0 ? `${countOf('in_transit')} en reparto · ${countLabel(countOf('delivered'), 'entregado', 'entregados')} · ${countLabel(returned, 'devuelto', 'devueltos')}, de ${countLabel(orders.length, 'pedido', 'pedidos')}.` : 'Consulta el estado de cada pedido y abre su detalle de entrega.'}>
-        <Button variant="outline" onClick={() => void load()} disabled={loading}>{loading ? 'Actualizando…' : 'Actualizar'}</Button>
+      <PageHeader title="Pedidos" titleId="orders-page-title" description={totalOrders > 0 ? `${countOf('in_transit')} en reparto · ${countLabel(countOf('delivered'), 'entregado', 'entregados')} · ${countLabel(returned, 'devuelto', 'devueltos')}, de ${countLabel(totalOrders, 'pedido', 'pedidos')}.` : 'Consulta el estado de cada pedido y abre su detalle de entrega.'}>
+        <Button variant="outline" onClick={reload} disabled={loading}>{loading ? 'Actualizando…' : 'Actualizar'}</Button>
         <Button onClick={onManage}>Gestionar pedidos <ArrowRight data-icon="inline-end" aria-hidden="true" /></Button>
       </PageHeader>
 
       {error !== null && (
-        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => void load()}>Reintentar</Button>}>{error}</ErrorNotice>
+        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={reload}>Reintentar</Button>}>{error}</ErrorNotice>
       )}
 
-      {orders.length === 0 && loading && <LoadingRows label="Cargando pedidos…" />}
-      {orders.length === 0 && !loading && error === null && (
+      {meta === null && loading && <LoadingRows label="Cargando pedidos…" />}
+      {isEmpty && !loading && error === null && (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon"><Package aria-hidden="true" /></EmptyMedia>
@@ -125,11 +135,10 @@ export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
         </Empty>
       )}
 
-      {orders.length > 0 && (
-        <>
-          <DataTable label="Lista de pedidos" columns={columns} data={orders} searchPlaceholder="Buscar código, destinatario o distrito"
-            filters={[ORDER_STATUS_FILTER, TIME_WINDOW_FILTER]} onRowClick={(order) => onSelectOrder(order.publicCode)} />
-        </>
+      {meta !== null && !isEmpty && (
+        <DataTable label="Lista de pedidos" columns={columns} data={rows} server={table.server}
+          searchPlaceholder="Buscar código, destinatario, teléfono, dirección o distrito"
+          filters={[ORDER_STATUS_FILTER, TIME_WINDOW_FILTER]} onRowClick={(order) => onSelectOrder(order.publicCode)} />
       )}
 
       <OrderDetailSheet client={client} order={selected} onClose={() => onSelectOrder(null)} />

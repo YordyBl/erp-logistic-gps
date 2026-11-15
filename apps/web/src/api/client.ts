@@ -578,8 +578,30 @@ export class ApiClient {
     return this.requestData('/customers', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  /**
+   * Una página de pedidos. Filtros: `status`, `timeWindow`, `customerId`, `ids`; orden por
+   * `publicCode`, `createdAt`, `recipientName` o `district`. `meta.counts` trae `status` y
+   * `timeWindow`.
+   */
+  listDeliveryOrdersPage(params: PageParams, signal?: AbortSignal): Promise<Page<DeliveryOrder>> {
+    return this.requestPage('/delivery-orders', params, signal);
+  }
+
+  /**
+   * Descarga todos los pedidos recorriendo las páginas de 100 en 100.
+   *
+   * @deprecated Solo para las pantallas que aún trabajan con el catálogo completo
+   * (Planificación, detalle de rutas/Dashboard, Bóveda y Evidencias). Las fases 3 y 5 de la
+   * paginación las pasan a `listDeliveryOrdersPage` (con `ids`) y eliminan este método.
+   */
   async listDeliveryOrders(): Promise<readonly DeliveryOrder[]> {
-    return this.requestData('/delivery-orders');
+    const pageSize = 100;
+    const orders: DeliveryOrder[] = [];
+    for (let page = 1; ; page += 1) {
+      const { data, meta } = await this.listDeliveryOrdersPage({ page, pageSize, sort: 'createdAt:asc' });
+      orders.push(...data);
+      if (data.length < pageSize || orders.length >= meta.total) return orders;
+    }
   }
 
   async createDeliveryOrder(input: CreateDeliveryOrderInput): Promise<DeliveryOrder> {

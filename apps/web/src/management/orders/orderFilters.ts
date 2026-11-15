@@ -14,3 +14,11 @@ export const TIME_WINDOW_FILTER: DataTableFilter = {
   title: 'Franja',
   options: [{ value: 'AM', label: 'AM · Mañana' }, { value: 'PM', label: 'PM · Tarde' }],
 };
+
+/** `columnId` ordenable de las tablas de pedidos → campo de `sort` en `GET /delivery-orders`. */
+export const ORDER_SORT_FIELDS: Readonly<Record<string, string>> = {
+  publicCode: 'publicCode', recipient: 'recipientName', district: 'district', createdAt: 'createdAt',
+};
+
+/** `columnId` de faceta → parámetro de `GET /delivery-orders` (y clave de `meta.counts`). */
+export const ORDER_FILTER_PARAMS: Readonly<Record<string, string>> = { status: 'status', timeWindow: 'timeWindow' };

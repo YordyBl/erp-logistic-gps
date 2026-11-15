@@ -190,11 +190,40 @@ A new order returns `data: []`; foreign or unknown ids return `404`.
 
 ### `GET /api/v1/delivery-orders`
 
-Lists only orders owned by the authenticated organization, sorted by `createdAt`
-then `id` (ascending). Returns `200` with `{ "data": [<order DTO>, ...] }`, or
-`{ "data": [] }` when empty. Cancelled orders remain visible. A missing/invalid
-token returns `401`; unknown query parameters return `400`. Other filters and
-pagination remain future work.
+Lists one page of the orders owned by the authenticated organization
+(cancelled orders included, packages included). Offset pagination with total.
+
+| Parameter | Meaning |
+|---|---|
+| `page` | 1-based, default `1`. A page past the end returns `data: []` with the real `total`. |
+| `pageSize` | `1`–`100`, default `20`. |
+| `q` | Case-insensitive substring over `publicCode`, recipient name and phone, address line and district. Trimmed; `%` and `_` match literally. |
+| `sort` | `publicCode`, `createdAt`, `recipientName` or `district`, with `:asc`/`:desc` (bare field = ascending). Default `createdAt:desc`; `id` in the same direction always breaks ties. |
+| `status` | Comma-separated statuses, e.g. `created,returned`. |
+| `timeWindow` | Comma-separated `AM`/`PM`. |
+| `customerId` | One customer UUID. |
+| `ids` | Comma-separated order UUIDs (max 200). Foreign ids simply do not match. |
+
+Filters combine with AND. Response `200`:
+
+```json
+{
+  "data": [<order DTO>, ...],
+  "meta": {
+    "page": 1, "pageSize": 20, "total": 43,
+    "counts": {
+      "status": { "created": 12, "planned": 0, "assigned": 3, "in_transit": 0, "delivered": 25, "returned": 1, "cancelled": 2 },
+      "timeWindow": { "AM": 30, "PM": 13 }
+    }
+  }
+}
+```
+
+`counts.status` applies `q` and every filter except `status`;
+`counts.timeWindow` every filter except `timeWindow` (standard facet counts).
+Every value is present, with `0` when nothing matches. A missing/invalid token
+returns `401`; unknown parameters, a sort outside the whitelist, `pageSize >
+100` or malformed filter values return `400` (`DELIVERY_ORDER_INVALID_INPUT`).
 
 ### `GET /api/v1/delivery-orders?publicCode=...`
 
@@ -212,10 +241,12 @@ Example: `GET /api/v1/delivery-orders?publicCode=ord-2026-0001`
 | `404` | Unknown code **or** a code owned by another organization |
 | `500` | Unexpected failure |
 
-### List filters and pagination (future)
+When `publicCode` is present it must be the only parameter (any paging or
+filter parameter alongside it returns `400`).
 
-The tenant list and `publicCode` lookup are implemented. `status`, date ranges,
-cursor pagination and `limit` remain future work.
+### List filters (future)
+
+Date-range filters remain future work.
 
 ## Error model
 
