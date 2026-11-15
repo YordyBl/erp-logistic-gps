@@ -13,8 +13,8 @@ PostgreSQL integration tests are implemented.
 | In scope | Out of scope (later milestones) |
 |---|---|
 | `Customer` entity with per-organization public code | Authenticated customer accounts or portals |
-| Create, list and get inside the caller organization | Update and delete: the ratified CRUD surface stops at create/list/get |
-| ADMIN/DISPATCHER writes, every role reads | Linking customers to delivery orders (`delivery-orders` already carries its own recipient snapshot) |
+| Create, paginated list and get inside the caller organization | Update and delete: the ratified CRUD surface stops at create/list/get |
+| ADMIN/DISPATCHER only (DRIVER is denied) | Linking customers to delivery orders (`delivery-orders` already carries its own recipient snapshot) |
 | Per-organization uniqueness of `publicCode` | Bulk import, merge or deactivation workflow |
 
 ## HTTP contract
@@ -22,8 +22,32 @@ PostgreSQL integration tests are implemented.
 | Method | Path | Roles | Result |
 |---|---|---|---|
 | `POST` | `/api/v1/customers` | ADMIN, DISPATCHER | `201` with `Location`; `409 CUSTOMER_INVARIANT_VIOLATION` on a repeated code |
-| `GET` | `/api/v1/customers` | ADMIN, DISPATCHER, DRIVER | `200` with the caller organization customers, oldest first |
-| `GET` | `/api/v1/customers/{customerId}` | ADMIN, DISPATCHER, DRIVER | `200`, or `404 CUSTOMER_NOT_FOUND` |
+| `GET` | `/api/v1/customers` | ADMIN, DISPATCHER | `200` with one page `{ data, meta }` (see below) |
+| `GET` | `/api/v1/customers/{customerId}` | ADMIN, DISPATCHER | `200`, or `404 CUSTOMER_NOT_FOUND` |
+
+### Paginated list
+
+`GET /api/v1/customers?page=1&pageSize=20&q=&sort=name:asc&status=active,inactive&ids=uuid,uuid`
+follows the shared contract in `src/http/pagination.ts`:
+
+| Parameter | Rule |
+|---|---|
+| `page` / `pageSize` | `page >= 1` (default 1); `pageSize` 1–100 (default 20) |
+| `q` | trimmed, at most 100 chars; case-insensitive substring (wildcards escaped) over `name`, `public_code`, `contact_name`, `contact_email` and `contact_phone` |
+| `sort` | `name` or `createdAt` with `:asc`/`:desc`; default `name:asc` because the catalog is browsed and picked by name; `id` in the same direction breaks ties |
+| `status` | comma-separated `active`/`inactive` |
+| `ids` | comma-separated UUIDs, at most 200 (used to resolve names for a page of orders) |
+
+The response is `{ data, meta: { page, pageSize, total, counts: { status: { active, inactive } } } }`.
+`counts.status` applies every filter except `status` and lists both statuses
+(0 when none match). Unknown parameters — `organizationId` included — and
+invalid values return `400 CUSTOMER_INVALID_INPUT` with `details.issues`.
+
+`ListCustomersUseCase` / `CustomerRepository.list()` stay unpaginated and are
+not routed: the order import (`POST /delivery-orders/import`) resolves customer
+codes against the whole catalog. The paginated path is `ListCustomersPageUseCase`
+over `CustomerRepository.listPage()`; the in-memory adapter mirrors the
+PostgreSQL filters, counts and order, checked by a parity integration test.
 
 There is deliberately no `PATCH`/`PUT`/`DELETE` route. The organization is read
 from the verified JWT request context and is never accepted from the body, path

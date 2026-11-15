@@ -167,6 +167,53 @@ describe('ListCustomersUseCase', () => {
   });
 });
 
+describe('ListCustomersPageUseCase', () => {
+  const base = { page: 1, pageSize: 20, sort: { field: 'name', direction: 'asc' } } as const;
+
+  it('returns one tenant page as DTOs with the total and status counts', async () => {
+    const { module, clock } = buildModule();
+
+    const zeta = await module.createCustomer.execute(
+      customerCommand({ name: 'Zeta Logística', publicCode: 'CUS-ZETA' }),
+    );
+    clock.current = LATER_AT;
+    const acme = await module.createCustomer.execute(
+      customerCommand({ name: 'Acme Perú', publicCode: 'CUS-ACME', status: 'inactive' }),
+    );
+    await module.createCustomer.execute(
+      customerCommand({ organizationId: OTHER_ORGANIZATION_ID, publicCode: 'CUS-OTHER' }),
+    );
+
+    const byName = await module.listCustomersPage.execute({
+      organizationId: ORGANIZATION_ID, criteria: base,
+    });
+    expect(byName.items.map((customer) => customer.id)).toEqual([acme.customer.id, zeta.customer.id]);
+    expect(byName.items[0]).toEqual(acme.customer);
+    expect(byName.total).toBe(2);
+    expect(byName.counts).toEqual({ status: { active: 1, inactive: 1 } });
+
+    const active = await module.listCustomersPage.execute({
+      organizationId: ORGANIZATION_ID,
+      criteria: { ...base, status: ['active'], sort: { field: 'createdAt', direction: 'desc' } },
+    });
+    expect(active.items.map((customer) => customer.id)).toEqual([zeta.customer.id]);
+    expect(active.counts).toEqual({ status: { active: 1, inactive: 1 } });
+
+    const searched = await module.listCustomersPage.execute({
+      organizationId: ORGANIZATION_ID, criteria: { ...base, q: 'cus-acme' },
+    });
+    expect(searched.items.map((customer) => customer.id)).toEqual([acme.customer.id]);
+  });
+
+  it('rejects a malformed organization id', async () => {
+    const { module } = buildModule();
+
+    await expect(
+      module.listCustomersPage.execute({ organizationId: 'not-a-uuid', criteria: base }),
+    ).rejects.toMatchObject({ code: 'CUSTOMER_INVALID_INPUT' });
+  });
+});
+
 describe('GetCustomerUseCase', () => {
   it('returns a customer of the caller organization', async () => {
     const { module } = buildModule();

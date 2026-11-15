@@ -1,6 +1,6 @@
 import type { ColumnDef } from '@tanstack/react-table';
 import { Building2, Check, CirclePause, Mail, Phone, Plus } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 
 import type { ApiClient, CreateCustomerInput, Customer } from '../api/client.js';
 import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
@@ -16,15 +16,20 @@ import { Button } from '../components/ui/button.js';
 import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
 
-type CustomerCatalogClient = Pick<ApiClient, 'listCustomers' | 'createCustomer'>;
+type CustomerCatalogClient = Pick<ApiClient, 'listCustomersPage' | 'createCustomer'>;
 type CustomerStatus = NonNullable<CreateCustomerInput['status']>;
 
 const STATUS_OPTIONS: readonly { readonly value: CustomerStatus; readonly label: string }[] = [
   { value: 'active', label: 'Activo' },
   { value: 'inactive', label: 'Inactivo' },
 ];
+
+/** Columnas que el servidor sabe ordenar (`sort=name`); el resto queda sin orden. */
+const CUSTOMER_SORT_FIELDS = { name: 'name' } as const;
+const CUSTOMER_FILTER_PARAMS = { status: 'status' } as const;
 
 const CUSTOMER_COLUMNS: readonly ColumnDef<Customer, unknown>[] = [
   {
@@ -46,6 +51,7 @@ const CUSTOMER_COLUMNS: readonly ColumnDef<Customer, unknown>[] = [
     id: 'contact',
     accessorFn: (customer) => `${customer.contactName} ${customer.contactEmail} ${customer.contactPhone}`,
     header: 'Contacto',
+    enableSorting: false,
     meta: { title: 'Contacto' },
     cell: ({ row }) => (
       <span className="flex flex-col gap-0.5">
@@ -58,8 +64,7 @@ const CUSTOMER_COLUMNS: readonly ColumnDef<Customer, unknown>[] = [
   {
     accessorKey: 'status',
     header: 'Estado',
-    filterFn: 'arrIncludesSome',
-    enableGlobalFilter: false,
+    enableSorting: false,
     meta: { title: 'Estado' },
     cell: ({ row }) => (
       <Badge variant={row.original.status === 'active' ? 'success' : 'secondary'}>
@@ -71,6 +76,7 @@ const CUSTOMER_COLUMNS: readonly ColumnDef<Customer, unknown>[] = [
   {
     id: 'actions',
     enableHiding: false,
+    enableSorting: false,
     cell: ({ row }) => (
       <RowActions label={`Acciones de ${row.original.name}`}>
         <DropdownMenuItem onSelect={() => void navigator.clipboard?.writeText(row.original.contactEmail)}><Mail aria-hidden="true" /> Copiar correo</DropdownMenuItem>
@@ -90,34 +96,18 @@ const emptyForm: CreateCustomerInput = {
 };
 
 export function CustomerCatalogPage({ client }: { readonly client: CustomerCatalogClient }) {
-  const [customers, setCustomers] = useState<readonly Customer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
+  // El servidor ordena por nombre por defecto; la cabecera lo refleja desde el inicio.
+  const table = useServerTable<Customer>(
+    (params, signal) => client.listCustomersPage(params, signal),
+    { sortFields: CUSTOMER_SORT_FIELDS, filterParams: CUSTOMER_FILTER_PARAMS, initialSorting: [{ id: 'name', desc: false }] },
+  );
+  const { rows, meta, reload } = table;
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<CreateCustomerInput>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [registered, setRegistered] = useState<string | null>(null);
-
-  useEffect(() => {
-    let current = true;
-    setLoading(true);
-    setLoadFailed(false);
-
-    client.listCustomers().then((result) => {
-      if (!current) return;
-      setCustomers(result);
-      setLoading(false);
-    }).catch(() => {
-      if (!current) return;
-      setLoadFailed(true);
-      setLoading(false);
-    });
-
-    return () => { current = false; };
-  }, [client, loadAttempt]);
 
   function openForm() {
     setSuccessMessage('');
@@ -139,7 +129,7 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
     setSuccessMessage('');
     try {
       const created = await client.createCustomer(form);
-      setCustomers((previous) => [...previous, created]);
+      reload();
       setRegistered(`El cliente «${created.name}» se registró correctamente.`);
       setForm(emptyForm);
       setFormOpen(false);
@@ -150,25 +140,30 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
     }
   }
 
-  const activeCount = customers.filter((customer) => customer.status === 'active').length;
-  const ready = !loading && !loadFailed;
+  const loadFailed = table.error !== null;
+  // Conteos del servidor: aplican la búsqueda, pero no el filtro de estado.
+  const statusCounts = meta?.counts?.status ?? {};
+  const activeCount = statusCounts.active ?? 0;
+  const catalogCount = Object.values(statusCounts).reduce((sum, count) => sum + count, 0);
+  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0;
+  const isEmpty = meta !== null && meta.total === 0 && !hasCriteria;
 
   return (
     <section className="flex flex-col gap-6">
-      <PageHeader title="Clientes" description={ready && customers.length > 0 ? `Empresas que contratan el servicio · ${activeCount} de ${customers.length} activas.` : 'Empresas que contratan el servicio de entrega.'}>
+      <PageHeader title="Clientes" description={!loadFailed && catalogCount > 0 ? `Empresas que contratan el servicio · ${activeCount} de ${catalogCount} activas.` : 'Empresas que contratan el servicio de entrega.'}>
         <Button onClick={openForm}><Plus data-icon="inline-start" aria-hidden="true" /> Nuevo cliente</Button>
       </PageHeader>
 
       {successMessage && <SuccessNotice>{successMessage}</SuccessNotice>}
       <RegistrationDialog title="Cliente registrado" message={registered} onClose={() => setRegistered(null)} />
       <div className="flex flex-col gap-4">
-        {loading && <LoadingRows label="Cargando clientes…" />}
-        {loadFailed && (
-          <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>Reintentar</Button>}>
+        {meta === null && table.loading && <LoadingRows label="Cargando clientes…" />}
+        {loadFailed && !table.loading && (
+          <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={reload}>Reintentar</Button>}>
             No se pudo cargar el catálogo. Revisa la conexión e inténtalo de nuevo.
           </ErrorNotice>
         )}
-        {ready && customers.length === 0 && (
+        {isEmpty && !table.loading && !loadFailed && (
           <Empty className="border">
             <EmptyHeader>
               <EmptyMedia variant="icon"><Building2 aria-hidden="true" /></EmptyMedia>
@@ -178,8 +173,9 @@ export function CustomerCatalogPage({ client }: { readonly client: CustomerCatal
             <EmptyContent><Button onClick={openForm}>Registrar cliente</Button></EmptyContent>
           </Empty>
         )}
-        {ready && customers.length > 0 && (
-          <DataTable label="Clientes registrados" columns={CUSTOMER_COLUMNS} data={customers} searchPlaceholder="Buscar empresa, código o contacto"
+        {meta !== null && !isEmpty && (
+          <DataTable label="Clientes registrados" columns={CUSTOMER_COLUMNS} data={rows} server={table.server}
+            searchPlaceholder="Buscar empresa, código o contacto"
             filters={[{ columnId: 'status', title: 'Estado', options: STATUS_OPTIONS }]} />
         )}
       </div>

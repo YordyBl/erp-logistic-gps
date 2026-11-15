@@ -216,7 +216,7 @@ is a defect.
 | `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
 | `PATCH` | `/api/v1/delivery-routes/:routeId` | Reassign the driver or vehicle of a planned route without touching orders (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
-| `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
+| `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List one page of the customer catalog (`q`, `status`, `ids`, `sort`) or read one customer (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | List or read the driver catalog (any authenticated role) |
 | `PATCH` | `/api/v1/drivers/:driverId` | Update the mutable driver fields (ADMIN or DISPATCHER) |

@@ -208,25 +208,28 @@ describe('ApiClient delivery-order import', () => {
 });
 
 describe('ApiClient customer and order management', () => {
-  it('lists and creates customers within the authenticated API context', async () => {
+  it('lists a customer page and creates customers within the authenticated API context', async () => {
     const customer = {
       id: 'customer-1', organizationId: 'org-1', publicCode: 'CUS-001',
       name: 'Lima Supply', contactName: 'Ana Torres', contactEmail: 'ana@example.test',
       contactPhone: '+51 900 000 001', status: 'active', createdAt: '2026-11-02T10:00:00.000Z',
     };
+    const meta = { page: 1, pageSize: 20, total: 1, counts: { status: { active: 1, inactive: 0 } } };
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [customer] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [customer], meta }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: customer }), { status: 201 }));
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
     client.setAccessToken('access-token');
 
-    await expect(client.listCustomers()).resolves.toEqual([customer]);
+    await expect(client.listCustomersPage({ status: ['active'], q: 'lima', pageSize: 20, ids: [] }))
+      .resolves.toEqual({ data: [customer], meta });
     await expect(client.createCustomer({
       publicCode: 'CUS-001', name: 'Lima Supply', contactName: 'Ana Torres',
       contactEmail: 'ana@example.test', contactPhone: '+51 900 000 001',
     })).resolves.toEqual(customer);
 
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/v1/customers', '/api/v1/customers']);
+    expect(fetcher.mock.calls.map(([url]) => url))
+      .toEqual(['/api/v1/customers?status=active&q=lima&pageSize=20', '/api/v1/customers']);
     const [, request] = fetcher.mock.calls[1] ?? [];
     expect(JSON.parse(String(request?.body))).toEqual({
       publicCode: 'CUS-001', name: 'Lima Supply', contactName: 'Ana Torres',

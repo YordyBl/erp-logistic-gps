@@ -142,7 +142,9 @@ describe('role-specific delivery workspace', () => {
       status: 'active' as const, createdAt: '2026-10-29T12:00:00.000Z',
     };
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
-    vi.spyOn(api, 'listCustomers').mockResolvedValue([customer]);
+    vi.spyOn(api, 'listCustomersPage').mockResolvedValue({
+      data: [customer], meta: { page: 1, pageSize: 10, total: 1, counts: { status: { active: 1, inactive: 0 } } },
+    });
     vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order]));
 
     render(<App />);

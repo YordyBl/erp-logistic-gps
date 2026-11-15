@@ -34,13 +34,29 @@ function pageOf(orders: readonly DeliveryOrder[], total = orders.length): Page<D
   return { data: orders, meta: { page: 1, pageSize: 10, total, counts: { status, timeWindow } } };
 }
 
+/**
+ * Servidor de clientes simulado: `ids` devuelve esos clientes (de la organización); si no, filtra
+ * por `status` y `q` como `GET /customers`.
+ */
+function customersServer(catalog: readonly Customer[] = [customer, inactiveCustomer]) {
+  return vi.fn(async (params: PageParams): Promise<Page<Customer>> => {
+    const ids = params.ids as readonly string[] | undefined;
+    const status = typeof params.status === 'string' ? params.status.split(',') : params.status as readonly string[] | undefined;
+    const q = params.q?.toLowerCase();
+    const data = catalog.filter((item) => (ids === undefined || ids.includes(item.id))
+      && (status === undefined || status.includes(item.status))
+      && (q === undefined || `${item.name} ${item.publicCode}`.toLowerCase().includes(q)));
+    return { data, meta: { page: 1, pageSize: params.pageSize ?? 20, total: data.length, counts: { status: {} } } };
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
 function makeClient(overrides: Partial<{
-  listCustomers: () => Promise<readonly Customer[]>;
+  listCustomersPage: (params: PageParams, signal?: AbortSignal) => Promise<Page<Customer>>;
   listDeliveryOrdersPage: (params: PageParams, signal?: AbortSignal) => Promise<Page<DeliveryOrder>>;
   createDeliveryOrder: (input: unknown) => Promise<DeliveryOrder>;
   resolveGoogleMapsLink: (url: string) => Promise<{ latitude: number; longitude: number }>;
@@ -51,7 +67,7 @@ function makeClient(overrides: Partial<{
   downloadDeliveryOrderImportTemplate: () => Promise<Blob>;
 }> = {}) {
   return {
-    listCustomers: vi.fn().mockResolvedValue([customer, inactiveCustomer]),
+    listCustomersPage: customersServer(),
     listDeliveryOrdersPage: vi.fn().mockResolvedValue(pageOf([order])),
     createDeliveryOrder: vi.fn().mockResolvedValue(order),
     resolveGoogleMapsLink: vi.fn().mockResolvedValue({ latitude: -12.1, longitude: -77.02 }),
@@ -65,15 +81,16 @@ function makeClient(overrides: Partial<{
 }
 
 describe('DeliveryOrderManagementPage', () => {
-  it('loads customers and orders together and shows linked customer and order details', async () => {
+  it('resolves the customer names of the visible orders by id and shows linked order details', async () => {
     const client = makeClient();
     render(<DeliveryOrderManagementPage client={client} />);
 
     await screen.findByText('LIM-2041');
-    expect(client.listCustomers).toHaveBeenCalledOnce();
     expect(client.listDeliveryOrdersPage).toHaveBeenCalledOnce();
     expect(client.listDeliveryOrdersPage).toHaveBeenCalledWith({ page: 1, pageSize: 10 }, expect.any(AbortSignal));
-    expect(screen.getByText('Acme Logística')).toBeTruthy();
+    expect(await screen.findByText('Acme Logística')).toBeTruthy();
+    // Solo los clientes de la página, no el catálogo completo.
+    expect(client.listCustomersPage).toHaveBeenCalledWith({ ids: [customer.id], pageSize: 100 }, expect.any(AbortSignal));
     expect(screen.getByText(/María Pérez/)).toBeTruthy();
     expect(screen.getByText(/Av\. Arequipa 123/)).toBeTruthy();
     expect(screen.getByText(/1\s+bulto/)).toBeTruthy();
@@ -84,6 +101,63 @@ describe('DeliveryOrderManagementPage', () => {
     await user.click(screen.getByLabelText(/Cliente activo/));
     expect(await screen.findByRole('option', { name: /Acme Logística/ })).toBeTruthy();
     expect(screen.queryByRole('option', { name: /Cliente antiguo/ })).toBeNull();
+    expect(client.listCustomersPage).toHaveBeenCalledWith(
+      { status: 'active', sort: 'name:asc', pageSize: 20 }, expect.any(AbortSignal));
+  });
+
+  it('asks for names only of customers it has not resolved yet when the page changes', async () => {
+    const other: Customer = { ...customer, id: 'customer-other', name: 'Beta Envíos', publicCode: 'BETA' };
+    const second: DeliveryOrder = { ...order, id: 'order-2', publicCode: 'LIM-2042', customerId: other.id };
+    const listCustomersPage = customersServer([customer, other]);
+    const client = makeClient({
+      listCustomersPage,
+      listDeliveryOrdersPage: vi.fn().mockResolvedValueOnce(pageOf([order])).mockResolvedValue(pageOf([order, second])),
+    });
+    const user = setupUser();
+    render(<DeliveryOrderManagementPage client={client} />);
+    expect(await screen.findByText('Acme Logística')).toBeTruthy();
+
+    await user.type(screen.getByPlaceholderText('Buscar pedido, destinatario, teléfono o dirección'), 'lim');
+    expect(await screen.findByText('Beta Envíos')).toBeTruthy();
+    const idRequests = listCustomersPage.mock.calls.map(([params]) => params.ids);
+    expect(idRequests).toEqual([[customer.id], [other.id]]);
+  });
+
+  it('searches active customers on the server and keeps the chosen one visible', async () => {
+    const user = setupUser();
+    const beta: Customer = { ...customer, id: 'customer-beta', name: 'Beta Envíos', publicCode: 'BETA' };
+    const listCustomersPage = customersServer([customer, beta, inactiveCustomer]);
+    render(<DeliveryOrderManagementPage client={makeClient({ listCustomersPage })} />);
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+
+    const combobox = screen.getByRole('combobox', { name: /Cliente activo/ });
+    await user.click(combobox);
+    expect(combobox.getAttribute('aria-expanded')).toBe('true');
+    await user.type(screen.getByRole('combobox', { name: 'Buscar cliente activo' }), 'beta');
+    await waitFor(() => expect(listCustomersPage).toHaveBeenLastCalledWith(
+      { status: 'active', q: 'beta', sort: 'name:asc', pageSize: 20 }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.queryByRole('option', { name: /Acme Logística/ })).toBeNull());
+    // Teclado: flecha y Enter eligen el resultado.
+    await user.keyboard('{ArrowDown}{Enter}');
+    await waitFor(() => expect(combobox.textContent).toContain('Beta Envíos · BETA'));
+
+    // Otra búsqueda que no lo incluye no borra la selección.
+    await user.click(combobox);
+    await user.type(screen.getByRole('combobox', { name: 'Buscar cliente activo' }), 'zzz');
+    expect(await screen.findByText('Ningún cliente activo coincide con la búsqueda.')).toBeTruthy();
+    await user.keyboard('{Escape}');
+    expect(combobox.textContent).toContain('Beta Envíos · BETA');
+  });
+
+  it('explains that there are no active customers and blocks creating', async () => {
+    const user = setupUser();
+    render(<DeliveryOrderManagementPage client={makeClient({ listCustomersPage: customersServer([inactiveCustomer]) })} />);
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Nuevo pedido' }));
+
+    expect(await screen.findByText('No hay clientes activos. Activa o registra un cliente antes de crear pedidos.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Crear pedido' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('creates an order using the active customer and only supported optional fields', async () => {

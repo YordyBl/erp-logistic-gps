@@ -1,8 +1,8 @@
 import type { ColumnDef } from '@tanstack/react-table';
 import { Ban, Eye, FileSpreadsheet, Package, Pencil, Plus } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 
-import type { ApiClient, Customer, DeliveryOrder } from '../api/client.js';
+import type { ApiClient, DeliveryOrder } from '../api/client.js';
 import { RowActions, SortableHeader } from '../components/data-table/columnHelpers.js';
 import { DataTable } from '../components/data-table/DataTable.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
@@ -17,8 +17,9 @@ import { OrderCreateSheet, OrderEditSheet } from './orders/OrderCreateForm.js';
 import { OrderDetailSheet } from './orders/OrderDetailSheet.js';
 import { ORDER_FILTER_PARAMS, ORDER_SORT_FIELDS, ORDER_STATUS_FILTER, TIME_WINDOW_FILTER } from './orders/orderFilters.js';
 import { OrderImportSheet } from './orders/OrderImportCard.js';
+import { useCustomerNames } from './orders/useCustomerNames.js';
 
-type OrderClient = Pick<ApiClient, 'listCustomers' | 'listDeliveryOrdersPage' | 'createDeliveryOrder' | 'editDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
+type OrderClient = Pick<ApiClient, 'listCustomersPage' | 'listDeliveryOrdersPage' | 'createDeliveryOrder' | 'editDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
 
 export function DeliveryOrderManagementPage({ client }: { readonly client: OrderClient }) {
   const table = useServerTable<DeliveryOrder>(
@@ -26,10 +27,6 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
     { sortFields: ORDER_SORT_FIELDS, filterParams: ORDER_FILTER_PARAMS },
   );
   const { rows, meta, reload } = table;
-  // Catálogo completo de clientes para los nombres y el formulario de alta (se pagina en la fase 4).
-  const [customers, setCustomers] = useState<readonly Customer[]>([]);
-  const [customersLoading, setCustomersLoading] = useState(true);
-  const [customersError, setCustomersError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [registered, setRegistered] = useState<string | null>(null);
@@ -39,24 +36,22 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
   const [detailSnapshot, setDetailSnapshot] = useState<DeliveryOrder | null>(null);
   const [editingSnapshot, setEditingSnapshot] = useState<DeliveryOrder | null>(null);
 
-  const loadCustomers = useCallback(async () => {
-    setCustomersLoading(true);
-    setCustomersError(false);
-    try {
-      setCustomers(await client.listCustomers());
-    } catch {
-      setCustomersError(true);
-    } finally {
-      setCustomersLoading(false);
-    }
-  }, [client]);
-
-  useEffect(() => { void loadCustomers(); }, [loadCustomers]);
+  // Nombres de los clientes de los pedidos visibles, pedidos por id y recordados entre páginas.
+  // Las fichas abiertas usan los mismos nombres: su pedido estuvo en una página ya resuelta.
+  const pageCustomerIds = useMemo(() => rows.map((order) => order.customerId), [rows]);
+  const {
+    nameOf: customerNameOf, loading: customersLoading, failed: customersError, retry: retryCustomers,
+  } = useCustomerNames(client, pageCustomerIds);
 
   const retry = useCallback(() => {
     reload();
-    if (customersError) void loadCustomers();
-  }, [customersError, loadCustomers, reload]);
+    if (customersError) retryCustomers();
+  }, [customersError, reload, retryCustomers]);
+  // Las columnas no dependen de los nombres: si cambiaran al llegar, las celdas se volverían a montar
+  // (y se cerraría un menú de acciones abierto). La celda lee siempre el último nombre conocido.
+  const customerLabel = useRef<(customerId: string) => string>(() => '');
+  customerLabel.current = (customerId) => customerNameOf(customerId)
+    ?? (customersLoading || customersError ? '' : 'Cliente no disponible');
 
   const cancelOrder = useCallback(async (order: DeliveryOrder) => {
     if (!window.confirm(`¿Cancelar el pedido ${order.publicCode}? Esta acción no se puede deshacer.`)) return;
@@ -77,8 +72,6 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
     setCreateOpen(true);
   }
 
-  const activeCustomers = customers.filter((customer) => customer.status === 'active');
-  const customerNames = useMemo(() => new Map(customers.map((customer) => [customer.id, customer.name])), [customers]);
   // La fila de la página actual es la versión más reciente; si no está, se usa la que se abrió.
   const fresh = (snapshot: DeliveryOrder | null) =>
     snapshot === null ? null : rows.find((order) => order.id === snapshot.id) ?? snapshot;
@@ -119,7 +112,9 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
     },
     {
       id: 'customer',
-      accessorFn: (order) => customerNames.get(order.customerId) ?? (customersLoading ? '' : 'Cliente no disponible'),
+      accessorKey: 'customerId',
+      // Se pinta en la celda y no en el valor: TanStack cachea el valor por fila y el nombre llega después.
+      cell: ({ row }) => customerLabel.current(row.original.customerId),
       header: 'Cliente',
       enableSorting: false,
       meta: { title: 'Cliente', className: 'min-w-32 whitespace-normal' },
@@ -165,7 +160,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         </RowActions>
       ),
     },
-  ], [cancelOrder, customerNames, customersLoading, startEdit]);
+  ], [cancelOrder, startEdit]);
 
   return (
     <section className="flex flex-col gap-6">
@@ -200,8 +195,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         )}
       </div>
 
-      <OrderCreateSheet client={client} open={createOpen} onOpenChange={setCreateOpen} activeCustomers={activeCustomers}
-        showNoCustomers={activeCustomers.length === 0 && !customersLoading && !customersError}
+      <OrderCreateSheet client={client} open={createOpen} onOpenChange={setCreateOpen}
         onCreated={(created) => {
           reload();
           setRegistered(`El pedido ${created.publicCode} se registró correctamente.`);
@@ -211,13 +205,13 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         onImported={(imported) => { if (imported.length > 0) reload(); }} />
 
       <OrderDetailSheet client={client} order={detailOrder} onClose={() => setDetailSnapshot(null)}
-        customerName={detailOrder === null ? undefined : customerNames.get(detailOrder.customerId)}
+        customerName={detailOrder === null ? undefined : customerNameOf(detailOrder.customerId)}
         {...(detailOrder !== null && canEdit(detailOrder.status) ? {
           footer: <Button type="button" onClick={() => startEdit(detailOrder)}><Pencil data-icon="inline-start" aria-hidden="true" /> Editar pedido</Button>,
         } : {})} />
 
       <OrderEditSheet client={client} order={editingOrder} onClose={() => setEditingSnapshot(null)}
-        customerName={editingOrder === null ? undefined : customerNames.get(editingOrder.customerId)}
+        customerName={editingOrder === null ? undefined : customerNameOf(editingOrder.customerId)}
         onSaved={(updated) => {
           reload();
           setNotice(`Pedido ${updated.publicCode} actualizado.`);

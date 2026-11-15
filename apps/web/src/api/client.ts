@@ -594,8 +594,13 @@ export class ApiClient {
     return this.requestData(`/delivery-orders?publicCode=${encodeURIComponent(publicCode.trim())}`);
   }
 
-  async listCustomers(): Promise<readonly Customer[]> {
-    return this.requestData('/customers');
+  /**
+   * Una página del catálogo de clientes. Filtros: `status` e `ids`; `q` busca en nombre, código y
+   * datos de contacto; orden por `name` (por defecto, ascendente) o `createdAt`. `meta.counts` trae
+   * `status`.
+   */
+  listCustomersPage(params: PageParams, signal?: AbortSignal): Promise<Page<Customer>> {
+    return this.requestPage('/customers', params, signal);
   }
 
   async createCustomer(input: CreateCustomerInput): Promise<Customer> {

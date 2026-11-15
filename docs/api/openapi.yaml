@@ -1597,25 +1597,54 @@ paths:
     get:
       tags: [customers]
       operationId: listCustomers
-      summary: List customers of the caller organization
+      summary: List one page of customers of the caller organization
       description: |
-        Returns the caller organization customers, oldest first. Only ADMIN and
-        DISPATCHER may access the customer catalog; DRIVER is limited to assigned
-        route execution. Filters and pagination are future work.
+        ADMIN or DISPATCHER (DRIVER is limited to assigned route execution).
+        Returns one page of the organization's customers as `{ data, meta }`.
+        Filters combine with AND. `meta.counts.status` lists every status (0
+        when none match) and applies every filter except `status`. `q` matches
+        the name, public code and the contact name, email and phone. The
+        default sort is `name:asc` (a catalog is browsed and picked by name);
+        `id`, in the same direction, breaks ties.
+
+        Unknown query parameters (including `organizationId`), a sort outside
+        the whitelist, `pageSize > 100` and malformed filters are rejected with
+        400 (`CUSTOMER_INVALID_INPUT`, with `details.issues`).
       security:
         - bearerAuth: []
       parameters:
         - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SearchText'
+        - name: sort
+          in: query
+          required: false
+          description: `field:asc|desc` (a bare field sorts ascending). Fields `name`, `createdAt`.
+          schema:
+            type: string
+            default: 'name:asc'
+            pattern: '^(name|createdAt)(:(asc|desc))?$'
+        - name: status
+          in: query
+          required: false
+          description: Comma-separated customer statuses (`active`, `inactive`).
+          schema:
+            type: string
+          example: active
+        - $ref: '#/components/parameters/IdList'
       responses:
         '200':
-          description: Customers of the caller organization.
+          description: One page of tenant customers with the status facet counts.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/XRequestId'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CustomerListResponse'
+                $ref: '#/components/schemas/CustomerPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3316,14 +3345,24 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/Customer'
-    CustomerListResponse:
+    CustomerPage:
       type: object
-      required: [data]
+      required: [data, meta]
       properties:
         data:
           type: array
           items:
             $ref: '#/components/schemas/Customer'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
+      example:
+        data: []
+        meta:
+          page: 1
+          pageSize: 20
+          total: 0
+          counts:
+            status: { active: 0, inactive: 0 }
     Driver:
       type: object
       additionalProperties: false
