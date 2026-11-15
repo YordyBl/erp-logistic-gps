@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { ApiClient } from '../../api/client.js';
-import { fetchByIds } from '../routes/routeDetails.js';
+import { fetchByIds } from '../../api/fetchByIds.js';
 
 type CustomerNamesClient = Pick<ApiClient, 'listCustomersPage'>;
 

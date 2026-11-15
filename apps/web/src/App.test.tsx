@@ -226,6 +226,7 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
     vi.spyOn(api, 'findOrderByPublicCode').mockResolvedValue({ ...order, status: 'delivered' });
     const listEvidence = vi.spyOn(api, 'listEvidence').mockResolvedValue([evidence]);
+    const listEvidencePage = vi.spyOn(api, 'listEvidencePage').mockResolvedValue({ data: [], meta: { page: 1, pageSize: 8, total: 0 } });
 
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'Evidencias' }));
@@ -233,6 +234,8 @@ describe('role-specific delivery workspace', () => {
 
     expect(await screen.findByText('Foto 1')).toBeTruthy();
     expect(listEvidence).toHaveBeenCalledWith(order.id);
+    expect(listEvidence).toHaveBeenCalledOnce();
+    expect(listEvidencePage).toHaveBeenCalledWith({ page: 1, pageSize: 8 }, expect.any(AbortSignal));
     expect(screen.getByText('Disponible')).toBeTruthy();
   });
 

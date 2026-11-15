@@ -12,7 +12,6 @@ import { GetRouteSimulationUseCase } from '../application/use-cases/get-route-si
 import { PlanRouteUseCase } from '../application/use-cases/plan-route/PlanRouteUseCase.js';
 import { GetRouteUseCase } from '../application/use-cases/get-route/GetRouteUseCase.js';
 import { ReassignRouteUseCase } from '../application/use-cases/reassign-route/ReassignRouteUseCase.js';
-import { ListRoutesUseCase } from '../application/use-cases/list-routes/ListRoutesUseCase.js';
 import { ListRoutesPageUseCase } from '../application/use-cases/list-routes/ListRoutesPageUseCase.js';
 import {
   ROUTE_STATUSES,
@@ -77,7 +76,8 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
     return [];
   }
 
-  async list(organizationId: string): Promise<readonly PlannedRoute[]> {
+  /** Tenant routes the planner lists (cancelled ones excluded), oldest planned date first. */
+  private tenantRoutes(organizationId: string): readonly PlannedRoute[] {
     return [...this.routes.values()]
       .filter((route) => route.organizationId === organizationId)
       .filter((route) => route.status === 'planned' || route.status === 'in_progress' || route.status === 'completed')
@@ -87,7 +87,7 @@ export class InMemoryRoutePlanningStore implements RoutePlanningStore, DriverRou
 
   /** Same filters, facet counts, order and slicing as the PostgreSQL adapter. */
   async listPage(organizationId: string, criteria: RoutePageCriteria): Promise<PageResult<PlannedRoute>> {
-    const tenantRoutes = await this.list(organizationId);
+    const tenantRoutes = this.tenantRoutes(organizationId);
     const needle = criteria.q?.toLocaleLowerCase();
     const searchable = new Map<string, string[]>();
     if (needle !== undefined) {
@@ -240,7 +240,6 @@ export function createDeliveryRoutesModule(options: {
   return {
     planRoute: new PlanRouteUseCase(options.store, options.getDriver,
       options.getVehicle, clock, options.mapLinkResolver ?? new GoogleMapsLinkResolver(), simulation),
-    listRoutes: new ListRoutesUseCase(options.store),
     listRoutesPage: new ListRoutesPageUseCase(options.store),
     getRoute: new GetRouteUseCase(options.store),
     getRouteSimulation: new GetRouteSimulationUseCase(options.store, simulation),

@@ -314,6 +314,17 @@ export interface DeliveryEvidence {
   readonly availableAt: string | null;
 }
 
+/** Foto de la bóveda: la evidencia más un resumen del pedido al que pertenece. */
+export interface EvidenceVaultItem extends DeliveryEvidence {
+  readonly order: {
+    readonly id: string;
+    readonly publicCode: string;
+    readonly status: 'delivered' | 'returned';
+    readonly recipientName: string;
+    readonly district: string;
+  };
+}
+
 interface ApiEnvelope<T> {
   readonly data: T;
 }
@@ -550,6 +561,14 @@ export class ApiClient {
     return this.requestData(`/delivery-orders/${encodeURIComponent(orderId)}/evidence`);
   }
 
+  /**
+   * Una página de la bóveda: fotos disponibles de pedidos entregados o devueltos, de la más nueva a
+   * la más antigua (orden fijo). `q` busca por código de pedido o destinatario; filtro `orderId`.
+   */
+  listEvidencePage(params: PageParams, signal?: AbortSignal): Promise<Page<EvidenceVaultItem>> {
+    return this.requestPage('/delivery-evidence', params, signal);
+  }
+
   async downloadEvidence(evidenceId: string): Promise<Blob> {
     const response = await this.send(
       `/evidence/${encodeURIComponent(evidenceId)}/download`,
@@ -614,23 +633,6 @@ export class ApiClient {
    */
   listDeliveryOrdersPage(params: PageParams, signal?: AbortSignal): Promise<Page<DeliveryOrder>> {
     return this.requestPage('/delivery-orders', params, signal);
-  }
-
-  /**
-   * Descarga todos los pedidos recorriendo las páginas de 100 en 100.
-   *
-   * @deprecated Solo para las pantallas que aún trabajan con el catálogo completo (Bóveda y
-   * Evidencias). La fase 5 de la paginación las pasa a su endpoint propio o a
-   * `listDeliveryOrdersPage` (con `ids`) y elimina este método.
-   */
-  async listDeliveryOrders(): Promise<readonly DeliveryOrder[]> {
-    const pageSize = 100;
-    const orders: DeliveryOrder[] = [];
-    for (let page = 1; ; page += 1) {
-      const { data, meta } = await this.listDeliveryOrdersPage({ page, pageSize, sort: 'createdAt:asc' });
-      orders.push(...data);
-      if (data.length < pageSize || orders.length >= meta.total) return orders;
-    }
   }
 
   async createDeliveryOrder(input: CreateDeliveryOrderInput): Promise<DeliveryOrder> {

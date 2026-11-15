@@ -76,7 +76,6 @@ export interface RoutePlanningStore {
    * order row is locked (a snapshot), and rejects orders without coordinates.
    */
   plan(route: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute>;
-  list(organizationId: string): Promise<readonly PlannedRoute[]>;
   /**
    * One page of the tenant's routes (stops loaded for the page only) with the
    * filtered total and `counts.status`, which applies every filter except

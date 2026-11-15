@@ -1,9 +1,9 @@
-import { DomainError } from '../../../../shared/errors/DomainError.js';
+import { DomainError, type ErrorDetails } from '../../../../shared/errors/DomainError.js';
 
 export class DeliveryEvidenceValidationError extends DomainError {
   readonly code = 'DELIVERY_EVIDENCE_INVALID_INPUT';
 
-  constructor(message: string) { super(message); }
+  constructor(message: string, details?: ErrorDetails) { super(message, details); }
 }
 
 export class DeliveryEvidenceNotFoundError extends DomainError {

@@ -346,9 +346,6 @@ describe('POST /api/v1/delivery-orders', () => {
       async findByPublicCode() {
         return null;
       },
-      async list() {
-        return [];
-      },
       async listPage() {
         return { items: [], total: 0 };
       },

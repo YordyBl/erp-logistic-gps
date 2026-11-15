@@ -134,7 +134,7 @@ describe('ControlTowerPage', () => {
     return {
       createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
       listDispatchRoutesPage: vi.fn(),
-      listDeliveryOrders: vi.fn().mockResolvedValue([]),
+      listDeliveryOrdersPage: vi.fn(),
       listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
       listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
     };
@@ -156,7 +156,7 @@ describe('ControlTowerPage', () => {
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 · Entregado')).toBeTruthy();
     expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
-    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrdersPage).not.toHaveBeenCalled();
   });
 
   it('takes progress from each update without downloading the collections again', async () => {
@@ -174,7 +174,7 @@ describe('ControlTowerPage', () => {
     expect(client.listDrivers).toHaveBeenCalledOnce();
     expect(client.listVehicles).toHaveBeenCalledOnce();
     expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
-    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrdersPage).not.toHaveBeenCalled();
   });
 
   it('moves the marker on a position message without asking the API for anything', async () => {
@@ -197,7 +197,7 @@ describe('ControlTowerPage', () => {
     act(() => harness.emit({ type: 'update', sequence: 2, kind: 'route', snapshot }));
     expect(screen.getByText(/07:00:05/)).toBeTruthy();
     expect(client.listDispatchRoutesPage).not.toHaveBeenCalled();
-    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrdersPage).not.toHaveBeenCalled();
   });
 });
 

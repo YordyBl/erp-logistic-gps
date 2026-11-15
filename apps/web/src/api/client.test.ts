@@ -277,22 +277,19 @@ describe('ApiClient customer and order management', () => {
     ]);
   });
 
-  it('keeps the deprecated full listing by walking pages of 100 until the total', async () => {
-    const orders = Array.from({ length: 150 }, (_, index) => ({ id: `order-${index}` }));
-    const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: orders.slice(0, 100), meta: { page: 1, pageSize: 100, total: 150 },
-      }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        data: orders.slice(100), meta: { page: 2, pageSize: 100, total: 150 },
-      }), { status: 200 }));
+  it('reads one page of the evidence vault with its query and keeps the meta', async () => {
+    const item = { id: 'evidence-1', order: { id: 'order-1', publicCode: 'ORD-001' } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [item], meta: { page: 2, pageSize: 8, total: 9 },
+    }), { status: 200 }));
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    const controller = new AbortController();
 
-    await expect(client.listDeliveryOrders()).resolves.toEqual(orders);
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      '/api/v1/delivery-orders?page=1&pageSize=100&sort=createdAt%3Aasc',
-      '/api/v1/delivery-orders?page=2&pageSize=100&sort=createdAt%3Aasc',
-    ]);
+    await expect(client.listEvidencePage({ page: 2, pageSize: 8, q: 'ORD-001' }, controller.signal))
+      .resolves.toEqual({ data: [item], meta: { page: 2, pageSize: 8, total: 9 } });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/delivery-evidence?page=2&pageSize=8&q=ORD-001');
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 });
 

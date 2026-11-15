@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Brackets, In, type DataSource, type EntityManager, type SelectQueryBuilder } from 'typeorm';
+import { Brackets, type DataSource, type EntityManager, type SelectQueryBuilder } from 'typeorm';
 
 import { pageOffset, type PageResult } from '../../http/pagination.js';
 import {
@@ -193,17 +193,6 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           WHERE a.organization_id=d.organization_id AND a.driver_id=d.id)
       ORDER BY d.full_name, d.id`, [organizationId]);
     return rows.map((row) => row.id);
-  }
-
-  async list(organizationId: string): Promise<readonly PlannedRoute[]> {
-    const routes = await this.dataSource.manager.find(DeliveryRouteEntity, {
-      where: { organizationId, status: In(['planned', 'in_progress', 'completed']) },
-      order: { plannedDate: 'ASC', createdAt: 'ASC' },
-    });
-    // Two batched queries for every route's stops and links, instead of three per route.
-    const { stopsByRoute } = await loadRouteStops(
-      this.dataSource, organizationId, routes.map((route) => route.id));
-    return routes.map((route) => toPlannedRoute(route, stopsByRoute.get(route.id) ?? []));
   }
 
   /**

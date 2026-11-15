@@ -126,15 +126,6 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     return toDomain(orderEntity, orderEntity.packages);
   }
 
-  async list(organizationId: string): Promise<readonly DeliveryOrder[]> {
-    const entities = await this.dataSource.getRepository(DeliveryOrderEntity).find({
-      where: { organizationId },
-      relations: { packages: true },
-      order: { createdAt: 'ASC', id: 'ASC' },
-    });
-    return entities.map((entity) => toDomain(entity, entity.packages));
-  }
-
   /**
    * Loads the page's order rows first (filtered, sorted, `OFFSET`/`LIMIT`) and
    * then their packages in one `IN` query, so the limit applies to orders and

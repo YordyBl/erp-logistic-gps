@@ -1,59 +1,47 @@
 import { Camera, ChevronLeft, ChevronRight, Download, Eye, ShieldCheck } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-import type { ApiClient, DeliveryEvidence, DeliveryOrder } from '../api/client.js';
+import type { ApiClient, DeliveryEvidence, EvidenceVaultItem } from '../api/client.js';
 import { ErrorNotice } from '../components/Notices.js';
 import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
 import { Card, CardContent } from '../components/ui/card.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { Skeleton } from '../components/ui/skeleton.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { formatDateTime } from '../lib/format.js';
 
-type VaultClient = Pick<ApiClient, 'listDeliveryOrders' | 'listEvidence' | 'downloadEvidence'>;
+type VaultClient = Pick<ApiClient, 'listEvidencePage' | 'downloadEvidence'>;
 
-interface VaultItem {
-  readonly evidence: DeliveryEvidence;
-  readonly order: DeliveryOrder;
-}
-
-const PAGE_SIZE = 8;
-/** La API solo lista evidencias por pedido: se limita la consulta para no disparar cientos de peticiones. */
-const MAX_ORDERS = 40;
+/** Fotos por página: el servidor devuelve solo esta página, de la más nueva a la más antigua. */
+export const VAULT_PAGE_SIZE = 8;
 
 /** Galería de las fotos guardadas. La política de evidencias no permite borrarlas, así que no hay esa acción. */
 export function EvidenceVault({ client, onPreview }: {
   readonly client: VaultClient;
   readonly onPreview: (item: DeliveryEvidence) => void;
 }) {
-  const [items, setItems] = useState<readonly VaultItem[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const vault = useServerTable((params, signal) => client.listEvidencePage(params, signal), { pageSize: VAULT_PAGE_SIZE });
   const [downloadFailed, setDownloadFailed] = useState(false);
-  const [page, setPage] = useState(0);
+  const failed = vault.error !== null;
+  const { pageIndex } = vault.state.pagination;
+  const pageCount = Math.max(Math.ceil((vault.meta?.total ?? 0) / VAULT_PAGE_SIZE), 1);
+  const goTo = (index: number) => vault.handlers.onPaginationChange((current) => ({ ...current, pageIndex: index }));
 
-  useEffect(() => {
-    let current = true;
-    void loadVault(client).then((loaded) => { if (current) setItems(loaded); }).catch(() => { if (current) setFailed(true); });
-    return () => { current = false; };
-  }, [client]);
-
-  async function download(item: VaultItem) {
+  async function download(item: EvidenceVaultItem) {
     setDownloadFailed(false);
     try {
-      const blob = await client.downloadEvidence(item.evidence.id);
+      const blob = await client.downloadEvidence(item.id);
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${item.order.publicCode}-${item.evidence.id.slice(0, 8)}.${item.evidence.mimeType.replace('image/', '')}`;
+      link.download = `${item.order.publicCode}-${item.id.slice(0, 8)}.${item.mimeType.replace('image/', '')}`;
       link.click();
       URL.revokeObjectURL(url);
     } catch {
       setDownloadFailed(true);
     }
   }
-
-  const pageCount = Math.max(Math.ceil((items?.length ?? 0) / PAGE_SIZE), 1);
-  const visible = items?.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
 
   return (
     <section className="flex flex-col gap-4" aria-labelledby="evidence-vault-title">
@@ -68,13 +56,13 @@ export function EvidenceVault({ client, onPreview }: {
       {failed && <ErrorNotice>No se pudo cargar la bóveda. Puedes buscar un pedido por su código.</ErrorNotice>}
       {downloadFailed && <ErrorNotice>No se pudo descargar la foto. Verifica tu acceso e inténtalo otra vez.</ErrorNotice>}
 
-      {!failed && items === null && (
+      {!failed && vault.meta === null && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" role="status" aria-label="Cargando bóveda">
           {['a', 'b', 'c', 'd'].map((key) => <Skeleton key={key} className="h-64" />)}
         </div>
       )}
 
-      {items !== null && items.length === 0 && (
+      {!failed && vault.meta?.total === 0 && (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon"><Camera aria-hidden="true" /></EmptyMedia>
@@ -84,18 +72,18 @@ export function EvidenceVault({ client, onPreview }: {
         </Empty>
       )}
 
-      {visible.length > 0 && (
+      {vault.rows.length > 0 && (
         <>
-          <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {visible.map((item) => (
-              <VaultCard key={item.evidence.id} client={client} item={item} onView={() => onPreview(item.evidence)} onDownload={() => void download(item)} />
+          <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-busy={vault.loading}>
+            {vault.rows.map((item) => (
+              <VaultCard key={item.id} client={client} item={item} onView={() => onPreview(item)} onDownload={() => void download(item)} />
             ))}
           </ul>
           {pageCount > 1 && (
             <div className="flex items-center justify-end gap-3">
-              <span className="text-xs tabular-nums">Página {page + 1} de {pageCount}</span>
-              <Button type="button" variant="outline" size="icon" aria-label="Fotos anteriores" disabled={page === 0} onClick={() => setPage(page - 1)}><ChevronLeft aria-hidden="true" /></Button>
-              <Button type="button" variant="outline" size="icon" aria-label="Fotos siguientes" disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}><ChevronRight aria-hidden="true" /></Button>
+              <span className="text-xs tabular-nums">Página {pageIndex + 1} de {pageCount}</span>
+              <Button type="button" variant="outline" size="icon" aria-label="Fotos anteriores" disabled={pageIndex === 0 || vault.loading} onClick={() => goTo(pageIndex - 1)}><ChevronLeft aria-hidden="true" /></Button>
+              <Button type="button" variant="outline" size="icon" aria-label="Fotos siguientes" disabled={pageIndex >= pageCount - 1 || vault.loading} onClick={() => goTo(pageIndex + 1)}><ChevronRight aria-hidden="true" /></Button>
             </div>
           )}
         </>
@@ -104,26 +92,13 @@ export function EvidenceVault({ client, onPreview }: {
   );
 }
 
-async function loadVault(client: VaultClient): Promise<readonly VaultItem[]> {
-  const orders = (await client.listDeliveryOrders())
-    .filter((order) => order.status === 'delivered' || order.status === 'returned')
-    .slice(0, MAX_ORDERS);
-  const results = await Promise.allSettled(orders.map(async (order) => {
-    const evidence = await client.listEvidence(order.id);
-    return evidence.filter((item) => item.status === 'available').map((item): VaultItem => ({ evidence: item, order }));
-  }));
-  return results
-    .flatMap((result) => result.status === 'fulfilled' ? result.value : [])
-    .sort((left, right) => right.evidence.createdAt.localeCompare(left.evidence.createdAt));
-}
-
 function VaultCard({ client, item, onView, onDownload }: {
   readonly client: VaultClient;
-  readonly item: VaultItem;
+  readonly item: EvidenceVaultItem;
   readonly onView: () => void;
   readonly onDownload: () => void;
 }) {
-  const { evidence, order } = item;
+  const { order } = item;
 
   return (
     <li>
@@ -133,13 +108,13 @@ function VaultCard({ client, item, onView, onDownload }: {
           <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label={`Descargar foto de ${order.publicCode}`} onClick={onDownload}><Download aria-hidden="true" /></Button>
         </div>
         <CardContent className="flex flex-col gap-3">
-          <EvidenceThumb client={client} evidenceId={evidence.id} alt={`Evidencia del pedido ${order.publicCode}`} />
+          <EvidenceThumb client={client} evidenceId={item.id} alt={`Evidencia del pedido ${order.publicCode}`} />
           <div className="flex items-center justify-between gap-2">
             <p className="text-sm font-medium tabular-nums">{order.publicCode}</p>
-            <Badge variant={evidence.incidentId === null ? 'success' : 'destructive'}>{evidence.incidentId === null ? 'Entrega' : 'Incidencia'}</Badge>
+            <Badge variant={item.incidentId === null ? 'success' : 'destructive'}>{item.incidentId === null ? 'Entrega' : 'Incidencia'}</Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            {order.recipient.name}, {order.deliveryAddress.district}. Cargada el {formatDateTime(evidence.createdAt)}
+            {order.recipientName}, {order.district}. Cargada el {formatDateTime(item.createdAt)}
           </p>
         </CardContent>
       </Card>

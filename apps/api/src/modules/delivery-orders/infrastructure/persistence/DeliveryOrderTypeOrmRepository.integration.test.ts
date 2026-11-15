@@ -281,14 +281,17 @@ describe.skipIf(databaseUrl === null)('DeliveryOrderTypeOrmRepository (PostgreSQ
     await repositoryOrThrow().save(foreign);
     await repositoryOrThrow().cancel(ownerId, first.id, randomUUID(), CREATED_AT);
 
-    const listed = await repositoryOrThrow().list(ownerId);
+    const tenantPage = (organizationId: string) => repositoryOrThrow().listPage(organizationId, {
+      page: 1, pageSize: 20, sort: { field: 'createdAt', direction: 'asc' },
+    }).then((page) => page.items);
+    const listed = await tenantPage(ownerId);
     expect(listed.map((order) => order.id)).toEqual([first.id, second.id].sort());
     expect(listed.find((order) => order.id === first.id)?.status).toBe('cancelled');
     expect(listed.find((order) => order.id === first.id)?.packages.map((item) => item.code))
       .toEqual(['PKG-001', 'PKG-002']);
-    const foreignList = await repositoryOrThrow().list(foreignId);
+    const foreignList = await tenantPage(foreignId);
     expect(foreignList.map((order) => order.id)).toEqual([foreign.id]);
-    await expect(repositoryOrThrow().list(await newOrganizationId())).resolves.toEqual([]);
+    await expect(tenantPage(await newOrganizationId())).resolves.toEqual([]);
   });
 
   it('pages, filters, searches and counts like the in-memory adapter', async () => {

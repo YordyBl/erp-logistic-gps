@@ -16,7 +16,7 @@ import { useFocusReturn } from '../hooks/use-focus-return.js';
 import { countLabel, formatBytes, formatDateTime } from '../lib/format.js';
 import { EvidenceVault } from './EvidenceVault.js';
 
-type EvidenceClient = Pick<ApiClient, 'findOrderByPublicCode' | 'listEvidence' | 'downloadEvidence' | 'listDeliveryOrders'>;
+type EvidenceClient = Pick<ApiClient, 'findOrderByPublicCode' | 'listEvidence' | 'downloadEvidence' | 'listEvidencePage'>;
 
 const SEARCH_DELAY_MS = 400;
 

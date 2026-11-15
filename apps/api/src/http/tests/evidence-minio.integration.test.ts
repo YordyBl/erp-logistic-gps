@@ -7,8 +7,10 @@ import type {
   DeliveryEvidence,
   DeliveryEvidenceStore,
   EvidenceUploadReservation,
+  EvidenceVaultItem,
   ReserveDeliveryEvidenceInput,
 } from '../../modules/delivery-execution/application/ports/DeliveryEvidenceStore.js';
+import type { PageResult } from '../pagination.js';
 import { createDeliveryExecutionModule } from '../../modules/delivery-execution/composition/composition-root.js';
 import { prepareEvidenceImage } from '../../modules/delivery-execution/domain/EvidenceImage.js';
 import { S3EvidenceObjectStorage } from '../../modules/delivery-execution/infrastructure/S3EvidenceObjectStorage.js';
@@ -80,6 +82,10 @@ class InMemoryEvidenceStore implements DeliveryEvidenceStore {
     actorUserId: string,
   ): Promise<EvidenceUploadReservation> {
     return this.requireRecord(organizationId, evidenceId, actorUserId);
+  }
+
+  async listVaultPage(): Promise<PageResult<EvidenceVaultItem>> {
+    return { items: [], total: 0 };
   }
 
   private requireRecord(

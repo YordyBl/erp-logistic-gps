@@ -18,7 +18,7 @@ function makeClient(overrides: Partial<{ findOrderByPublicCode: (code: string) =
     findOrderByPublicCode: vi.fn<(code: string) => Promise<DeliveryOrder>>().mockResolvedValue(order),
     listEvidence: vi.fn().mockResolvedValue([]),
     downloadEvidence: vi.fn().mockResolvedValue(new Blob()),
-    listDeliveryOrders: vi.fn().mockResolvedValue([]),
+    listEvidencePage: vi.fn().mockResolvedValue({ data: [], meta: { page: 1, pageSize: 8, total: 0 } }),
     ...overrides,
   };
 }

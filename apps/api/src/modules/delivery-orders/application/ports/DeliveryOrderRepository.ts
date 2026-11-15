@@ -46,8 +46,6 @@ export interface DeliveryOrderRepository {
     organizationId: string,
     publicCode: string,
   ): Promise<DeliveryOrder | null>;
-  /** Stable order for tenant-scoped listing; never returns another tenant's orders. */
-  list(organizationId: string): Promise<readonly DeliveryOrder[]>;
   /**
    * One page of the tenant's orders (packages included) with the filtered
    * total and facet counts: `counts.status` applies every filter except

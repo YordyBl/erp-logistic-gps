@@ -6,6 +6,7 @@ import type {
   CreateDispatchRouteInput, DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver, Page, PageParams,
   RouteSimulationAvailability, Vehicle,
 } from '../api/client.js';
+import { fetchByIds } from '../api/fetchByIds.js';
 import { RowActions, SortableHeader, TableProgress } from '../components/data-table/columnHelpers.js';
 import { DataTable, type DataTableFilter } from '../components/data-table/DataTable.js';
 import { DocumentSheet, DocumentTitle, FormSheet } from '../components/FormSheet.js';
@@ -32,7 +33,7 @@ import { countLabel, formatDateTime, initials } from '../lib/format.js';
 import {
   googleMapsPlaceUrl, googleMapsRouteUrl, mapLinkErrorMessage, mapLinkFailureMessage, type MapPoint,
 } from '../lib/googleMaps.js';
-import { fetchByIds, routeOrderIds } from './routes/routeDetails.js';
+import { routeOrderIds } from './routes/routeDetails.js';
 import { RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 

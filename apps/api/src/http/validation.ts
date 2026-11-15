@@ -1,6 +1,7 @@
 import type { ZodError, ZodType } from 'zod';
 
 import { CustomerValidationError } from '../modules/customers/domain/errors/CustomerError.js';
+import { DeliveryEvidenceValidationError } from '../modules/delivery-execution/domain/errors/DeliveryExecutionError.js';
 import { DeliveryOrderValidationError } from '../modules/delivery-orders/domain/errors/DeliveryOrderError.js';
 import { DeliveryRouteValidationError } from '../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import { DriverValidationError } from '../modules/drivers/domain/errors/DriverError.js';
@@ -105,6 +106,21 @@ export function parseDeliveryRouteOrThrow<T>(
 
   if (!result.success) {
     throw new DeliveryRouteValidationError(message, { issues: toIssues(result.error) });
+  }
+
+  return result.data;
+}
+
+/** Delivery evidence queries (`DELIVERY_EVIDENCE_INVALID_INPUT`). */
+export function parseDeliveryEvidenceOrThrow<T>(
+  schema: ZodType<T>,
+  input: unknown,
+  message: string,
+): T {
+  const result = schema.safeParse(input);
+
+  if (!result.success) {
+    throw new DeliveryEvidenceValidationError(message, { issues: toIssues(result.error) });
   }
 
   return result.data;

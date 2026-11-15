@@ -1485,6 +1485,60 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/delivery-evidence:
+    get:
+      tags: [delivery-execution]
+      operationId: listEvidenceVault
+      summary: List one page of the organization's evidence vault (ADMIN or DISPATCHER)
+      description: |
+        Available evidence of the caller organization's `delivered` and
+        `returned` orders, newest first (`createdAt` desc, `id` desc as the
+        tiebreaker), as `{ data, meta }`. Each item is the same metadata as
+        `GET /delivery-orders/{orderId}/evidence` plus a compact `order`; image
+        bytes are still read through `GET /evidence/{evidenceId}/download`.
+        `q` matches the order public code or the recipient name.
+
+        The order is fixed: `sort` may be omitted or `createdAt:desc`. Unknown
+        query parameters (including `organizationId`), another sort,
+        `pageSize > 100` and a malformed `orderId` are rejected with 400
+        (`DELIVERY_EVIDENCE_INVALID_INPUT`, with `details.issues`). DRIVER
+        users get 403.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/PageNumber'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/SearchText'
+        - name: sort
+          in: query
+          required: false
+          description: Only `createdAt:desc` (the default) is accepted.
+          schema:
+            type: string
+            enum: ['createdAt:desc']
+        - name: orderId
+          in: query
+          required: false
+          description: Narrows the vault to one order.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of vault evidence; storage keys are never returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvidenceVaultPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
   /api/v1/evidence/{evidenceId}/download:
     get:
       tags: [delivery-execution]
@@ -3363,6 +3417,38 @@ components:
           total: 0
           counts:
             status: { active: 0, inactive: 0 }
+    EvidenceVaultItem:
+      allOf:
+        - $ref: '#/components/schemas/DeliveryEvidence'
+        - type: object
+          required: [order]
+          properties:
+            order:
+              type: object
+              required: [id, publicCode, status, recipientName, district]
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                publicCode:
+                  type: string
+                status:
+                  type: string
+                  enum: [delivered, returned]
+                recipientName:
+                  type: string
+                district:
+                  type: string
+    EvidenceVaultPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceVaultItem'
+        meta:
+          $ref: '#/components/schemas/PageMeta'
     Driver:
       type: object
       additionalProperties: false

@@ -5,6 +5,7 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import type { ApiClient, DeliveryOrder, DeliveryOrderStatus, DispatchDashboardSummary, DispatchRoute } from '../api/client.js';
+import { fetchByIds } from '../api/fetchByIds.js';
 import { ActivityTimeline, type TimelineEvent } from '../components/ActivityTimeline.js';
 import { AnnouncementBanner } from '../components/AnnouncementBanner.js';
 import { ConfettiArt, SpheresArt } from '../components/CardArt.js';
@@ -26,7 +27,7 @@ import { formatDateTime, formatTime, formatTimeAgo, formatToday } from '../lib/f
 import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import { deliveredShare, openOrders, STATUS_BADGES, totalOrders } from './dashboard/orderStatus.js';
 import { OrderStatusBar } from './dashboard/OrderStatusBar.js';
-import { fetchByIds, routeOrderIds, type RouteDetails } from './routes/routeDetails.js';
+import { routeOrderIds, type RouteDetails } from './routes/routeDetails.js';
 import { RouteStepper, RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 import type { MapRoute } from './dashboard/OperationsMap.js';

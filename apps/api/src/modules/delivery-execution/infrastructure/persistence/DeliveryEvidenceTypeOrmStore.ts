@@ -4,12 +4,17 @@ import {
   DeliveryEvidenceConflictError,
   DeliveryEvidenceNotFoundError,
 } from '../../domain/errors/DeliveryExecutionError.js';
-import type {
-  DeliveryEvidence,
-  DeliveryEvidenceStore,
-  EvidenceMimeType,
-  EvidenceUploadReservation,
-  ReserveDeliveryEvidenceInput,
+import { pageOffset, type PageResult } from '../../../../http/pagination.js';
+import {
+  EVIDENCE_VAULT_ORDER_STATUSES,
+  type DeliveryEvidence,
+  type DeliveryEvidenceStore,
+  type EvidenceMimeType,
+  type EvidenceUploadReservation,
+  type EvidenceVaultCriteria,
+  type EvidenceVaultItem,
+  type EvidenceVaultOrderStatus,
+  type ReserveDeliveryEvidenceInput,
 } from '../../application/ports/DeliveryEvidenceStore.js';
 import { DeliveryEvidenceEntity } from './entities/DeliveryEvidenceEntity.js';
 
@@ -138,6 +143,95 @@ export class DeliveryEvidenceTypeOrmStore implements DeliveryEvidenceStore {
       return toReservation(row);
     });
   }
+
+  async listVaultPage(
+    organizationId: string,
+    criteria: EvidenceVaultCriteria,
+  ): Promise<PageResult<EvidenceVaultItem>> {
+    const parameters: unknown[] = [organizationId, [...EVIDENCE_VAULT_ORDER_STATUSES]];
+    const conditions = [
+      'e.organization_id=$1',
+      "e.status='available'",
+      'o.status = ANY($2::varchar[])',
+    ];
+    if (criteria.orderId !== undefined) {
+      parameters.push(criteria.orderId);
+      conditions.push(`e.order_id=$${parameters.length}`);
+    }
+    if (criteria.q !== undefined) {
+      parameters.push(likePattern(criteria.q));
+      const q = `$${parameters.length}`;
+      conditions.push(`(o.public_code ILIKE ${q} ESCAPE '\\' OR o.recipient_name ILIKE ${q} ESCAPE '\\')`);
+    }
+    const from = `
+      FROM delivery_evidence e
+      JOIN delivery_orders o ON o.organization_id=e.organization_id AND o.id=e.order_id
+      WHERE ${conditions.join(' AND ')}`;
+
+    return this.dataSource.transaction('REPEATABLE READ', async (manager) => {
+      const [countRow] = await manager.query<{ total: string }[]>(
+        `SELECT COUNT(*) AS total ${from}`, parameters);
+      const rows = await manager.query<VaultRow[]>(`
+        SELECT e.id, e.organization_id AS "organizationId", e.order_id AS "orderId",
+          e.attempt_id AS "attemptId", e.incident_id AS "incidentId", e.mime_type AS "mimeType",
+          e.byte_size AS "byteSize", e.checksum, e.uploaded_by AS "uploadedBy", e.status,
+          e.created_at AS "createdAt", e.available_at AS "availableAt",
+          o.public_code AS "publicCode", o.status AS "orderStatus",
+          o.recipient_name AS "recipientName", o.delivery_district AS "district"
+        ${from}
+        ORDER BY e.created_at DESC, e.id DESC
+        LIMIT $${parameters.length + 1} OFFSET $${parameters.length + 2}`,
+      [...parameters, criteria.pageSize, pageOffset(criteria)]);
+      return {
+        total: Number(countRow?.total ?? 0),
+        items: rows.map((row) => ({
+          id: row.id,
+          organizationId: row.organizationId,
+          orderId: row.orderId,
+          attemptId: row.attemptId,
+          incidentId: row.incidentId,
+          mimeType: row.mimeType as EvidenceMimeType,
+          byteSize: row.byteSize,
+          checksum: row.checksum,
+          uploadedBy: row.uploadedBy,
+          status: row.status as DeliveryEvidence['status'],
+          createdAt: new Date(row.createdAt).toISOString(),
+          availableAt: row.availableAt === null ? null : new Date(row.availableAt).toISOString(),
+          order: {
+            id: row.orderId,
+            publicCode: row.publicCode,
+            status: row.orderStatus as EvidenceVaultOrderStatus,
+            recipientName: row.recipientName,
+            district: row.district,
+          },
+        })),
+      };
+    });
+  }
+}
+
+interface VaultRow {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly orderId: string;
+  readonly attemptId: string;
+  readonly incidentId: string | null;
+  readonly mimeType: string;
+  readonly byteSize: number;
+  readonly checksum: string;
+  readonly uploadedBy: string;
+  readonly status: string;
+  readonly createdAt: Date | string;
+  readonly availableAt: Date | string | null;
+  readonly publicCode: string;
+  readonly orderStatus: string;
+  readonly recipientName: string;
+  readonly district: string;
+}
+
+/** Escapes `ILIKE` wildcards so the search text matches literally. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
 async function requireReadAccess(

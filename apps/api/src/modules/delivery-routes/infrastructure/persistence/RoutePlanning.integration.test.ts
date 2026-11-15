@@ -486,7 +486,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     await expect(store.listSimulationEligibleDriverIds(randomUUID())).resolves.toEqual([]);
   });
 
-  it('batch-loads the list and builds the tracking snapshot from live routes only', async () => {
+  it('builds the tracking snapshot from live routes only', async () => {
     const { organizationId, driverId, vehicleId, makeOrder } = await seed();
     const addCrew = async () => {
       const crewDriverId = randomUUID();
@@ -514,26 +514,20 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const completed = await planOn('2026-10-28', { crewDriverId: driverId, crewVehicleId: vehicleId });
     await source.query(`UPDATE delivery_routes SET status='completed', started_at=$2, completed_at=$2
       WHERE id=$1`, [completed.id, CREATED_AT]);
-    const past = await planOn('2026-10-27', await addCrew());
+    // A route of another day stays out of the 2026-10-28 snapshot.
+    await planOn('2026-10-27', await addCrew());
     const running = await planOn('2026-10-20', await addCrew());
     await source.query(`UPDATE delivery_routes SET status='in_progress', started_at=$2 WHERE id=$1`,
       [running.id, CREATED_AT]);
     const upcoming = await planOn('2026-10-28', await addCrew());
 
-    const listed = await store.list(organizationId);
-    const expected = await Promise.all([running, past, completed, upcoming]
-      .map((route) => store.findById(organizationId, route.id)));
-    // Same-date routes share a creation instant here, so only their membership is fixed.
-    expect(listed).toHaveLength(4);
-    expect(listed.slice(0, 2)).toEqual(expected.slice(0, 2));
-    expect(listed).toEqual(expect.arrayContaining(expected));
 
     const query = vi.fn((sql: string, parameters?: unknown[]) => source.query(sql, parameters));
     const snapshot = await new TrackingSnapshotTypeOrmQuery({ query } as unknown as Pick<DataSource, 'query'>)
       .load(organizationId, '2026-10-28');
     expect(query).toHaveBeenCalledTimes(4);
     expect(snapshot.routes.map((route) => route.id)).toEqual([running.id, upcoming.id]);
-    const upcomingListed = listed.find((route) => route.id === upcoming.id);
+    const upcomingListed = await store.findById(organizationId, upcoming.id);
     expect(snapshot.routes[1]).toEqual({
       id: upcoming.id, publicCode: upcoming.publicCode, plannedDate: '2026-10-28', status: 'planned',
       driverId: upcoming.driverId, vehicleId: upcoming.vehicleId, stops: upcomingListed?.stops,

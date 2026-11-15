@@ -211,6 +211,7 @@ is a defect.
 | `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
 | `POST` | `/api/v1/delivery-orders/:orderId/evidence` | Upload one private JPEG/PNG/WebP photo for the authenticated driver's active attempt (1–2 photos, maximum 5,000,000 bytes each) |
 | `GET` | `/api/v1/delivery-orders/:orderId/evidence` | List evidence metadata for authorized organization users or the assigned driver |
+| `GET` | `/api/v1/delivery-evidence` | One page of the evidence vault: available photos of delivered/returned orders, newest first, with `q` (order code or recipient) and `orderId` (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/evidence/:evidenceId/download` | Stream available evidence after tenant/attempt authorization; never exposes a public object URL |
 | `POST` | `/api/v1/delivery-routes` | Plan sequenced stops and assign orders with an active driver and vehicle (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
