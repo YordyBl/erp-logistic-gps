@@ -16,7 +16,7 @@ const FINAL_STATUSES: readonly DeliveryOrder['status'][] = ['delivered', 'return
 
 /** Calcula el avance solo con los estados reales de los pedidos de la ruta. */
 export function summarizeRoute(
-  route: Pick<DispatchRoute, 'status' | 'stops'>,
+  route: Pick<DispatchRoute, 'status'> & { readonly stops: readonly Pick<DispatchRoute['stops'][number], 'orderIds'>[] },
   orderById: ReadonlyMap<string, Pick<DeliveryOrder, 'status'>>,
 ): RouteProgress {
   const stopOrders = route.stops.map((stop) => stop.orderIds.flatMap((id) => {

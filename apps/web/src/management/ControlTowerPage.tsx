@@ -2,13 +2,14 @@ import { Route } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, Popup } from 'maplibre-gl';
 
-import type { DispatchRoute, RouteTrack } from '../api/client.js';
+import type { ApiClient, DeliveryOrder, DispatchRoute, RouteTrack } from '../api/client.js';
 import { ErrorNotice, LoadingRows } from '../components/Notices.js';
 import { Card } from '../components/ui/card.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
 import { formatTimeAgo } from '../lib/format.js';
 import { ActiveRouteItem, routeCrew } from './routes/ActiveRouteItem.js';
-import { loadRouteDetails, NO_ROUTE_DETAILS, type RouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
+import type { RouteDetails } from './routes/routeDetails.js';
+import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
 export const OPENFREEMAP_STYLE = import.meta.env.VITE_MAP_STYLE_URL?.trim() ||
@@ -37,23 +38,38 @@ interface TrackingRoute {
   readonly publicCode: string;
   readonly plannedDate: string;
   readonly status: DispatchRoute['status'];
+  readonly driverId: string;
+  readonly vehicleId: string;
   readonly stops: readonly Pick<DispatchRoute['stops'][number],
-    'id' | 'sequence' | 'addressLine' | 'latitude' | 'longitude'>[];
+    'id' | 'sequence' | 'addressLine' | 'latitude' | 'longitude' | 'orderIds'>[];
 }
+
+type TrackingOrder = Pick<DeliveryOrder, 'id' | 'publicCode' | 'status'>;
 
 interface TrackingSnapshot {
   readonly routes: readonly TrackingRoute[];
+  readonly orders: readonly TrackingOrder[];
   readonly positions: readonly TrackingPosition[];
 }
 
 interface TrackingSocketMessage {
-  readonly type: 'snapshot' | 'update';
+  readonly type: 'snapshot' | 'update' | 'position';
   readonly kind?: string;
   readonly data?: unknown;
   readonly snapshot?: unknown;
+  readonly position?: unknown;
 }
 
-interface TicketClient extends RouteDetailsClient {
+/** Conductores y vehículos: cambian poco, así que se cargan una vez al abrir la página. */
+interface Catalogs {
+  readonly drivers: RouteDetails['drivers'];
+  readonly vehicles: RouteDetails['vehicles'];
+}
+
+const NO_CATALOGS: Catalogs = { drivers: [], vehicles: [] };
+const EMPTY_SNAPSHOT: TrackingSnapshot = { routes: [], orders: [], positions: [] };
+
+interface TicketClient extends Partial<Pick<ApiClient, 'listDrivers' | 'listVehicles'>> {
   createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }>;
   /** Optional: without it (or if it fails) the map shows no driven or pending path. */
   getRouteTrack?(routeId: string): Promise<RouteTrack>;
@@ -80,10 +96,10 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const [snapshot, setSnapshot] = useState<TrackingSnapshot>({ routes: [], positions: [] });
+  const [snapshot, setSnapshot] = useState<TrackingSnapshot>(EMPTY_SNAPSHOT);
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'reconnecting'>('connecting');
   const [error, setError] = useState<string | null>(null);
-  const [details, setDetails] = useState<RouteDetails>(NO_ROUTE_DETAILS);
+  const [catalogs, setCatalogs] = useState<Catalogs>(NO_CATALOGS);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [track, setTrack] = useState<SelectedTrack | null>(null);
   const [liveTrail, setLiveTrail] = useState<readonly TrailPoint[]>([]);
@@ -92,8 +108,24 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const cardRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRouteId = selection?.routeId ?? null;
 
-  const refreshDetails = useCallback(async () => setDetails(await loadRouteDetails(client)), [client]);
-  useEffect(() => { void refreshDetails(); }, [refreshDetails]);
+  useEffect(() => {
+    let active = true;
+    void Promise.allSettled([
+      client.listDrivers?.() ?? Promise.resolve([]),
+      client.listVehicles?.() ?? Promise.resolve([]),
+    ]).then(([drivers, vehicles]) => {
+      if (!active) return;
+      setCatalogs({
+        drivers: drivers.status === 'fulfilled' ? drivers.value : [],
+        vehicles: vehicles.status === 'fulfilled' ? vehicles.value : [],
+      });
+    });
+    return () => { active = false; };
+  }, [client]);
+  // Rutas y pedidos llegan en el snapshot; solo la tripulación sale de los catálogos.
+  const details = useMemo<RouteDetails>(() => ({
+    routes: snapshot.routes, orders: snapshot.orders, drivers: catalogs.drivers, vehicles: catalogs.vehicles,
+  }), [catalogs, snapshot.orders, snapshot.routes]);
 
   const geoJson = useMemo(() => toFeatureCollection(snapshot), [snapshot]);
   const geoJsonRef = useRef(geoJson);
@@ -231,22 +263,24 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const receiveMessage = useCallback((event: MessageEvent) => {
     try {
       const message = JSON.parse(String(event.data)) as TrackingSocketMessage;
+      if (message.type === 'position') {
+        const position = message.position;
+        if (isTrackingPosition(position)) setSnapshot((current) => withPosition(current, position));
+        return;
+      }
       const raw = message.type === 'snapshot' ? message.data : message.snapshot;
       if (message.type !== 'snapshot' && message.type !== 'update') return;
       if (isTrackingSnapshot(raw)) {
-        setSnapshot(raw);
+        setSnapshot((current) => withNewerPositions(raw, current));
         setConnection('connected');
         setError(null);
-        // Una posición no cambia los pedidos; otras novedades pueden cambiar el avance y lo pendiente.
-        if (message.type === 'update' && message.kind !== 'position') {
-          void refreshDetails();
-          setTrackVersion((version) => version + 1);
-        }
+        // Las novedades de rutas y pedidos traen su avance en el snapshot; solo el recorrido pendiente se vuelve a pedir.
+        if (message.type === 'update') setTrackVersion((version) => version + 1);
       }
     } catch {
       setError('Se recibió una actualización de seguimiento inválida.');
     }
-  }, [refreshDetails]);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -415,10 +449,37 @@ function openTrackingSocket(ticket: string): WebSocket {
   return new WebSocket(url);
 }
 
+function isNewer(candidate: TrackingPosition, than: TrackingPosition | undefined): boolean {
+  return than === undefined || Date.parse(candidate.recordedAt) >= Date.parse(than.recordedAt);
+}
+
+/** Replaces the last known position of one route without touching the rest of the snapshot. */
+function withPosition(snapshot: TrackingSnapshot, position: TrackingPosition): TrackingSnapshot {
+  const index = snapshot.positions.findIndex((item) => item.routeId === position.routeId);
+  if (index !== -1 && !isNewer(position, snapshot.positions[index])) return snapshot;
+  if (index === -1 && !snapshot.routes.some((route) => route.id === position.routeId)) return snapshot;
+  const positions = index === -1 ? [...snapshot.positions, position]
+    : snapshot.positions.map((item, itemIndex) => itemIndex === index ? position : item);
+  return { ...snapshot, positions };
+}
+
+/**
+ * A snapshot loaded on the server can be older than a position delta that overtook it,
+ * so for each route it keeps the newer of the two. Routes that left the snapshot drop out.
+ */
+function withNewerPositions(incoming: TrackingSnapshot, current: TrackingSnapshot): TrackingSnapshot {
+  const known = new Map(current.positions.map((position) => [position.routeId, position]));
+  return { ...incoming, positions: incoming.positions.map((position) => {
+    const live = known.get(position.routeId);
+    return live !== undefined && !isNewer(position, live) ? live : position;
+  }) };
+}
+
 function isTrackingSnapshot(value: unknown): value is TrackingSnapshot {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Partial<TrackingSnapshot>;
   return Array.isArray(candidate.routes) && candidate.routes.every(isTrackingRoute) &&
+    Array.isArray(candidate.orders) && candidate.orders.every(isTrackingOrder) &&
     Array.isArray(candidate.positions) && candidate.positions.every(isTrackingPosition);
 }
 
@@ -427,10 +488,19 @@ function isTrackingRoute(value: unknown): value is TrackingRoute {
   const route = value as Partial<TrackingRoute>;
   return typeof route.id === 'string' && typeof route.publicCode === 'string' &&
     typeof route.plannedDate === 'string' && ['planned', 'in_progress', 'completed'].includes(String(route.status)) &&
+    typeof route.driverId === 'string' && typeof route.vehicleId === 'string' &&
     Array.isArray(route.stops) && route.stops.every((stop) => typeof stop === 'object' && stop !== null &&
       typeof stop.id === 'string' && typeof stop.sequence === 'number' && typeof stop.addressLine === 'string' &&
       (stop.latitude === null || typeof stop.latitude === 'number') &&
-      (stop.longitude === null || typeof stop.longitude === 'number'));
+      (stop.longitude === null || typeof stop.longitude === 'number') &&
+      Array.isArray(stop.orderIds) && (stop.orderIds as unknown[]).every((id) => typeof id === 'string'));
+}
+
+function isTrackingOrder(value: unknown): value is TrackingOrder {
+  if (typeof value !== 'object' || value === null) return false;
+  const order = value as Partial<TrackingOrder>;
+  return typeof order.id === 'string' && typeof order.publicCode === 'string' &&
+    typeof order.status === 'string' && Object.hasOwn(ORDER_STATUS_LABELS, order.status);
 }
 
 function isTrackingPosition(value: unknown): value is TrackingPosition {

@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
 import { RoutePlanningTypeOrmStore } from '../../../../infrastructure/dispatch/RoutePlanningTypeOrmStore.js';
+import { TrackingSnapshotTypeOrmQuery } from '../../../../infrastructure/dispatch/TrackingSnapshotTypeOrmQuery.js';
 import { DeliveryOrderTypeOrmRepository } from '../../../delivery-orders/infrastructure/persistence/DeliveryOrderTypeOrmRepository.js';
 import { DeliveryOrder } from '../../../delivery-orders/domain/entities/DeliveryOrder.js';
 import { Recipient } from '../../../delivery-orders/domain/value-objects/Recipient.js';
@@ -483,5 +484,65 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
 
     await expect(store.listSimulationEligibleDriverIds(organizationId)).resolves.toEqual([driverId]);
     await expect(store.listSimulationEligibleDriverIds(randomUUID())).resolves.toEqual([]);
+  });
+
+  it('batch-loads the list and builds the tracking snapshot from live routes only', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const addCrew = async () => {
+      const crewDriverId = randomUUID();
+      const crewVehicleId = randomUUID();
+      await source.query(`INSERT INTO drivers
+        (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+        VALUES ($1,$2,'Crew Driver',$3,'+51 911 222 335',$4,'active',$5,$5)`,
+      [crewDriverId, organizationId, `DNI-${crewDriverId.slice(0, 8).toUpperCase()}`,
+        `L-${crewDriverId.slice(0, 8).toUpperCase()}`, CREATED_AT]);
+      await source.query(`INSERT INTO vehicles
+        (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
+        VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
+      [crewVehicleId, organizationId, `S${crewVehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
+      return { crewDriverId, crewVehicleId };
+    };
+    const actor = randomUUID();
+    const planOn = async (plannedDate: string, crew: { crewDriverId: string; crewVehicleId: string }) => {
+      const draft = { ...plannedRoute(organizationId, crew.crewDriverId, crew.crewVehicleId,
+        [await makeOrder(`ORDER-${randomUUID().slice(0, 8)}`), await makeOrder(`ORDER-${randomUUID().slice(0, 8)}`)]),
+      plannedDate };
+      await store.plan(draft, actor);
+      return draft;
+    };
+
+    const completed = await planOn('2026-10-28', { crewDriverId: driverId, crewVehicleId: vehicleId });
+    await source.query(`UPDATE delivery_routes SET status='completed', started_at=$2, completed_at=$2
+      WHERE id=$1`, [completed.id, CREATED_AT]);
+    const past = await planOn('2026-10-27', await addCrew());
+    const running = await planOn('2026-10-20', await addCrew());
+    await source.query(`UPDATE delivery_routes SET status='in_progress', started_at=$2 WHERE id=$1`,
+      [running.id, CREATED_AT]);
+    const upcoming = await planOn('2026-10-28', await addCrew());
+
+    const listed = await store.list(organizationId);
+    const expected = await Promise.all([running, past, completed, upcoming]
+      .map((route) => store.findById(organizationId, route.id)));
+    // Same-date routes share a creation instant here, so only their membership is fixed.
+    expect(listed).toHaveLength(4);
+    expect(listed.slice(0, 2)).toEqual(expected.slice(0, 2));
+    expect(listed).toEqual(expect.arrayContaining(expected));
+
+    const query = vi.fn((sql: string, parameters?: unknown[]) => source.query(sql, parameters));
+    const snapshot = await new TrackingSnapshotTypeOrmQuery({ query } as unknown as Pick<DataSource, 'query'>)
+      .load(organizationId, '2026-10-28');
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(snapshot.routes.map((route) => route.id)).toEqual([running.id, upcoming.id]);
+    const upcomingListed = listed.find((route) => route.id === upcoming.id);
+    expect(snapshot.routes[1]).toEqual({
+      id: upcoming.id, publicCode: upcoming.publicCode, plannedDate: '2026-10-28', status: 'planned',
+      driverId: upcoming.driverId, vehicleId: upcoming.vehicleId, stops: upcomingListed?.stops,
+    });
+    const snapshotOrderIds = [running, upcoming].flatMap((route) => route.stops.map((stop) => stop.orderId));
+    expect(snapshot.orders.map((order) => order.id).sort()).toEqual([...snapshotOrderIds].sort());
+    expect(snapshot.orders.every((order) => order.status === 'assigned' && order.publicCode.startsWith('ORDER-')))
+      .toBe(true);
+    await expect(new TrackingSnapshotTypeOrmQuery(source).load(randomUUID(), '2026-10-28'))
+      .resolves.toEqual({ routes: [], orders: [] });
   });
 });

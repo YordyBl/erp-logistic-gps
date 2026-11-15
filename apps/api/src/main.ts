@@ -15,9 +15,15 @@ import { SimulatedPositionProvider } from './modules/delivery-tracking/applicati
 import { RoutePositionTypeOrmStore } from './modules/delivery-tracking/infrastructure/RoutePositionTypeOrmStore.js';
 import { ValhallaRouteGeometryProvider } from './modules/delivery-tracking/infrastructure/ValhallaRouteGeometryProvider.js';
 import { WebSocketTicketStore } from './modules/delivery-tracking/infrastructure/WebSocketTicketStore.js';
-import { TrackingWebSocketHub } from './modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
+import {
+  defaultSnapshotKey, TrackingWebSocketHub, type TrackingUpdateKind,
+} from './modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
 import { DeliveryRouteNotFoundError } from './modules/delivery-routes/domain/errors/DeliveryRouteError.js';
+import type { DriverRouteView } from './modules/delivery-routes/application/ports/DriverRouteExecutionStore.js';
 import type { RoutePosition, RoutePositionContext } from './modules/delivery-tracking/application/ports/PositionProvider.js';
+import {
+  limaDate, TrackingSnapshotTypeOrmQuery, type TrackingSnapshotData,
+} from './infrastructure/dispatch/TrackingSnapshotTypeOrmQuery.js';
 
 /**
  * API composition root and process entry point.
@@ -42,6 +48,25 @@ const dataSource = createDataSource(
 );
 const clock = new SystemClock();
 const positionStore = new RoutePositionTypeOrmStore(dataSource);
+const trackingSnapshotQuery = new TrackingSnapshotTypeOrmQuery(dataSource);
+
+/** The driver's own route in the same compact shape the back office receives. */
+function driverSnapshot(route: DriverRouteView): TrackingSnapshotData {
+  return {
+    routes: [{
+      id: route.id, publicCode: route.publicCode, plannedDate: route.plannedDate, status: route.status,
+      driverId: route.driverId, vehicleId: route.vehicleId,
+      stops: route.stops.map((stop) => ({
+        id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
+        latitude: stop.latitude, longitude: stop.longitude,
+        orderIds: stop.orders.map((order) => order.id),
+      })),
+    }],
+    orders: route.stops.flatMap((stop) => stop.orders.map((order) => ({
+      id: order.id, publicCode: order.publicCode, status: order.status,
+    }))),
+  };
+}
 const trackingHubRef: { current?: TrackingWebSocketHub } = {};
 const simulatedCompletionRef: { current?: (route: RoutePositionContext, position: RoutePosition) => Promise<void> } = {};
 const geometryProvider = config.valhallaUrl === undefined
@@ -58,7 +83,8 @@ const positionSimulator = new RoutePositionSimulator(
   },
   (error) => logger.error({ err: error }, 'GPS position simulation tick failed'),
   async (position) => {
-    await trackingHubRef.current?.publish(position.organizationId, 'position');
+    // A delta with no database work: the simulator never waits on snapshot rebuilds.
+    trackingHubRef.current?.publishPosition(position);
   },
   async (route, position) => {
     await simulatedCompletionRef.current?.(route, position);
@@ -120,7 +146,7 @@ const trackingHubPort = {
     if (trackingHubRef.current === undefined) throw new Error('Tracking socket hub is unavailable');
     return trackingHubRef.current.issueTicket(identity, origin);
   },
-  publish(organizationId: string, kind: 'route' | 'order' | 'position') {
+  publish(organizationId: string, kind: TrackingUpdateKind) {
     return trackingHubRef.current?.publish(organizationId, kind) ?? Promise.resolve();
   },
 };
@@ -143,30 +169,31 @@ const trackingHub = new TrackingWebSocketHub(server, {
         user.organizationId !== ticketIdentity.organizationId) return null;
     return { id: user.id, organizationId: user.organizationId, role: user.role };
   },
+  snapshotKey: defaultSnapshotKey,
   snapshot: async (identity) => {
-    let routes;
+    let data: TrackingSnapshotData;
     if (identity.role === 'DRIVER') {
       try {
-        const result = await composed.deliveryRoutes.executeDriverRoute.mine({
+        const { route } = await composed.deliveryRoutes.executeDriverRoute.mine({
           organizationId: identity.organizationId,
           actorUserId: identity.id,
         });
-        routes = [result.route];
+        data = driverSnapshot(route);
       } catch (error) {
-        if (error instanceof DeliveryRouteNotFoundError) routes = [];
+        if (error instanceof DeliveryRouteNotFoundError) data = { routes: [], orders: [] };
         else throw error;
       }
     } else {
-      const result = await composed.deliveryRoutes.listRoutes.execute({
-        organizationId: identity.organizationId,
-      });
-      routes = result.routes;
+      data = await trackingSnapshotQuery.load(identity.organizationId, limaDate(new Date(clock.now())));
     }
-    const activeRouteIds = routes
+    const activeRouteIds = data.routes
       .filter((route) => route.status === 'in_progress')
       .map((route) => route.id);
     const positions = await positionStore.findLatestForRoutes(identity.organizationId, activeRouteIds);
-    return { routes, positions };
+    return {
+      payload: { routes: data.routes, orders: data.orders, positions },
+      routeIds: activeRouteIds,
+    };
   },
 });
 trackingHubRef.current = trackingHub;

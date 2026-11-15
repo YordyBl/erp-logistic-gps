@@ -69,6 +69,7 @@ const snapshot = {
     stops: [{ id: 'stop-1', sequence: 1, addressLine: 'Av. Arequipa 100', latitude: -12.1,
       longitude: -77.03, orderIds: ['order-1'] }],
   }],
+  orders: [{ id: 'order-1', publicCode: 'PED-001', status: 'delivered' as const }],
   positions: [{ organizationId: 'org-1', routeId: 'route-1', driverId: 'driver-1',
     latitude: -12.08, longitude: -77.02, accuracyMeters: 12, speedMetersPerSecond: 3,
     source: 'simulated' as const, recordedAt: '2026-11-02T12:00:00.000Z',
@@ -129,15 +130,19 @@ describe('ControlTowerPage', () => {
       .toContainEqual(expect.objectContaining({ id: 'control-tower-positions', type: 'symbol', layout: expect.objectContaining({ 'icon-image': 'control-tower-motorcycle' }) }));
   });
 
-  it('shows who runs each active route, its real progress and its stops', async () => {
-    const harness = createSocketHarness();
-    const client = {
+  function towerClient() {
+    return {
       createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
-      listDispatchRoutes: vi.fn().mockResolvedValue([{ ...snapshot.routes[0], organizationId: 'org-1', createdAt: '2026-11-01T10:00:00.000Z' }]),
-      listDeliveryOrders: vi.fn().mockResolvedValue([{ id: 'order-1', publicCode: 'PED-001', status: 'delivered' }]),
+      listDispatchRoutes: vi.fn().mockResolvedValue([]),
+      listDeliveryOrders: vi.fn().mockResolvedValue([]),
       listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
       listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
     };
+  }
+
+  it('shows who runs each active route, its real progress and its stops from the snapshot and the catalogs', async () => {
+    const harness = createSocketHarness();
+    const client = towerClient();
     render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
     await waitFor(() => expect(mapMock.options).toBeDefined());
     act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
@@ -150,43 +155,49 @@ describe('ControlTowerPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /1 parada/ }));
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 · Entregado')).toBeTruthy();
+    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 
-  it('keeps tracking usable and refreshes progress only when something other than a position changes', async () => {
+  it('takes progress from each update without downloading the collections again', async () => {
     const harness = createSocketHarness();
-    const listDeliveryOrders = vi.fn().mockRejectedValue(new Error('offline'));
-    const client = { createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }), listDeliveryOrders };
+    const client = towerClient();
     render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
     await waitFor(() => expect(mapMock.options).toBeDefined());
-    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
+    const assigned = { ...snapshot, orders: [{ ...snapshot.orders[0]!, status: 'in_transit' as const }] };
+    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: assigned }));
+    expect(await screen.findByText('0 de 1 pedido cerrado')).toBeTruthy();
 
-    fireEvent.click(await screen.findByRole('button', { name: /1 parada/ }));
-    expect(await screen.findByText('Av. Arequipa 100')).toBeTruthy();
-    await waitFor(() => expect(listDeliveryOrders).toHaveBeenCalledOnce());
-    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot }));
-    expect(listDeliveryOrders).toHaveBeenCalledOnce();
-    act(() => harness.emit({ type: 'update', sequence: 2, kind: 'route', snapshot }));
-    await waitFor(() => expect(listDeliveryOrders).toHaveBeenCalledTimes(2));
+    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'order', snapshot }));
+
+    expect(await screen.findByText('1 de 1 pedido cerrado')).toBeTruthy();
+    expect(client.listDrivers).toHaveBeenCalledOnce();
+    expect(client.listVehicles).toHaveBeenCalledOnce();
+    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 
-  it('requests a fresh snapshot after a live position update', async () => {
+  it('moves the marker on a position message without asking the API for anything', async () => {
     const harness = createSocketHarness();
-    render(<ControlTowerPage client={{ createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }) }}
-      socketFactory={() => harness.socket as unknown as WebSocket} />);
+    const client = towerClient();
+    render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
     await waitFor(() => expect(mapMock.options).toBeDefined());
     act(() => mapMock.load?.());
     act(() => harness.emit({ type: 'snapshot', sequence: 0, data: snapshot }));
     await screen.findByText('R-100', { selector: 'h3' });
-    const updated = { ...snapshot, positions: [{ ...snapshot.positions[0]!, latitude: -12.07,
-      longitude: -77.01, receivedAt: '2026-11-02T12:00:05.000Z' }] };
-    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot: updated }));
+    act(() => harness.emit({ type: 'position', sequence: 1, position: { ...snapshot.positions[0]!, latitude: -12.07,
+      longitude: -77.01, recordedAt: '2026-11-02T12:00:04.000Z', receivedAt: '2026-11-02T12:00:05.000Z' } }));
 
-    await waitFor(() => expect(mapMock.source.setData).toHaveBeenCalled());
-    expect(screen.getByText(/07:00:05/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/07:00:05/)).toBeTruthy());
     expect(mapMock.source.setData.mock.lastCall?.[0]).toMatchObject({ features: expect.arrayContaining([
       expect.objectContaining({ geometry: { type: 'Point', coordinates: [-77.01, -12.07] },
         properties: expect.objectContaining({ kind: 'last-known-position' }) }),
     ]) });
+    // An older snapshot that arrives later does not move the marker back.
+    act(() => harness.emit({ type: 'update', sequence: 2, kind: 'route', snapshot }));
+    expect(screen.getByText(/07:00:05/)).toBeTruthy();
+    expect(client.listDispatchRoutes).not.toHaveBeenCalled();
+    expect(client.listDeliveryOrders).not.toHaveBeenCalled();
   });
 });
 
@@ -218,7 +229,6 @@ describe('ControlTowerPage driver selection and route track', () => {
     const harness = createSocketHarness();
     const client = {
       createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
-      listDispatchRoutes: vi.fn().mockResolvedValue([{ ...snapshot.routes[0], organizationId: 'org-1', createdAt: '2026-11-01T10:00:00.000Z' }]),
       listDrivers: vi.fn().mockResolvedValue([{ id: 'driver-1', fullName: 'Ana Quispe' }]),
       listVehicles: vi.fn().mockResolvedValue([{ id: 'vehicle-1', plate: 'ABC-123' }]),
       getRouteTrack: vi.fn().mockResolvedValue(track),
@@ -296,9 +306,10 @@ describe('ControlTowerPage driver selection and route track', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ver la ruta R-100 en el mapa' }));
     await waitFor(() => expect(mapMock.trackSource.setData).toHaveBeenCalled());
 
-    const moved = { ...snapshot, positions: [{ ...snapshot.positions[0]!, latitude: -12.09, longitude: -77.025,
-      recordedAt: '2026-11-02T12:01:00.000Z', receivedAt: '2026-11-02T12:01:01.000Z' }] };
-    act(() => harness.emit({ type: 'update', sequence: 1, kind: 'position', snapshot: moved }));
+    const movedPosition = { ...snapshot.positions[0]!, latitude: -12.09, longitude: -77.025,
+      recordedAt: '2026-11-02T12:01:00.000Z', receivedAt: '2026-11-02T12:01:01.000Z' };
+    const moved = { ...snapshot, positions: [movedPosition] };
+    act(() => harness.emit({ type: 'position', sequence: 1, position: movedPosition }));
 
     await waitFor(() => expect(mapMock.trackSource.setData.mock.lastCall?.[0]).toMatchObject({ features: [
       { geometry: { coordinates: [[-77.04, -12.06], [-77.02, -12.08], [-77.025, -12.09]] } },

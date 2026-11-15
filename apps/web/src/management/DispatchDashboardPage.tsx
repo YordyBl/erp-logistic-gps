@@ -26,7 +26,7 @@ import { formatDateTime, formatTime, formatTimeAgo, formatToday } from '../lib/f
 import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import { deliveredShare, openOrders, STATUS_BADGES, totalOrders } from './dashboard/orderStatus.js';
 import { OrderStatusBar } from './dashboard/OrderStatusBar.js';
-import { loadRouteDetails, NO_ROUTE_DETAILS, type RouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
+import { loadRouteDetails, NO_ROUTE_DETAILS, type FullRouteDetails, type RouteDetailsClient } from './routes/routeDetails.js';
 import { RouteStepper, RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
 import type { MapRoute } from './dashboard/OperationsMap.js';
@@ -50,7 +50,7 @@ interface DashboardProps {
 
 export function DispatchDashboardPage({ client, userName, onOpenOrders, onOpenDispatch, onOpenControlTower }: DashboardProps) {
   const [summary, setSummary] = useState<DispatchDashboardSummary | null>(null);
-  const [details, setDetails] = useState<RouteDetails>(NO_ROUTE_DETAILS);
+  const [details, setDetails] = useState<FullRouteDetails>(NO_ROUTE_DETAILS);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +97,7 @@ export function DispatchDashboardPage({ client, userName, onOpenOrders, onOpenDi
 
 function DashboardContent({ summary, details, userName, onOpenOrders, onOpenDispatch }: {
   readonly summary: DispatchDashboardSummary;
-  readonly details: RouteDetails;
+  readonly details: FullRouteDetails;
   readonly userName: string | undefined;
   readonly onOpenOrders: () => void;
   readonly onOpenDispatch: () => void;
@@ -283,7 +283,7 @@ function buildActivity(summary: DispatchDashboardSummary, orderById: ReadonlyMap
 
 function RouteTracking({ summary, details, orderById, onOpenDispatch }: {
   readonly summary: DispatchDashboardSummary;
-  readonly details: RouteDetails;
+  readonly details: FullRouteDetails;
   readonly orderById: ReadonlyMap<string, DeliveryOrder>;
   readonly onOpenDispatch: () => void;
 }) {
