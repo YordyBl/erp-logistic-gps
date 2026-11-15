@@ -30,6 +30,8 @@ export interface DeliveryOrderRepository {
   ): Promise<DeliveryOrder | null>;
   /** Stable order for tenant-scoped listing; never returns another tenant's orders. */
   list(organizationId: string): Promise<readonly DeliveryOrder[]>;
+  /** Reserves generated package codes (`PKG-00000001`) for packages added by an edit. */
+  nextPackageCodes(count: number): Promise<readonly string[]>;
   /** Lock and recheck tenant/status before changing order-owned details. */
   editDetails(organizationId: string, orderId: string, changes: {
     readonly recipient?: Recipient;

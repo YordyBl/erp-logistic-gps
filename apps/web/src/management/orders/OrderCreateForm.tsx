@@ -14,8 +14,10 @@ import { mapLinkErrorMessage } from '../../lib/googleMaps.js';
 import { PHONE_PATTERN } from '../../lib/patterns.js';
 
 type CreateClient = Pick<ApiClient, 'createDeliveryOrder' | 'resolveGoogleMapsLink'>;
+type EditClient = Pick<ApiClient, 'editDeliveryOrder' | 'resolveGoogleMapsLink'>;
 type TimeWindow = 'AM' | 'PM';
-type PackageFields = { description: string; weightKg: string };
+/** `code` is set only for a package that already exists on the order being edited. */
+type PackageFields = { code?: string; description: string; weightKg: string };
 
 const emptyPackage = (): PackageFields => ({ description: '', weightKg: '' });
 
@@ -32,31 +34,84 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
   readonly showNoCustomers: boolean;
   readonly onCreated: (order: DeliveryOrder) => void;
 }) {
+  return (
+    <OrderFormSheet mode={{ kind: 'create', client, activeCustomers, showNoCustomers, onCreated }}
+      open={open} onOpenChange={onOpenChange} />
+  );
+}
+
+/**
+ * Edits an order that is still `created`. Customer and time window are fixed:
+ * only the recipient, delivery address and packages can change.
+ */
+export function OrderEditSheet({ client, order, customerName, onClose, onSaved }: {
+  readonly client: EditClient;
+  readonly order: DeliveryOrder | null;
+  readonly customerName: string | undefined;
+  readonly onClose: () => void;
+  readonly onSaved: (order: DeliveryOrder) => void;
+}) {
+  if (order === null) return null;
+  return (
+    // Keyed by order so each edit starts from that order's current details.
+    <OrderFormSheet key={order.id} mode={{ kind: 'edit', client, order, customerName, onSaved }}
+      open onOpenChange={(open) => { if (!open) onClose(); }} />
+  );
+}
+
+type FormMode =
+  | { readonly kind: 'create'; readonly client: CreateClient; readonly activeCustomers: readonly Customer[];
+      readonly showNoCustomers: boolean; readonly onCreated: (order: DeliveryOrder) => void }
+  | { readonly kind: 'edit'; readonly client: EditClient; readonly order: DeliveryOrder;
+      readonly customerName: string | undefined; readonly onSaved: (order: DeliveryOrder) => void };
+
+function OrderFormSheet({ mode, open, onOpenChange }: {
+  readonly mode: FormMode;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+}) {
+  const editing = mode.kind === 'edit' ? mode.order : null;
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [showMissing, setShowMissing] = useState(false);
   const [customerId, setCustomerId] = useState('');
   const [timeWindow, setTimeWindow] = useState<TimeWindow | ''>('');
-  const [googleMapsUrl, setGoogleMapsUrl] = useState('');
+  const [googleMapsUrl, setGoogleMapsUrl] = useState(editing?.deliveryAddress.googleMapsUrl ?? '');
   const [resolvingMapLink, setResolvingMapLink] = useState(false);
-  const [recipientName, setRecipientName] = useState('');
-  const [recipientPhone, setRecipientPhone] = useState('');
-  const [addressLine, setAddressLine] = useState('');
-  const [district, setDistrict] = useState('');
-  const [latitude, setLatitude] = useState('');
-  const [longitude, setLongitude] = useState('');
-  const [packages, setPackages] = useState<readonly PackageFields[]>([emptyPackage()]);
+  const [recipientName, setRecipientName] = useState(editing?.recipient.name ?? '');
+  const [recipientPhone, setRecipientPhone] = useState(editing?.recipient.phone ?? '');
+  const [addressLine, setAddressLine] = useState(editing?.deliveryAddress.addressLine ?? '');
+  const [district, setDistrict] = useState(editing?.deliveryAddress.district ?? '');
+  const [latitude, setLatitude] = useState(editing?.deliveryAddress.latitude?.toString() ?? '');
+  const [longitude, setLongitude] = useState(editing?.deliveryAddress.longitude?.toString() ?? '');
+  const [packages, setPackages] = useState<readonly PackageFields[]>(editing === null ? [emptyPackage()]
+    : editing.packages.map((item) => ({ code: item.code, description: item.description, weightKg: item.weightKg?.toString() ?? '' })));
+
+  const activeCustomers = mode.kind === 'create' ? mode.activeCustomers : [];
 
   function updatePackage(index: number, change: Partial<PackageFields>) {
     setPackages((current) => current.map((item, position) => position === index ? { ...item, ...change } : item));
   }
 
-  async function createOrder(event: FormEvent<HTMLFormElement>) {
+  function resetCreateForm() {
+    setTimeWindow('');
+    setGoogleMapsUrl('');
+    setRecipientName('');
+    setRecipientPhone('');
+    setAddressLine('');
+    setDistrict('');
+    setLatitude('');
+    setLongitude('');
+    setPackages([emptyPackage()]);
+    setShowMissing(false);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
     setNotice(null);
-    if (customerId === '' || timeWindow === '') {
+    if (mode.kind === 'create' && (customerId === '' || timeWindow === '')) {
       setShowMissing(true);
       return;
     }
@@ -73,6 +128,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
       return;
     }
     const packageInput = packages.map((item) => ({
+      ...(item.code === undefined ? {} : { code: item.code }),
       description: item.description.trim(),
       ...(item.weightKg.trim() === '' ? {} : { weightKg: Number(item.weightKg) }),
     }));
@@ -80,36 +136,32 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
       setFormError('El peso de cada bulto debe ser un número mayor que cero.');
       return;
     }
+    const recipient = { name: recipientName.trim(), phone: recipientPhone.trim() };
+    const deliveryAddress = {
+      addressLine: addressLine.trim(), district: district.trim(),
+      ...(googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: googleMapsUrl.trim() }),
+      latitude: parsedLatitude, longitude: parsedLongitude,
+    };
 
     setSaving(true);
     try {
-      const created = await client.createDeliveryOrder({
-        customerId,
-        timeWindow,
-        recipient: { name: recipientName.trim(), phone: recipientPhone.trim() },
-        deliveryAddress: {
-          addressLine: addressLine.trim(), district: district.trim(),
-          ...(googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: googleMapsUrl.trim() }),
-          latitude: parsedLatitude, longitude: parsedLongitude,
-        },
-        packages: packageInput,
-      });
-      onCreated(created);
-      setTimeWindow('');
-      setGoogleMapsUrl('');
-      setRecipientName('');
-      setRecipientPhone('');
-      setAddressLine('');
-      setDistrict('');
-      setLatitude('');
-      setLongitude('');
-      setPackages([emptyPackage()]);
-      setShowMissing(false);
+      if (mode.kind === 'edit') {
+        mode.onSaved(await mode.client.editDeliveryOrder(mode.order.id, { recipient, deliveryAddress, packages: packageInput }));
+        onOpenChange(false);
+        return;
+      }
+      if (timeWindow === '') return;
+      const created = await mode.client.createDeliveryOrder({ customerId, timeWindow, recipient, deliveryAddress, packages: packageInput });
+      mode.onCreated(created);
+      resetCreateForm();
       onOpenChange(false);
     } catch (cause) {
-      setFormError(isInactiveCustomerError(cause)
+      const action = mode.kind === 'edit' ? 'guardar los cambios del pedido' : 'crear el pedido';
+      setFormError(isApiError(cause, 'CUSTOMER_INACTIVE')
         ? 'El cliente seleccionado ya no está activo. Elige otro cliente activo e inténtalo de nuevo.'
-        : cause instanceof Error ? `No se pudo crear el pedido. ${cause.message}` : 'No se pudo crear el pedido. Inténtalo de nuevo.');
+        : mode.kind === 'edit' && isApiError(cause, 'DELIVERY_ORDER_INVARIANT_VIOLATION')
+          ? 'El pedido ya no está en estado Creado, por lo que no se puede editar. Actualiza la lista para ver su estado actual.'
+          : cause instanceof Error ? `No se pudo ${action}. ${cause.message}` : `No se pudo ${action}. Inténtalo de nuevo.`);
     } finally {
       setSaving(false);
     }
@@ -119,7 +171,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
     setFormError(null);
     setResolvingMapLink(true);
     try {
-      const coordinates = await client.resolveGoogleMapsLink(googleMapsUrl.trim());
+      const coordinates = await mode.client.resolveGoogleMapsLink(googleMapsUrl.trim());
       setLatitude(String(coordinates.latitude));
       setLongitude(String(coordinates.longitude));
       setNotice('Coordenadas obtenidas del enlace. Puedes ajustarlas manualmente.');
@@ -131,34 +183,49 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
   }
 
   const totalWeight = packages.reduce((total, item) => total + (Number(item.weightKg) || 0), 0);
+  const submitLabel = mode.kind === 'edit' ? (saving ? 'Guardando…' : 'Guardar cambios') : (saving ? 'Creando…' : 'Crear pedido');
 
   return (
-    <FormSheet open={open} onOpenChange={onOpenChange} width="wide" paper title="Crear pedido"
-      description="Los campos con * son obligatorios."
-      onSubmit={(event) => void createOrder(event)}
+    <FormSheet open={open} onOpenChange={onOpenChange} width="wide" paper
+      title={mode.kind === 'edit' ? `Editar pedido ${mode.order.publicCode}` : 'Crear pedido'}
+      description={mode.kind === 'edit'
+        ? 'Solo se editan pedidos en estado Creado. El cliente y la franja no se pueden cambiar.'
+        : 'Los campos con * son obligatorios.'}
+      onSubmit={(event) => void submit(event)}
       footer={(
         <>
           <Button type="button" variant="outline" disabled={saving} onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button type="submit" disabled={saving || activeCustomers.length === 0}>{saving ? 'Creando…' : 'Crear pedido'}</Button>
+          <Button type="submit" disabled={saving || (mode.kind === 'create' && activeCustomers.length === 0)}>{submitLabel}</Button>
         </>
       )}>
       <DocumentTitle title="PEDIDO" aside={<IconChip icon={Package} tone="primary" />}>
-        <span>N°: <span className="text-foreground">se genera al crear</span></span>
-        <span>Fecha: <span className="text-foreground">{formatDateOnly(new Date().toISOString())}</span></span>
+        <span>N°: <span className="text-foreground">{editing?.publicCode ?? 'se genera al crear'}</span></span>
+        <span>Fecha: <span className="text-foreground">{formatDateOnly(editing?.createdAt ?? new Date().toISOString())}</span></span>
       </DocumentTitle>
 
       {formError !== null && <ErrorNotice>{formError}</ErrorNotice>}
       {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
-      {showNoCustomers && <ErrorNotice>No hay clientes activos. Activa o registra un cliente antes de crear pedidos.</ErrorNotice>}
+      {mode.kind === 'create' && mode.showNoCustomers && <ErrorNotice>No hay clientes activos. Activa o registra un cliente antes de crear pedidos.</ErrorNotice>}
 
       <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-        <SelectField id="order-customer" label="Cliente activo *" placeholder="Selecciona un cliente" value={customerId}
-          disabled={activeCustomers.length === 0 || saving} onChange={setCustomerId}
-          options={activeCustomers.map((customer) => ({ value: customer.id, label: `${customer.name} · ${customer.publicCode}` }))}
-          error={showMissing && customerId === '' ? 'Selecciona un cliente.' : null} />
-        <SelectField id="order-time-window" label="Franja de entrega *" placeholder="Selecciona una franja" value={timeWindow}
-          disabled={saving} options={TIME_WINDOW_OPTIONS} onChange={setTimeWindow}
-          error={showMissing && timeWindow === '' ? 'Selecciona una franja.' : null} />
+        {mode.kind === 'edit' ? (
+          <>
+            <TextField id="order-customer" label="Cliente" placeholder="Cliente del pedido" disabled readOnly
+              value={mode.customerName ?? 'Cliente no disponible'} />
+            <TextField id="order-time-window" label="Franja de entrega" placeholder="Franja del pedido" disabled readOnly
+              value={TIME_WINDOW_OPTIONS.find((option) => option.value === mode.order.timeWindow)?.label ?? mode.order.timeWindow} />
+          </>
+        ) : (
+          <>
+            <SelectField id="order-customer" label="Cliente activo *" placeholder="Selecciona un cliente" value={customerId}
+              disabled={activeCustomers.length === 0 || saving} onChange={setCustomerId}
+              options={activeCustomers.map((customer) => ({ value: customer.id, label: `${customer.name} · ${customer.publicCode}` }))}
+              error={showMissing && customerId === '' ? 'Selecciona un cliente.' : null} />
+            <SelectField id="order-time-window" label="Franja de entrega *" placeholder="Selecciona una franja" value={timeWindow}
+              disabled={saving} options={TIME_WINDOW_OPTIONS} onChange={setTimeWindow}
+              error={showMissing && timeWindow === '' ? 'Selecciona una franja.' : null} />
+          </>
+        )}
         <TextField id="recipient-name" label="Nombre del destinatario *" placeholder="Ej. María Pérez" required maxLength={120} value={recipientName}
           onChange={(event) => setRecipientName(event.target.value)} />
         <TextField id="recipient-phone" label="Teléfono del destinatario *" placeholder="Ej. 900 000 123" required maxLength={20} pattern={PHONE_PATTERN} value={recipientPhone}
@@ -223,7 +290,7 @@ export function OrderCreateSheet({ client, open, onOpenChange, activeCustomers, 
   );
 }
 
-function isInactiveCustomerError(error: unknown): boolean {
+function isApiError(error: unknown, code: string): boolean {
   return (error instanceof ApiError || (typeof error === 'object' && error !== null)) &&
-    'status' in error && error.status === 409 && 'code' in error && error.code === 'CUSTOMER_INACTIVE';
+    'status' in error && error.status === 409 && 'code' in error && error.code === code;
 }

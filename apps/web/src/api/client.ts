@@ -53,6 +53,16 @@ export interface CreateDeliveryOrderInput {
   }[];
 }
 
+/**
+ * Details an order accepts while it is still `created`. Customer and time window
+ * are fixed; a package without `code` is new and gets a generated code.
+ */
+export interface EditDeliveryOrderInput {
+  readonly recipient?: CreateDeliveryOrderInput['recipient'];
+  readonly deliveryAddress?: CreateDeliveryOrderInput['deliveryAddress'];
+  readonly packages?: CreateDeliveryOrderInput['packages'];
+}
+
 export interface DeliveryOrderImportIssue {
   readonly rowNumber: number;
   readonly field: string;
@@ -158,6 +168,8 @@ export interface DeliveryOrder {
   readonly deliveryAddress: {
     readonly addressLine: string;
     readonly district: string;
+    /** The API always sends it (null when absent); optional so partial fixtures stay valid. */
+    readonly googleMapsUrl?: string | null;
     readonly latitude: number | null;
     readonly longitude: number | null;
   };
@@ -543,6 +555,12 @@ export class ApiClient {
   async downloadDeliveryOrderImportTemplate(): Promise<Blob> {
     const response = await this.send('/delivery-orders/import/template', { method: 'GET' });
     return response.blob();
+  }
+
+  async editDeliveryOrder(orderId: string, changes: EditDeliveryOrderInput): Promise<DeliveryOrder> {
+    return this.requestData(`/delivery-orders/${encodeURIComponent(orderId)}`, {
+      method: 'PATCH', body: JSON.stringify(changes),
+    });
   }
 
   async cancelDeliveryOrder(orderId: string): Promise<DeliveryOrder> {

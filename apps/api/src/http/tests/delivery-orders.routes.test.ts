@@ -315,6 +315,9 @@ describe('POST /api/v1/delivery-orders', () => {
       async nextCodes() {
         return { publicCode: 'ORD-00000001', packageCodes: ['PKG-00000001'] };
       },
+      async nextPackageCodes() {
+        return [];
+      },
       async save() {
         saveCalls += 1;
         throw new DeliveryOrderInvariantError(
@@ -935,6 +938,14 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(recipientOnly.body.data).toEqual({ ...changed.body.data,
       recipient: { name: 'Final Recipient', phone: '+51 999 888 777' },
     });
+    const added = await request(app).patch(`/api/v1/delivery-orders/${id}`).set(bearer(token)).send({
+      packages: [{ code: 'NEW-001', description: 'Replacement parcel' }, { description: 'Added parcel', weightKg: 1.5 }],
+    });
+    expect(added.status).toBe(200);
+    expect(added.body.data.packages).toEqual([
+      { code: 'NEW-001', description: 'Replacement parcel', weightKg: null },
+      { code: expect.stringMatching(/^PKG-\d{8}$/), description: 'Added parcel', weightKg: 1.5 },
+    ]);
     const history = await request(app).get(`/api/v1/delivery-orders/${id}/history`).set(bearer(token));
     expect(history.status).toBe(200);
     expect(history.body).toEqual({ data: [] });

@@ -33,6 +33,7 @@ function makeClient(overrides: Partial<{
   listDeliveryOrders: () => Promise<readonly DeliveryOrder[]>;
   createDeliveryOrder: (input: unknown) => Promise<DeliveryOrder>;
   resolveGoogleMapsLink: (url: string) => Promise<{ latitude: number; longitude: number }>;
+  editDeliveryOrder: (id: string, changes: unknown) => Promise<DeliveryOrder>;
   cancelDeliveryOrder: (id: string) => Promise<DeliveryOrder>;
   listDeliveryOrderStatusHistory: (id: string) => Promise<readonly DeliveryOrderStatusHistory[]>;
   importDeliveryOrders: (file: File) => Promise<DeliveryOrderImportResult>;
@@ -43,6 +44,7 @@ function makeClient(overrides: Partial<{
     listDeliveryOrders: vi.fn().mockResolvedValue([order]),
     createDeliveryOrder: vi.fn().mockResolvedValue(order),
     resolveGoogleMapsLink: vi.fn().mockResolvedValue({ latitude: -12.1, longitude: -77.02 }),
+    editDeliveryOrder: vi.fn().mockResolvedValue(order),
     cancelDeliveryOrder: vi.fn().mockResolvedValue({ ...order, status: 'cancelled' }),
     listDeliveryOrderStatusHistory: vi.fn().mockResolvedValue([]),
     importDeliveryOrders: vi.fn().mockResolvedValue({ importedOrders: [], rejectedOrders: [] }),
@@ -348,5 +350,47 @@ describe('DeliveryOrderManagementPage', () => {
     await chooseRowAction(user, 'Acciones de LIM-2041', 'Cancelar pedido');
     await waitFor(() => expect(client.cancelDeliveryOrder).toHaveBeenCalledWith(order.id));
     expect(await screen.findByText('Cancelado')).toBeTruthy();
+  });
+
+  it('edits a created order, keeping its customer, time window and existing package codes', async () => {
+    const user = setupUser();
+    const located: DeliveryOrder = { ...order, deliveryAddress: { ...order.deliveryAddress, latitude: -12.08, longitude: -77.03 } };
+    const updated: DeliveryOrder = { ...located, recipient: { name: 'Lucía Ramos', phone: '999 000 111' } };
+    const client = makeClient({
+      listDeliveryOrders: vi.fn().mockResolvedValue([located]),
+      editDeliveryOrder: vi.fn().mockResolvedValue(updated),
+    });
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Editar pedido');
+    expect((screen.getByLabelText('Cliente') as HTMLInputElement).value).toBe('Acme Logística');
+    expect((screen.getByLabelText('Cliente') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Franja de entrega') as HTMLInputElement).disabled).toBe(true);
+    const name = screen.getByLabelText(/Nombre del destinatario/);
+    await user.clear(name);
+    await user.type(name, 'Lucía Ramos');
+    await user.click(screen.getByRole('button', { name: 'Añadir bulto' }));
+    await user.type(screen.getByLabelText('Descripción del bulto 2 *'), 'Sobre');
+    await user.click(screen.getByRole('button', { name: 'Guardar cambios' }));
+
+    await waitFor(() => expect(client.editDeliveryOrder).toHaveBeenCalledWith('order-1', {
+      recipient: { name: 'Lucía Ramos', phone: '999 000 111' },
+      deliveryAddress: { addressLine: 'Av. Arequipa 123', district: 'Lince', latitude: -12.08, longitude: -77.03 },
+      packages: [{ code: 'PKG-01', description: 'Caja mediana' }, { description: 'Sobre' }],
+    }));
+    expect((await screen.findByRole('status')).textContent).toContain('Pedido LIM-2041 actualizado.');
+    expect(screen.getByText(/Lucía Ramos/)).toBeTruthy();
+  });
+
+  it('offers editing only while the order is created', async () => {
+    const user = setupUser();
+    const client = makeClient({ listDeliveryOrders: vi.fn().mockResolvedValue([{ ...order, status: 'planned' }]) });
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await user.click(screen.getByRole('button', { name: 'Acciones de LIM-2041' }));
+    expect(await screen.findByRole('menuitem', { name: 'Cancelar pedido' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Editar pedido' })).toBeNull();
   });
 });

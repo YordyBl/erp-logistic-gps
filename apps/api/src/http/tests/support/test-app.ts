@@ -294,6 +294,7 @@ export function createFailingRepository(
 
   return {
     nextCodes: fail,
+    nextPackageCodes: fail,
     save: fail,
     findById: fail,
     findByPublicCode: fail,

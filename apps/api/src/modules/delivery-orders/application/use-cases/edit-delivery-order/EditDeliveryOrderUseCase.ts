@@ -13,9 +13,14 @@ export const editOrderBodySchema = z.strictObject({
   recipient: z.strictObject({ name: z.string().trim().min(1).max(120), phone: z.string().trim().min(6).max(20).regex(/^\+?[0-9][0-9 ()-]*$/) }).optional(),
   // The address is replaced as a whole, so an edit can never drop the coordinates.
   deliveryAddress: deliveryAddressSchema.optional(),
-  packages: z.array(deliveryOrderPackageSchema).min(1).max(100).optional(),
+  // Existing packages keep their code; a package without one is new and gets a generated code.
+  packages: z.array(deliveryOrderPackageSchema.extend({
+    code: deliveryOrderPackageSchema.shape.code.optional(),
+  })).min(1).max(100).optional(),
 })
   .refine((value) => Object.keys(value).length > 0, 'At least one detail must be provided');
+
+type EditPackageInput = NonNullable<z.infer<typeof editOrderBodySchema>['packages']>[number];
 
 const editOrderCommandSchema = z.strictObject({
   organizationId: z.uuid(),
@@ -36,11 +41,17 @@ export class EditDeliveryOrderUseCase {
       });
     }
     const { organizationId, orderId, changes } = parsed.data;
+    const packages = changes.packages === undefined ? undefined : await this.withCodes(changes.packages);
     const order = await this.repository.editDetails(organizationId, orderId, {
       ...(changes.recipient === undefined ? {} : { recipient: Recipient.create(changes.recipient) }),
       ...(changes.deliveryAddress === undefined ? {} : { deliveryAddress: DeliveryAddress.create(changes.deliveryAddress) }),
-      ...(changes.packages === undefined ? {} : { packages: changes.packages.map((item) => Package.create(item)) }),
+      ...(packages === undefined ? {} : { packages }),
     }, this.clock.now());
     return { order: toDeliveryOrderDto(order) };
+  }
+
+  private async withCodes(items: readonly EditPackageInput[]): Promise<Package[]> {
+    const generated = [...await this.repository.nextPackageCodes(items.filter((item) => item.code === undefined).length)];
+    return items.map((item) => Package.create({ ...item, code: item.code ?? generated.shift()! }));
   }
 }

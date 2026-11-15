@@ -55,6 +55,15 @@ export class DeliveryOrderTypeOrmRepository implements DeliveryOrderRepository {
     };
   }
 
+  async nextPackageCodes(count: number): Promise<readonly string[]> {
+    if (count === 0) return [];
+    const rows = await this.dataSource.query(
+      'SELECT nextval(\'delivery_order_package_code_seq\') AS value FROM generate_series(1, $1)',
+      [count],
+    ) as { value: string }[];
+    return rows.map((row) => formatGeneratedCode('PKG', Number(row.value)));
+  }
+
   async save(order: DeliveryOrder): Promise<void> {
     const orderEntity = toOrderEntity(order);
     const packageEntities = toPackageEntities(order);

@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/react-table';
-import { Ban, Eye, FileSpreadsheet, Package, Plus } from 'lucide-react';
+import { Ban, Eye, FileSpreadsheet, Package, Pencil, Plus } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { ApiClient, Customer, DeliveryOrder } from '../api/client.js';
@@ -12,12 +12,12 @@ import { PageHeader } from '../components/PageHeader.js';
 import { Button } from '../components/ui/button.js';
 import { DropdownMenuItem, DropdownMenuSeparator } from '../components/ui/dropdown-menu.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
-import { OrderCreateSheet } from './orders/OrderCreateForm.js';
+import { OrderCreateSheet, OrderEditSheet } from './orders/OrderCreateForm.js';
 import { OrderDetailSheet } from './orders/OrderDetailSheet.js';
 import { ORDER_STATUS_FILTER, TIME_WINDOW_FILTER } from './orders/orderFilters.js';
 import { OrderImportSheet } from './orders/OrderImportCard.js';
 
-type OrderClient = Pick<ApiClient, 'listCustomers' | 'listDeliveryOrders' | 'createDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
+type OrderClient = Pick<ApiClient, 'listCustomers' | 'listDeliveryOrders' | 'createDeliveryOrder' | 'editDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
 
 export function DeliveryOrderManagementPage({ client }: { readonly client: OrderClient }) {
   const [customers, setCustomers] = useState<readonly Customer[]>([]);
@@ -30,6 +30,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
   const [createOpen, setCreateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [detailOrderId, setDetailOrderId] = useState<string | null>(null);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -70,6 +71,14 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
   const activeCustomers = customers.filter((customer) => customer.status === 'active');
   const customerNames = useMemo(() => new Map(customers.map((customer) => [customer.id, customer.name])), [customers]);
   const detailOrder = orders.find((order) => order.id === detailOrderId) ?? null;
+  const editingOrder = orders.find((order) => order.id === editingOrderId) ?? null;
+
+  const startEdit = useCallback((order: DeliveryOrder) => {
+    setActionError(null);
+    setNotice(null);
+    setDetailOrderId(null);
+    setEditingOrderId(order.id);
+  }, []);
 
   const columns = useMemo<readonly ColumnDef<DeliveryOrder, unknown>[]>(() => [
     {
@@ -123,6 +132,9 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
       cell: ({ row }) => (
         <RowActions label={`Acciones de ${row.original.publicCode}`}>
           <DropdownMenuItem onSelect={() => setDetailOrderId(row.original.id)}><Eye aria-hidden="true" /> Ver detalle</DropdownMenuItem>
+          {canEdit(row.original.status) && (
+            <DropdownMenuItem onSelect={() => startEdit(row.original)}><Pencil aria-hidden="true" /> Editar pedido</DropdownMenuItem>
+          )}
           {canCancel(row.original.status) && (
             <>
               <DropdownMenuSeparator />
@@ -132,7 +144,7 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         </RowActions>
       ),
     },
-  ], [cancelOrder, customerNames]);
+  ], [cancelOrder, customerNames, startEdit]);
 
   return (
     <section className="flex flex-col gap-6">
@@ -180,9 +192,24 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
         ])} />
 
       <OrderDetailSheet client={client} order={detailOrder} onClose={() => setDetailOrderId(null)}
-        customerName={detailOrder === null ? undefined : customerNames.get(detailOrder.customerId)} />
+        customerName={detailOrder === null ? undefined : customerNames.get(detailOrder.customerId)}
+        {...(detailOrder !== null && canEdit(detailOrder.status) ? {
+          footer: <Button type="button" onClick={() => startEdit(detailOrder)}><Pencil data-icon="inline-start" aria-hidden="true" /> Editar pedido</Button>,
+        } : {})} />
+
+      <OrderEditSheet client={client} order={editingOrder} onClose={() => setEditingOrderId(null)}
+        customerName={editingOrder === null ? undefined : customerNames.get(editingOrder.customerId)}
+        onSaved={(updated) => {
+          setOrders((current) => current.map((order) => order.id === updated.id ? updated : order));
+          setNotice(`Pedido ${updated.publicCode} actualizado.`);
+        }} />
     </section>
   );
+}
+
+/** Details may change only before the order is planned into a route (enforced by the API too). */
+function canEdit(status: DeliveryOrder['status']): boolean {
+  return status === 'created';
 }
 
 function canCancel(status: DeliveryOrder['status']): boolean {

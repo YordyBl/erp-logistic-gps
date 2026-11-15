@@ -38,6 +38,10 @@ export class InMemoryDeliveryOrderRepository implements DeliveryOrderRepository 
     return { publicCode, packageCodes };
   }
 
+  async nextPackageCodes(count: number): Promise<readonly string[]> {
+    return Array.from({ length: count }, () => formatGeneratedCode('PKG', this.nextPackageNumber++));
+  }
+
   async save(order: DeliveryOrder): Promise<void> {
     const existing = this.orders.get(order.id);
     if (order.status !== 'created' || (existing !== undefined && existing.status !== 'created')) {
