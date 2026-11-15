@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ApiClient } from './client.js';
+import { ApiClient, buildQuery, type Page, type PageParams } from './client.js';
 
 describe('ApiClient dispatch planning', () => {
   it('uses the authenticated route list, create and reassignment contracts', async () => {
@@ -317,5 +317,81 @@ describe('ApiClient vehicle management', () => {
       plate: 'abc-123', type: 'Van', capacityKg: 1200,
     });
     expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({ capacityKg: null, status: 'inactive' });
+  });
+});
+
+describe('buildQuery', () => {
+  it('skips empty values and joins lists with commas', () => {
+    expect(buildQuery({
+      page: 2, pageSize: 20, q: 'ana maría', sort: 'createdAt:desc', status: ['created', 'planned'],
+      ids: [], customerId: undefined, district: '', archived: null,
+    })).toBe('?page=2&pageSize=20&q=ana+mar%C3%ADa&sort=createdAt%3Adesc&status=created%2Cplanned');
+  });
+
+  it('returns an empty string when nothing remains', () => {
+    expect(buildQuery({ q: '', status: [] })).toBe('');
+  });
+});
+
+describe('ApiClient paginated lists', () => {
+  const page: Page<{ readonly id: string }> = {
+    data: [{ id: 'order-1' }],
+    meta: { page: 1, pageSize: 20, total: 41, counts: { status: { created: 41 } } },
+  };
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  // `requestPage` es privado: los métodos de cada listado lo usarán en las fases siguientes.
+  const requestPage = (client: ApiClient, path: string, params: PageParams, signal?: AbortSignal) =>
+    client['requestPage']<{ readonly id: string }>(path, params, signal);
+
+  it('sends the query and keeps the meta that requestData drops', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(page));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('access-token');
+    const controller = new AbortController();
+
+    await expect(requestPage(client, '/delivery-orders', { page: 1, pageSize: 20, status: ['created'] }, controller.signal))
+      .resolves.toEqual(page);
+
+    const [url, request] = fetcher.mock.calls[0] ?? [];
+    expect(url).toBe('/api/v1/delivery-orders?page=1&pageSize=20&status=created');
+    expect(request?.signal).toBe(controller.signal);
+    expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer access-token');
+  });
+
+  it('retries with the same signal after refreshing an expired session', async () => {
+    const session = { accessToken: 'fresh-token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ error: { code: 'UNAUTHORIZED', message: 'expired' } }, 401))
+      .mockResolvedValueOnce(json({ data: session }))
+      .mockResolvedValueOnce(json(page));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('stale-token');
+    const controller = new AbortController();
+
+    await expect(requestPage(client, '/customers', { q: 'ana' }, controller.signal)).resolves.toEqual(page);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/customers?q=ana', '/api/v1/auth/refresh', '/api/v1/customers?q=ana',
+    ]);
+    const retry = fetcher.mock.calls[2]?.[1];
+    expect(retry?.signal).toBe(controller.signal);
+    expect(new Headers(retry?.headers).get('Authorization')).toBe('Bearer fresh-token');
+  });
+
+  it('does not retry a request cancelled while the session was refreshing', async () => {
+    const controller = new AbortController();
+    const session = { accessToken: 'fresh-token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ error: { code: 'UNAUTHORIZED', message: 'expired' } }, 401))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return json({ data: session });
+      });
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('stale-token');
+
+    await expect(requestPage(client, '/customers', {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

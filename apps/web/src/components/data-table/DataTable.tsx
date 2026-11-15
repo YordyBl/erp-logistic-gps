@@ -1,11 +1,12 @@
 import {
   flexRender, getCoreRowModel, getFacetedRowModel, getFacetedUniqueValues, getFilteredRowModel, getPaginationRowModel,
-  getSortedRowModel, useReactTable, type ColumnDef, type ColumnFiltersState, type Row, type RowData, type SortingState,
-  type Table as TanstackTable, type VisibilityState,
+  getSortedRowModel, useReactTable, type ColumnDef, type ColumnFiltersState, type OnChangeFn, type Row, type RowData,
+  type SortingState, type Table as TanstackTable, type VisibilityState,
 } from '@tanstack/react-table';
 import { Check, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CircleSlash, PlusCircle, Settings2, X, type LucideIcon } from 'lucide-react';
 import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 
+import type { DataTableServer } from '../../hooks/use-server-table.js';
 import { rememberOpener } from '../../lib/focusOpener.js';
 import { SearchInput } from '../SearchInput.js';
 import { Badge } from '../ui/badge.js';
@@ -28,6 +29,8 @@ declare module '@tanstack/react-table' {
   }
 }
 
+export type { DataTableServer } from '../../hooks/use-server-table.js';
+
 const PAGE_SIZES = [5, 10, 20, 50] as const;
 
 export interface DataTableFilter {
@@ -36,45 +39,78 @@ export interface DataTableFilter {
   readonly options: readonly { readonly value: string; readonly label: string; readonly icon?: LucideIcon }[];
 }
 
-/** Tabla con búsqueda, filtros, orden, columnas visibles y paginación en el cliente. */
-export function DataTable<TData>({ label, columns, data, searchPlaceholder, filters = [], pageSize = 10, onRowClick, actions }: {
+/**
+ * Tabla con búsqueda, filtros, orden, columnas visibles y paginación.
+ *
+ * Sin `server` todo ocurre en el cliente sobre `data`. Con `server` (de `useServerTable`) `data` es
+ * solo la página actual: la búsqueda, los filtros, el orden y la página son estado controlado que
+ * el hook envía al servidor, y el total y los números de las facetas salen de su respuesta.
+ */
+export function DataTable<TData>({ label, columns, data, searchPlaceholder, filters = [], pageSize = 10, onRowClick, actions, server }: {
   readonly label: string;
   readonly columns: readonly ColumnDef<TData, unknown>[];
-  /** Debe ser una referencia estable: cada cambio devuelve la tabla a la primera página. */
+  /** Debe ser una referencia estable: sin `server`, cada cambio devuelve la tabla a la primera página. */
   readonly data: readonly TData[];
   readonly searchPlaceholder: string;
   readonly filters?: readonly DataTableFilter[];
+  /** Filas por página al empezar; con `server` lo decide el hook. */
   readonly pageSize?: number;
   readonly onRowClick?: (row: TData) => void;
   readonly actions?: ReactNode;
+  readonly server?: DataTableServer;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [localSorting, setLocalSorting] = useState<SortingState>([]);
+  const [localColumnFilters, setLocalColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
-  const [globalFilter, setGlobalFilter] = useState('');
+  const [localGlobalFilter, setLocalGlobalFilter] = useState('');
   const rows = useMemo(() => [...data], [data]);
   const columnDefs = useMemo(() => [...columns] as ColumnDef<TData>[], [columns]);
 
-  const table = useReactTable<TData>({
-    data: rows,
-    columns: columnDefs,
-    state: { sorting, columnFilters, columnVisibility, globalFilter },
-    initialState: { pagination: { pageSize, pageIndex: 0 } },
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
-    onColumnVisibilityChange: setColumnVisibility,
-    onGlobalFilterChange: setGlobalFilter,
-    globalFilterFn: 'includesString',
-    getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
-  });
+  const columnFilters = server?.state.columnFilters ?? localColumnFilters;
+  const globalFilter = server?.state.globalFilter ?? localGlobalFilter;
+  const setColumnFilters: OnChangeFn<ColumnFiltersState> = server?.handlers.onColumnFiltersChange ?? setLocalColumnFilters;
+  const setGlobalFilter: OnChangeFn<string> = server?.handlers.onGlobalFilterChange ?? setLocalGlobalFilter;
+
+  const table = useReactTable<TData>(server === undefined
+    ? {
+      data: rows,
+      columns: columnDefs,
+      state: { sorting: localSorting, columnFilters, columnVisibility, globalFilter },
+      initialState: { pagination: { pageSize, pageIndex: 0 } },
+      onSortingChange: setLocalSorting,
+      onColumnFiltersChange: setColumnFilters,
+      onColumnVisibilityChange: setColumnVisibility,
+      onGlobalFilterChange: setGlobalFilter,
+      globalFilterFn: 'includesString',
+      getCoreRowModel: getCoreRowModel(),
+      getFilteredRowModel: getFilteredRowModel(),
+      getSortedRowModel: getSortedRowModel(),
+      getPaginationRowModel: getPaginationRowModel(),
+      getFacetedRowModel: getFacetedRowModel(),
+      getFacetedUniqueValues: getFacetedUniqueValues(),
+    }
+    : {
+      data: rows,
+      columns: columnDefs,
+      state: { ...server.state, columnVisibility },
+      onSortingChange: server.handlers.onSortingChange,
+      onColumnFiltersChange: setColumnFilters,
+      onColumnVisibilityChange: setColumnVisibility,
+      onGlobalFilterChange: setGlobalFilter,
+      onPaginationChange: server.handlers.onPaginationChange,
+      // El servidor ya devuelve la página filtrada y ordenada; el orden admite un solo campo.
+      manualPagination: true,
+      manualSorting: true,
+      manualFiltering: true,
+      enableMultiSort: false,
+      autoResetPageIndex: false,
+      rowCount: server.rowCount,
+      getCoreRowModel: getCoreRowModel(),
+    });
 
   const isFiltered = columnFilters.length > 0 || globalFilter !== '';
   const hideableColumns = table.getAllLeafColumns().filter((column) => column.getCanHide() && column.columnDef.meta?.title !== undefined);
+  const isEmptyLoading = server?.loading === true && rows.length === 0;
 
   function clearFilters() {
     setColumnFilters([]);
@@ -84,8 +120,8 @@ export function DataTable<TData>({ label, columns, data, searchPlaceholder, filt
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SearchInput value={globalFilter} onChange={setGlobalFilter} placeholder={searchPlaceholder} />
-        {filters.map((filter) => <FacetedFilter key={filter.columnId} table={table} filter={filter} />)}
+        <SearchInput value={globalFilter} onChange={setGlobalFilter} placeholder={searchPlaceholder} busy={server?.loading ?? false} />
+        {filters.map((filter) => <FacetedFilter key={filter.columnId} table={table} filter={filter} counts={server === undefined ? undefined : server.facetCounts?.[filter.columnId] ?? {}} />)}
         {isFiltered && (
           <Button type="button" variant="ghost" onClick={clearFilters}>
             Limpiar <X data-icon="inline-end" aria-hidden="true" />
@@ -133,7 +169,7 @@ export function DataTable<TData>({ label, columns, data, searchPlaceholder, filt
                 <Empty>
                   <EmptyHeader>
                     <EmptyMedia variant="icon"><CircleSlash aria-hidden="true" /></EmptyMedia>
-                    <EmptyDescription>{isFiltered ? 'Ningún resultado coincide con la búsqueda o los filtros.' : 'Todavía no hay registros.'}</EmptyDescription>
+                    <EmptyDescription>{isEmptyLoading ? 'Cargando…' : isFiltered ? 'Ningún resultado coincide con la búsqueda o los filtros.' : 'Todavía no hay registros.'}</EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               </TableCell>
@@ -142,7 +178,7 @@ export function DataTable<TData>({ label, columns, data, searchPlaceholder, filt
         </TableBody>
       </Table>
 
-      <Pagination table={table} />
+      <Pagination table={table} total={server?.rowCount ?? table.getFilteredRowModel().rows.length} />
     </div>
   );
 }
@@ -166,9 +202,14 @@ function DataRow<TData>({ row, onRowClick }: { readonly row: Row<TData>; readonl
   );
 }
 
-function FacetedFilter<TData>({ table, filter }: { readonly table: TanstackTable<TData>; readonly filter: DataTableFilter }) {
+/** `counts` llega solo en modo servidor; sin él, los números se cuentan sobre las filas del cliente. */
+function FacetedFilter<TData>({ table, filter, counts }: {
+  readonly table: TanstackTable<TData>;
+  readonly filter: DataTableFilter;
+  readonly counts: Readonly<Record<string, number>> | undefined;
+}) {
   const column = table.getColumn(filter.columnId);
-  const facets = column?.getFacetedUniqueValues();
+  const facets = counts === undefined ? column?.getFacetedUniqueValues() : undefined;
   const selected = new Set((column?.getFilterValue() as string[] | undefined) ?? []);
 
   function toggle(value: string) {
@@ -206,7 +247,7 @@ function FacetedFilter<TData>({ table, filter }: { readonly table: TanstackTable
                     </span>
                     {Icon !== undefined && <Icon className="size-4 text-muted-foreground" aria-hidden="true" />}
                     <span>{option.label}</span>
-                    <span data-slot="command-shortcut" className="ml-auto text-xs text-muted-foreground tabular-nums">{facets?.get(option.value) ?? 0}</span>
+                    <span data-slot="command-shortcut" className="ml-auto text-xs text-muted-foreground tabular-nums">{counts?.[option.value] ?? facets?.get(option.value) ?? 0}</span>
                   </CommandItem>
                 );
               })}
@@ -226,9 +267,8 @@ function FacetedFilter<TData>({ table, filter }: { readonly table: TanstackTable
   );
 }
 
-function Pagination<TData>({ table }: { readonly table: TanstackTable<TData> }) {
+function Pagination<TData>({ table, total }: { readonly table: TanstackTable<TData>; readonly total: number }) {
   const { pageIndex, pageSize } = table.getState().pagination;
-  const total = table.getFilteredRowModel().rows.length;
   const pageCount = Math.max(table.getPageCount(), 1);
 
   return (

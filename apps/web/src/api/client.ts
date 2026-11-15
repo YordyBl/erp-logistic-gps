@@ -305,6 +305,49 @@ interface ApiEnvelope<T> {
   readonly data: T;
 }
 
+/** Valor de un parámetro de consulta: las listas viajan separadas por comas (`status=a,b`). */
+export type QueryValue = string | number | boolean | readonly (string | number)[] | null | undefined;
+
+/**
+ * Parámetros de un listado paginado en el servidor. `sort` va como `campo:asc|desc`; el resto son
+ * los filtros propios de cada recurso (`status`, `ids`, `customerId`...).
+ */
+export interface PageParams {
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly q?: string;
+  readonly sort?: string;
+  readonly [filter: string]: QueryValue;
+}
+
+/** Una página de un listado: las filas y el total del servidor, con conteos por faceta si los hay. */
+export interface Page<T> {
+  readonly data: readonly T[];
+  readonly meta: {
+    readonly page: number;
+    readonly pageSize: number;
+    readonly total: number;
+    /** Conteos por faceta y valor, por ejemplo `{ status: { created: 12 } }`. */
+    readonly counts?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+  };
+}
+
+/**
+ * Arma la query (`?a=1&b=x,y`) omitiendo valores vacíos: `undefined`, `null`, `''` y listas sin
+ * elementos. Devuelve `''` si no queda ningún parámetro.
+ */
+export function buildQuery(params: Readonly<Record<string, QueryValue>>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    const text = Array.isArray(value) ? value.join(',') : String(value);
+    if (text === '') continue;
+    search.append(key, text);
+  }
+  const query = search.toString();
+  return query === '' ? '' : `?${query}`;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -634,6 +677,16 @@ export class ApiClient {
     return envelope.data;
   }
 
+  /**
+   * Pide una página de un listado y conserva `meta`, que `requestData` descarta. `signal` cancela
+   * la petición, también el reintento tras refrescar la sesión.
+   */
+  private async requestPage<T>(path: string, params: PageParams, signal?: AbortSignal): Promise<Page<T>> {
+    const response = await this.send(`${path}${buildQuery(params)}`, signal === undefined ? {} : { signal });
+    return await response.json() as Page<T>;
+  }
+
+  /** `init.signal` llega a la petición y a su reintento tras el 401: cancelar corta ambos. */
   private async send(path: string, init: RequestInit, allowRefresh = true): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
@@ -653,6 +706,8 @@ export class ApiClient {
         !path.startsWith('/auth/')) {
       const session = await this.refreshOnce();
       if (session === null) throw await this.toApiError(response);
+      // Si se canceló mientras se refrescaba la sesión, no se repite la petición.
+      init.signal?.throwIfAborted();
       return this.send(path, init, false);
     }
 

@@ -1,10 +1,13 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import type { ColumnDef } from '@tanstack/react-table';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { Page, PageParams } from '../../api/client.js';
+import { useServerTable } from '../../hooks/use-server-table.js';
 import { setupUser } from '../../test/ui.js';
+import { SortableHeader } from './columnHelpers.js';
 import { DataTable } from './DataTable.js';
 
 interface Item { readonly id: string; readonly name: string; readonly status: string }
@@ -79,5 +82,79 @@ describe('DataTable', () => {
     expect(onRowClick).not.toHaveBeenCalled();
     await user.click(screen.getByText('Pedido 01'));
     expect(onRowClick).toHaveBeenCalledWith(data[0]);
+  });
+});
+
+describe('DataTable in server mode', () => {
+  const total = 23;
+  const fetchPage = vi.fn(async (params: PageParams): Promise<Page<Item>> => {
+    const pageNumber = params.page ?? 1;
+    const size = params.pageSize ?? 10;
+    const items = Array.from({ length: Math.max(Math.min(size, total - (pageNumber - 1) * size), 0) }, (_, index) => {
+      const position = (pageNumber - 1) * size + index + 1;
+      return { id: String(position), name: `Servidor ${String(position).padStart(2, '0')}`, status: 'created' };
+    });
+    return { data: items, meta: { page: pageNumber, pageSize: size, total, counts: { status: { created: 21, delivered: 2 } } } };
+  });
+
+  const sortable: readonly ColumnDef<Item, unknown>[] = [
+    { accessorKey: 'name', header: ({ column }) => <SortableHeader column={column} title="Nombre" />, meta: { title: 'Nombre' } },
+    { accessorKey: 'status', header: 'Estado', meta: { title: 'Estado' } },
+  ];
+
+  function ServerTable() {
+    const table = useServerTable(fetchPage, { pageSize: 5, filterParams: { status: 'status' }, sortFields: { name: 'recipientName' } });
+    return <DataTable label="Pedidos" columns={sortable} data={table.rows} searchPlaceholder="Buscar pedido" filters={filters} server={table.server} />;
+  }
+
+  afterEach(() => fetchPage.mockClear());
+
+  it('shows the server page and total, and sends page changes as params', async () => {
+    render(<ServerTable />);
+    const user = setupUser();
+
+    expect(await screen.findByText('Servidor 01')).toBeTruthy();
+    expect(bodyRows()).toHaveLength(5);
+    expect(screen.getByText('23 resultados')).toBeTruthy();
+    expect(screen.getByText('Página 1 de 5')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Página siguiente' }));
+    expect(await screen.findByText('Servidor 06')).toBeTruthy();
+    expect(fetchPage.mock.lastCall?.[0]).toMatchObject({ page: 2, pageSize: 5 });
+
+    await user.click(screen.getByRole('button', { name: 'Última página' }));
+    expect(await screen.findByText('Servidor 21')).toBeTruthy();
+    expect(screen.getByText('Página 5 de 5')).toBeTruthy();
+    expect(bodyRows()).toHaveLength(3);
+  });
+
+  it('sends the debounced search and sorting to the server instead of filtering locally', async () => {
+    render(<ServerTable />);
+    const user = setupUser();
+    await screen.findByText('Servidor 01');
+
+    await user.type(screen.getByLabelText('Buscar pedido'), 'Pedido 11');
+    // La búsqueda no filtra en el cliente: las filas siguen siendo las de la página del servidor.
+    expect(bodyRows()).toHaveLength(5);
+    await waitFor(() => expect(fetchPage.mock.lastCall?.[0]).toMatchObject({ q: 'Pedido 11', page: 1 }));
+
+    await user.click(screen.getByRole('button', { name: 'Nombre' }));
+    await waitFor(() => expect(fetchPage.mock.lastCall?.[0]).toMatchObject({ sort: 'recipientName:asc' }));
+    // El orden tampoco se aplica en el cliente.
+    expect(bodyRows()[0]?.textContent).toContain('Servidor 01');
+  });
+
+  it('shows facet counts from the server and sends the selected values', async () => {
+    render(<ServerTable />);
+    const user = setupUser();
+    await screen.findByText('Servidor 01');
+
+    await user.click(screen.getByRole('button', { name: 'Estado' }));
+    const option = await screen.findByRole('option', { name: /Entregado/ });
+    expect(option.textContent).toContain('2');
+    expect((await screen.findByRole('option', { name: /Creado/ })).textContent).toContain('21');
+    await user.click(option);
+
+    await waitFor(() => expect(fetchPage.mock.lastCall?.[0]).toMatchObject({ status: 'delivered', page: 1 }));
   });
 });
