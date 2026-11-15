@@ -6,7 +6,7 @@ import type { GetVehicleUseCase } from '../../../../vehicles/application/use-cas
 import { DeliveryRouteConflictError, DeliveryRouteValidationError } from '../../../domain/errors/DeliveryRouteError.js';
 import type { PlannedRoute, RoutePlanDraft, RoutePlanningStore } from '../../ports/RoutePlanningStore.js';
 import type { Clock } from '../../../../delivery-orders/application/ports/Clock.js';
-import type { MapLinkResolver } from '../../ports/MapLinkResolver.js';
+import { mapLinkFailureReason, type MapLinkResolver } from '../../ports/MapLinkResolver.js';
 
 /**
  * One stop per order. A stop has no location of its own: the store copies the
@@ -112,9 +112,10 @@ export class PlanRouteUseCase {
     try {
       const coordinates = await this.mapLinkResolver.resolve(location.googleMapsUrl);
       return { addressLine: location.addressLine, latitude: coordinates.latitude, longitude: coordinates.longitude };
-    } catch {
+    } catch (error) {
       throw new DeliveryRouteValidationError('Google Maps link could not be resolved', {
-        issues: [{ path: `${path}.googleMapsUrl`, message: 'Use a Google Maps link to a specific location' }],
+        issues: [{ path: `${path}.googleMapsUrl`, message: 'Use a Google Maps link to a specific location',
+          reason: mapLinkFailureReason(error) }],
       });
     }
   }

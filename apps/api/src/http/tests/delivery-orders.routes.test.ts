@@ -42,6 +42,19 @@ describe('POST /api/v1/delivery-orders/resolve-map-link', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ data: { latitude: -12.1, longitude: -77.02 } });
   });
+
+  it('explains why a link could not be resolved', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/resolve-map-link')
+      .set(bearer(token))
+      .send({ url: 'https://www.google.com/search?q=-12.1,-77.02' });
+
+    expect(response.status).toBe(422);
+    expect(response.body.error).toMatchObject({
+      code: 'GOOGLE_MAPS_LINK_UNRESOLVED', details: { reason: 'unsupported_host' },
+    });
+  });
 });
 
 const IMPORT_HEADERS = [

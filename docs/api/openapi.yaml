@@ -827,7 +827,37 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '422':
-          description: The URL is unsupported or did not identify coordinates.
+          description: |
+            The URL is unsupported or did not identify coordinates. The error
+            has code `GOOGLE_MAPS_LINK_UNRESOLVED` and `details.reason` names
+            the failure class (never the remote response or redirect targets):
+            `invalid_url`, `unsupported_host` (not an HTTPS Google Maps host,
+            including a redirect to another host), `unreachable`, `timeout`
+            (10 s for the whole chain), `redirect_invalid` (missing location or
+            more than 5 redirects), `not_map_page` and `no_coordinates` (a map
+            page whose URL carries no coordinates). Planning a route with an
+            unresolvable origin link returns 400 with the same `reason` in its
+            `origin.googleMapsUrl` issue.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code, message, details]
+                    properties:
+                      code: { type: string, enum: [GOOGLE_MAPS_LINK_UNRESOLVED] }
+                      message: { type: string }
+                      details:
+                        type: object
+                        required: [reason]
+                        properties:
+                          reason:
+                            type: string
+                            enum: [invalid_url, unsupported_host, unreachable, timeout,
+                              redirect_invalid, not_map_page, no_coordinates]
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

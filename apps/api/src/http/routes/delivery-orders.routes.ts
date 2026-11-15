@@ -6,6 +6,7 @@ import type { GetCustomerUseCase } from '../../modules/customers/application/use
 import type { ListCustomersUseCase } from '../../modules/customers/application/use-cases/list-customers/ListCustomersUseCase.js';
 import type { CancelDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/cancel-delivery-order/CancelDeliveryOrderUseCase.js';
 import { createDeliveryOrderCommandSchema } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderCommand.js';
+import { mapLinkFailureReason } from '../../modules/delivery-routes/application/ports/MapLinkResolver.js';
 import { GoogleMapsLinkResolver } from '../../modules/delivery-routes/infrastructure/GoogleMapsLinkResolver.js';
 import type { CreateDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderQuery.js';
@@ -87,8 +88,10 @@ export function createDeliveryOrdersRouter(
     try {
       const coordinates = await mapLinkResolver.resolve(body.url);
       response.status(200).json({ data: coordinates });
-    } catch {
-      throw new HttpError(422, 'GOOGLE_MAPS_LINK_UNRESOLVED', 'The Google Maps link could not be resolved to coordinates.');
+    } catch (error) {
+      // The reason is a fixed failure class; the remote response and redirects stay private.
+      throw new HttpError(422, 'GOOGLE_MAPS_LINK_UNRESOLVED', 'The Google Maps link could not be resolved to coordinates.',
+        { reason: mapLinkFailureReason(error) });
     }
   });
 

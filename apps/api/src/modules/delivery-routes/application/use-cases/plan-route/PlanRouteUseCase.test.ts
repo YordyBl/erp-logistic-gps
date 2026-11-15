@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Clock } from '../../../../delivery-orders/application/ports/Clock.js';
 import type { GetDriverUseCase } from '../../../../drivers/application/use-cases/get-driver/GetDriverUseCase.js';
 import type { GetVehicleUseCase } from '../../../../vehicles/application/use-cases/get-vehicle/GetVehicleUseCase.js';
-import type { MapLinkResolver } from '../../ports/MapLinkResolver.js';
+import { MapLinkResolutionError, type MapLinkResolver } from '../../ports/MapLinkResolver.js';
 import type { PlannedRoute, RoutePlanDraft, RoutePlanningStore } from '../../ports/RoutePlanningStore.js';
 import { PlanRouteUseCase } from './PlanRouteUseCase.js';
 
@@ -104,6 +104,19 @@ describe('PlanRouteUseCase Google Maps coordinates', () => {
       origin: { addressLine: 'Almacen central', googleMapsUrl: 'https://maps.app.goo.gl/origin' } }))
       .rejects.toThrow('Google Maps link could not be resolved');
     expect(store.plan).not.toHaveBeenCalled();
+  });
+
+  it('reports why the origin link could not be resolved', async () => {
+    const resolver: MapLinkResolver = {
+      resolve: vi.fn().mockRejectedValue(new MapLinkResolutionError('no_coordinates')),
+    };
+    const { useCase } = makeUseCase(resolver, true);
+
+    await expect(useCase.execute({ ...input, simulatedCompletionEnabled: true,
+      origin: { addressLine: 'Almacen central', googleMapsUrl: 'https://maps.app.goo.gl/origin' } }))
+      .rejects.toMatchObject({ details: { issues: [
+        { path: 'origin.googleMapsUrl', message: 'Use a Google Maps link to a specific location', reason: 'no_coordinates' },
+      ] } });
   });
 });
 
