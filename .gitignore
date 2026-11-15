@@ -21,3 +21,6 @@ infra/valhalla/data/*
 !infra/valhalla/data/.gitkeep
 brag-*
 videos*
+.agents*
+.claude*
+skills-lock.json
