@@ -111,6 +111,8 @@ describe('DriverManagementPage', () => {
       fullName: driver.fullName, phone: '+51 900 111 222', licenseNumber: driver.licenseNumber,
       status: driver.status,
     }));
+    // The visible ids did not change, but the trips are refreshed with the page.
+    await waitFor(() => expect(client.getDriverRouteStats).toHaveBeenCalledTimes(2));
     expect(within(row).getByText('DNI-123456')).toBeTruthy();
   });
 

@@ -105,6 +105,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   // no vuelve a pedir la lista. Si fallan, las tarjetas muestran guiones.
   const [period, setPeriod] = useState<MetricsPeriod>(DEFAULT_METRICS_PERIOD);
   const [trips, setTrips] = useState<ReadonlyMap<string, DriverRouteStats> | null>(new Map());
+  const [tripsToken, setTripsToken] = useState(0);
   const visibleIdsKey = drivers.map((driver) => driver.id).join(',');
   useEffect(() => {
     if (visibleIdsKey === '') return undefined;
@@ -115,7 +116,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       if (!cancelled) setTrips(null);
     });
     return () => { cancelled = true; };
-  }, [client, period, visibleIdsKey]);
+  }, [client, period, tripsToken, visibleIdsKey]);
   const tripsOf = (driverId: string): DriverTrips | null =>
     trips === null ? null : trips.get(driverId) ?? NO_TRIPS;
 
@@ -140,6 +141,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         phone: form.phone.trim(), licenseNumber: form.licenseNumber.trim(), status: form.status,
       });
       crew.reload();
+      setTripsToken((token) => token + 1);
       setForm(newDriverForm());
       setCreateOpen(false);
       setRegistered(`El conductor ${created.fullName} se registró correctamente.`);
@@ -171,6 +173,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         licenseNumber: editForm.licenseNumber.trim(), status: editForm.status,
       });
       crew.reload();
+      setTripsToken((token) => token + 1);
       setEditingDriverId(null);
       setNotice(`Cambios de ${updated.fullName} guardados.`);
     } catch (cause) {
