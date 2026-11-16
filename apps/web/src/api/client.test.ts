@@ -43,11 +43,13 @@ describe('ApiClient dispatch planning', () => {
     await client.getVehicleRouteStats({ months: 12 });
     await client.getVehicleRouteStats({ from: '2026-11-01', to: '2026-11-30', ids: ['vehicle-1', 'vehicle-2'] });
     await client.getVehicleRouteStats({ ids: [] });
+    await client.getDriverRouteStats({ months: 3, from: '2026-09-01', ids: ['driver-1'] });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       '/api/v1/vehicles/route-stats', '/api/v1/vehicles/route-stats?months=12',
       '/api/v1/vehicles/route-stats?from=2026-11-01&to=2026-11-30&ids=vehicle-1%2Cvehicle-2',
       '/api/v1/vehicles/route-stats',
+      '/api/v1/drivers/route-stats?months=3&from=2026-09-01&ids=driver-1',
     ]);
   });
 });

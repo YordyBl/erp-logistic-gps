@@ -1,9 +1,10 @@
 import { IdCard, Plus, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
-import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
+import type { ApiClient, Driver, DriverAccountOption, DriverRouteStats, DriverStatus } from '../api/client.js';
 import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
 import { ListPager } from '../components/ListPager.js';
+import { MetricsPeriodSelect } from '../components/MetricsPeriodSelect.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
@@ -14,14 +15,15 @@ import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
 import { useServerTable } from '../hooks/use-server-table.js';
+import { DEFAULT_METRICS_PERIOD, limaToday, periodLabel, periodRange, type MetricsPeriod } from '../lib/metricsPeriod.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
-import { DriverCard } from './drivers/DriverCard.js';
+import { DriverCard, type DriverTrips } from './drivers/DriverCard.js';
 import {
   chipCounts, DRIVER_FILTERS, filterFromColumns, indexAccountsByDriver, toColumnFilters, type DriverFilter,
 } from './drivers/driverFilters.js';
 
 type DriverClient = Pick<ApiClient,
-  'listDriversPage' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
+  'listDriversPage' | 'listDriverAccounts' | 'getDriverRouteStats' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
 
 interface DriverForm {
   fullName: string;
@@ -38,6 +40,8 @@ const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: s
 
 /** Conductores por página: tres filas de la cuadrícula de cuatro columnas. */
 export const CREW_PAGE_SIZE = 12;
+
+const NO_TRIPS: DriverTrips = { routes: 0, completed: 0, lastRouteDay: null };
 
 const newDriverForm = (): DriverForm => ({
   fullName: '', documentNumber: '', phone: '', licenseNumber: '', status: 'active',
@@ -97,6 +101,24 @@ export function DriverManagementPage({ client, canBindAccounts }: {
     const counts = chipCounts(facets);
     setCrewSummary({ active: counts.active, total: counts.all, linked: facets.account?.linked ?? 0 });
   }, [facets, searching]);
+  // Los viajes se piden solo para los conductores de la página y el periodo elegido; cambiar el periodo
+  // no vuelve a pedir la lista. Si fallan, las tarjetas muestran guiones.
+  const [period, setPeriod] = useState<MetricsPeriod>(DEFAULT_METRICS_PERIOD);
+  const [trips, setTrips] = useState<ReadonlyMap<string, DriverRouteStats> | null>(new Map());
+  const visibleIdsKey = drivers.map((driver) => driver.id).join(',');
+  useEffect(() => {
+    if (visibleIdsKey === '') return undefined;
+    let cancelled = false;
+    client.getDriverRouteStats({ ...periodRange(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
+      if (!cancelled) setTrips(new Map(loaded.map((item) => [item.driverId, item] as const)));
+    }, () => {
+      if (!cancelled) setTrips(null);
+    });
+    return () => { cancelled = true; };
+  }, [client, period, visibleIdsKey]);
+  const tripsOf = (driverId: string): DriverTrips | null =>
+    trips === null ? null : trips.get(driverId) ?? NO_TRIPS;
+
   const loading = crew.meta === null && crew.error === null;
   const loadError = crew.meta === null && crew.error !== null
     ? 'No se pudieron cargar los conductores. Comprueba la conexión e inténtalo de nuevo.' : null;
@@ -259,6 +281,10 @@ export function DriverManagementPage({ client, canBindAccounts }: {
             </div>
             <SearchInput value={query} onChange={setQuery} label="Buscar conductores" placeholder="Buscar nombre, documento o licencia" className="w-full lg:w-96" />
           </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <p className="text-sm text-muted-foreground">Viajes de {periodLabel(period)}</p>
+            <MetricsPeriodSelect id="driver-metrics-period" value={period} onChange={setPeriod} />
+          </div>
 
           {visibleDrivers.length === 0 ? (
             <Empty className="border">
@@ -278,7 +304,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
           ) : (
             <ul aria-label="Personal registrado" aria-busy={crew.loading} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {visibleDrivers.map((driver) => (
-                <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts}
+                <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts} trips={tripsOf(driver.id)}
                   onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
               ))}
             </ul>

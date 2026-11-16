@@ -40,6 +40,7 @@ import {
 } from './routes/health.routes.js';
 import { createUsersRouter } from './routes/users.routes.js';
 import { createDispatchDashboardRouter, type DispatchDashboardQuery } from './routes/dispatch-dashboard.routes.js';
+import { createDriverRouteStatsRouter, type DriverRouteStatsQuery } from './routes/driver-route-stats.routes.js';
 import { createVehicleRouteStatsRouter, type VehicleRouteStatsQuery } from './routes/vehicle-route-stats.routes.js';
 import type { TrackingWebSocketHub } from '../modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
 import {
@@ -99,6 +100,8 @@ export interface AppDependencies {
   readonly dispatchDashboard?: DispatchDashboardQuery;
   /** Per-vehicle route aggregates (`GET /vehicles/route-stats`); optional only for HTTP test callers. */
   readonly vehicleRouteStats?: VehicleRouteStatsQuery;
+  /** Trips per driver (`GET /drivers/route-stats`); optional only for HTTP test callers. */
+  readonly driverRouteStats?: DriverRouteStatsQuery;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
   /** Customer, driver and vehicle catalogs. */
@@ -129,6 +132,7 @@ export function buildApp({
   routeTrack,
   dispatchDashboard,
   vehicleRouteStats,
+  driverRouteStats,
   auth,
   catalogs,
   readiness,
@@ -220,6 +224,10 @@ export function buildApp({
     '/api/v1/customers',
     createCustomersRouter(catalogs.customers, authenticate),
   );
+  if (driverRouteStats !== undefined) {
+    // Before the catalog router, whose `/:driverId` would otherwise take `route-stats`.
+    app.use('/api/v1/drivers/route-stats', createDriverRouteStatsRouter(driverRouteStats, authenticate));
+  }
   app.use('/api/v1/drivers', createDriversRouter(catalogs.drivers, authenticate));
   if (vehicleRouteStats !== undefined) {
     // Before the catalog router, whose `/:vehicleId` would otherwise take `route-stats`.

@@ -20,6 +20,7 @@ import { createDeliveryRoutesModule } from '../../modules/delivery-routes/compos
 import { RoutePlanningTypeOrmStore } from '../dispatch/RoutePlanningTypeOrmStore.js';
 import { DriverRouteTypeOrmStore } from '../dispatch/DriverRouteTypeOrmStore.js';
 import { DispatchDashboardTypeOrmQuery } from '../dispatch/DispatchDashboardTypeOrmQuery.js';
+import { DriverRouteStatsTypeOrmQuery } from '../dispatch/DriverRouteStatsTypeOrmQuery.js';
 import { VehicleRouteStatsTypeOrmQuery } from '../dispatch/VehicleRouteStatsTypeOrmQuery.js';
 import {
   createDriversModuleFromDataSource,
@@ -44,9 +45,11 @@ export interface ComposedApiModules {
   readonly vehicles: VehiclesModule;
   readonly dispatchDashboard: DispatchDashboardTypeOrmQuery;
   readonly vehicleRouteStats: VehicleRouteStatsTypeOrmQuery;
+  readonly driverRouteStats: DriverRouteStatsTypeOrmQuery;
   readonly dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'driverRouteStats'
+    | 'auth' | 'catalogs'
   >;
 }
 
@@ -91,15 +94,18 @@ export async function composeApiModules(
   });
   const dispatchDashboard = new DispatchDashboardTypeOrmQuery(dataSource);
   const vehicleRouteStats = new VehicleRouteStatsTypeOrmQuery(dataSource);
+  const driverRouteStats = new DriverRouteStatsTypeOrmQuery(dataSource);
 
   const dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'driverRouteStats'
+    | 'auth' | 'catalogs'
   > = {
     deliveryOrders,
     deliveryRoutes,
     dispatchDashboard,
     vehicleRouteStats,
+    driverRouteStats,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
     auth: {
       ...(authConfig.loginOrganizationId === undefined ? {} : { loginOrganizationId: authConfig.loginOrganizationId }),
@@ -121,6 +127,6 @@ export async function composeApiModules(
   return {
     deliveryOrders, deliveryRoutes,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
-    identity, customers, drivers, vehicles, dispatchDashboard, vehicleRouteStats, dependencies,
+    identity, customers, drivers, vehicles, dispatchDashboard, vehicleRouteStats, driverRouteStats, dependencies,
   };
 }

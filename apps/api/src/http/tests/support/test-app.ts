@@ -115,6 +115,7 @@ export interface TestAppOptions {
   readonly routeTrack?: AppDependencies['routeTrack'];
   readonly deliveryExecution?: AppDependencies['deliveryExecution'];
   readonly vehicleRouteStats?: AppDependencies['vehicleRouteStats'];
+  readonly driverRouteStats?: AppDependencies['driverRouteStats'];
 }
 
 export interface SeedTestUserOptions {
@@ -197,6 +198,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     ...(options.deliveryExecution === undefined ? {} : { deliveryExecution: options.deliveryExecution }),
     ...(options.routeTrack === undefined ? {} : { routeTrack: options.routeTrack }),
     ...(options.vehicleRouteStats === undefined ? {} : { vehicleRouteStats: options.vehicleRouteStats }),
+    ...(options.driverRouteStats === undefined ? {} : { driverRouteStats: options.driverRouteStats }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,

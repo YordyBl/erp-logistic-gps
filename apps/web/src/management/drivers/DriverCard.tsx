@@ -6,13 +6,25 @@ import { Avatar, AvatarFallback } from '../../components/ui/avatar.js';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../../components/ui/card.js';
+import { formatPlannedDate } from '../../lib/dates.js';
 import { initials } from '../../lib/format.js';
+
+const NUMBER = new Intl.NumberFormat('es-PE');
+
+/** Viajes del conductor en el periodo elegido; `null` cuando no se pudieron cargar. */
+export interface DriverTrips {
+  readonly routes: number;
+  readonly completed: number;
+  /** Día planificado del viaje más reciente de todo el historial, o `null` si nunca salió. */
+  readonly lastRouteDay: string | null;
+}
 
 const SINCE_FORMAT = new Intl.DateTimeFormat('es-PE', { month: 'long', year: 'numeric', timeZone: 'America/Lima' });
 
 /** Credencial de un conductor: identidad, contacto y estado de su cuenta de acceso. */
-export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageAccount }: {
+export function DriverCard({ driver, account, canBindAccounts, trips, onEdit, onManageAccount }: {
   readonly driver: Driver;
+  readonly trips: DriverTrips | null;
   readonly account: DriverAccountOption | undefined;
   readonly canBindAccounts: boolean;
   readonly onEdit: () => void;
@@ -58,6 +70,11 @@ export function DriverCard({ driver, account, canBindAccounts, onEdit, onManageA
               <span className="first-letter:uppercase">{SINCE_FORMAT.format(new Date(driver.createdAt))}</span>
             </Detail>
           </dl>
+          <dl className="mt-4 grid grid-cols-3 gap-2 border-t pt-3 text-xs">
+            <TripStat label="Viajes" value={trips === null ? '—' : NUMBER.format(trips.routes)} />
+            <TripStat label="Completados" value={trips === null ? '—' : NUMBER.format(trips.completed)} />
+            <TripStat label="Último viaje" value={trips === null ? '—' : trips.lastRouteDay === null ? 'Sin viajes' : formatPlannedDate(trips.lastRouteDay)} />
+          </dl>
         </CardContent>
 
         <CardFooter className="justify-between gap-3 border-t">
@@ -81,6 +98,15 @@ function Detail({ icon, label, children }: { readonly icon: ReactNode; readonly 
         <dt className="text-xs text-muted-foreground">{label}</dt>
         <dd className="truncate font-medium tabular-nums">{children}</dd>
       </div>
+    </div>
+  );
+}
+
+function TripStat({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="truncate text-sm font-semibold tabular-nums">{value}</dd>
     </div>
   );
 }

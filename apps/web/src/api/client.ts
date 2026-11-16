@@ -245,6 +245,9 @@ export interface VehicleRouteStats {
   readonly monthly: readonly { readonly month: string; readonly routes: number }[];
 }
 
+/** Viajes de un conductor: las rutas asignadas, con los mismos totales que las de un vehículo. */
+export type DriverRouteStats = Omit<VehicleRouteStats, 'vehicleId'> & { readonly driverId: string };
+
 /** Whether route simulation is available (development only) and which drivers it may use. */
 export interface RouteSimulationAvailability {
   readonly enabled: boolean;
@@ -505,6 +508,11 @@ export class ApiClient {
    */
   async getVehicleRouteStats(params: RouteStatsParams = {}): Promise<readonly VehicleRouteStats[]> {
     return this.requestData(`/vehicles/route-stats${buildQuery({ ...params })}`);
+  }
+
+  /** Viajes por conductor agregados en el servidor, con el mismo alcance que {@link getVehicleRouteStats}. */
+  async getDriverRouteStats(params: RouteStatsParams = {}): Promise<readonly DriverRouteStats[]> {
+    return this.requestData(`/drivers/route-stats${buildQuery({ ...params })}`);
   }
 
   async getDispatchDashboardSummary(): Promise<DispatchDashboardSummary> {

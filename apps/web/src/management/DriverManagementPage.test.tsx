@@ -5,13 +5,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, setupUser } from '../test/ui.js';
 
-import type { ApiClient, Driver, DriverAccountOption, PageParams } from '../api/client.js';
+import type { ApiClient, Driver, DriverAccountOption, DriverRouteStats, PageParams } from '../api/client.js';
 import { DriverManagementPage } from './DriverManagementPage.js';
 
 const driver: Driver = {
   id: 'driver-1', organizationId: 'org-1', fullName: 'Valeria Gomez', documentNumber: 'DNI-123456',
   phone: '+51 987 123 456', licenseNumber: 'A-123456', status: 'active',
   createdAt: '2026-11-02T10:00:00.000Z', updatedAt: '2026-11-02T10:00:00.000Z',
+};
+
+const trips: DriverRouteStats = {
+  driverId: driver.id, routes: 12, completed: 9, stops: 30, orders: 41, lastRouteDay: '2026-11-14',
+  monthly: [{ month: '2026-11', routes: 12 }],
 };
 
 const account: DriverAccountOption = {
@@ -51,7 +56,9 @@ function buildClient(crew: readonly Driver[] = [driver], linkedIds?: ReadonlySet
     createDriver: vi.fn().mockResolvedValue({ ...driver, id: 'driver-2', fullName: 'Luis Paredes' }),
     updateDriver: vi.fn().mockResolvedValue({ ...driver, phone: '+51 900 111 222' }),
     bindDriverAccount: vi.fn().mockResolvedValue({ driverId: driver.id, userId: account.userId }),
-  } satisfies Pick<ApiClient, 'listDriversPage' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
+    getDriverRouteStats: vi.fn().mockImplementation(async () => [trips]),
+  } satisfies Pick<ApiClient, 'listDriversPage' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'
+    | 'getDriverRouteStats'>;
 }
 
 afterEach(() => {
@@ -206,5 +213,44 @@ describe('DriverManagementPage', () => {
     await user.click(screen.getByRole('button', { name: 'Página siguiente de conductores' }));
     expect(await screen.findByRole('listitem', { name: /Conductor 14/ })).toBeTruthy();
     expect(screen.getByText('Página 2 de 2')).toBeTruthy();
+  });
+
+  it('shows the trips of each visible driver and scopes them to the chosen period without reloading the list', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-16T15:00:00.000Z'));
+    const user = setupUser();
+    const idle: Driver = { ...driver, id: 'driver-2', fullName: 'Luis Peña', documentNumber: 'DNI-999999' };
+    const client = buildClient([driver, idle]);
+    render(<DriverManagementPage client={client} canBindAccounts={false} />);
+
+    const card = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    await waitFor(() => expect(within(card).getByText('Viajes').nextElementSibling?.textContent).toBe('12'));
+    expect(within(card).getByText('Completados').nextElementSibling?.textContent).toBe('9');
+    expect(within(card).getByText('Último viaje').nextElementSibling?.textContent).toBe('14 nov. 2026');
+    const idleCard = screen.getByRole('listitem', { name: /Luis Peña/ });
+    expect(within(idleCard).getByText('Viajes').nextElementSibling?.textContent).toBe('0');
+    expect(within(idleCard).getByText('Último viaje').nextElementSibling?.textContent).toBe('Sin viajes');
+    expect(client.getDriverRouteStats).toHaveBeenCalledWith({ ids: [driver.id, idle.id] });
+    expect(screen.getByText('Viajes de todo el historial')).toBeTruthy();
+    const listCalls = client.listDriversPage.mock.calls.length;
+
+    await chooseOption(user, screen.getByLabelText('Periodo de las métricas'), 'Últimos 3 meses');
+
+    await waitFor(() => expect(client.getDriverRouteStats).toHaveBeenLastCalledWith({
+      from: '2026-09-01', to: '2026-11-30', ids: [driver.id, idle.id],
+    }));
+    expect(await screen.findByText('Viajes de últimos 3 meses')).toBeTruthy();
+    expect(client.listDriversPage.mock.calls.length).toBe(listCalls);
+    vi.useRealTimers();
+  });
+
+  it('keeps the crew visible with dashes when the trips cannot be loaded', async () => {
+    const client = buildClient();
+    client.getDriverRouteStats.mockRejectedValue(new Error('offline'));
+    render(<DriverManagementPage client={client} canBindAccounts={false} />);
+
+    const card = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
+    await waitFor(() => expect(within(card).getByText('Viajes').nextElementSibling?.textContent).toBe('—'));
+    expect(within(card).getByText('Último viaje').nextElementSibling?.textContent).toBe('—');
   });
 });
