@@ -1,7 +1,7 @@
 import { IdCard, Plus, SearchX } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 
-import type { ApiClient, Driver, DriverAccountOption, DriverRouteStats, DriverStatus } from '../api/client.js';
+import type { ApiClient, DispatchRoute, Driver, DriverAccountOption, DriverRouteStats, DriverStatus, Vehicle } from '../api/client.js';
 import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
 import { ListPager } from '../components/ListPager.js';
 import { MetricsPeriodSelect } from '../components/MetricsPeriodSelect.js';
@@ -17,13 +17,26 @@ import { FieldGroup } from '../components/ui/field.js';
 import { useServerTable } from '../hooks/use-server-table.js';
 import { chartCaption, DEFAULT_METRICS_PERIOD, limaToday, periodLabel, statsScope, type MetricsPeriod } from '../lib/metricsPeriod.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
-import { DriverCard, type DriverTrips } from './drivers/DriverCard.js';
+import { DriverDetail } from './drivers/DriverDetail.js';
+import { DriverListItem } from './drivers/DriverListItem.js';
 import {
   chipCounts, DRIVER_FILTERS, filterFromColumns, indexAccountsByDriver, toColumnFilters, type DriverFilter,
 } from './drivers/driverFilters.js';
+import { toMonthlyRoutes } from './vehicles/vehicleStats.js';
 
 type DriverClient = Pick<ApiClient,
-  'listDriversPage' | 'listDriverAccounts' | 'getDriverRouteStats' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
+  'listDriversPage' | 'listDriverAccounts' | 'getDriverRouteStats' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'
+  | 'listDispatchRoutesPage' | 'listVehicles'>;
+
+/** Viajes del historial del conductor elegido: la página más reciente. */
+const HISTORY_PAGE_SIZE = 20;
+
+interface TripHistoryState {
+  readonly driverId: string;
+  readonly routes: readonly DispatchRoute[];
+  readonly total: number;
+  readonly failed: boolean;
+}
 
 interface DriverForm {
   fullName: string;
@@ -38,10 +51,10 @@ const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: s
   { value: 'inactive', label: 'Inactivo' },
 ];
 
-/** Conductores por página: tres filas de la cuadrícula de cuatro columnas. */
-export const CREW_PAGE_SIZE = 12;
+/** Conductores por página de la lista, como la flota. */
+export const CREW_PAGE_SIZE = 10;
 
-const NO_TRIPS: DriverTrips = { routes: 0, completed: 0, lastRouteDay: null };
+const NO_TRIPS = { routes: 0, completed: 0, stops: 0, orders: 0, lastRouteDay: null } as const;
 
 const newDriverForm = (): DriverForm => ({
   fullName: '', documentNumber: '', phone: '', licenseNumber: '', status: 'active',
@@ -117,8 +130,53 @@ export function DriverManagementPage({ client, canBindAccounts }: {
     });
     return () => { cancelled = true; };
   }, [client, period, tripsToken, visibleIdsKey]);
-  const tripsOf = (driverId: string): DriverTrips | null =>
-    trips === null ? null : trips.get(driverId) ?? NO_TRIPS;
+  const totalsOf = (driverId: string) => trips === null ? null : trips.get(driverId) ?? NO_TRIPS;
+
+  // Las placas solo nombran el vehículo de cada viaje del historial: si fallan, se muestra igual.
+  const [vehicles, setVehicles] = useState<ReadonlyMap<string, Vehicle>>(new Map());
+  useEffect(() => {
+    let cancelled = false;
+    client.listVehicles().then((loaded) => {
+      if (!cancelled) setVehicles(new Map(loaded.map((vehicle) => [vehicle.id, vehicle] as const)));
+    }, () => undefined);
+    return () => { cancelled = true; };
+  }, [client]);
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const selectedDriver = drivers.find((driver) => driver.id === selectedId) ?? drivers[0];
+  const selectedDriverId = selectedDriver?.id;
+  const selectedStats = selectedDriverId === undefined || trips === null ? undefined : trips.get(selectedDriverId);
+  // Sin serie del conductor (no tuvo viajes) se usan los meses de otro, en cero.
+  const selectedMonthly = useMemo(() => {
+    const months = selectedStats?.monthly
+      ?? (trips === null ? [] : [...trips.values()][0]?.monthly.map(({ month }) => ({ month, routes: 0 })) ?? []);
+    return toMonthlyRoutes(months);
+  }, [selectedStats, trips]);
+
+  // El historial se pide al servidor solo para el conductor elegido, una página.
+  const [history, setHistory] = useState<TripHistoryState | null>(null);
+  useEffect(() => {
+    if (selectedDriverId === undefined) return undefined;
+    const controller = new AbortController();
+    client.listDispatchRoutesPage({ driverId: selectedDriverId, pageSize: HISTORY_PAGE_SIZE, sort: 'plannedDate:desc' }, controller.signal)
+      .then((page) => {
+        if (!controller.signal.aborted) setHistory({ driverId: selectedDriverId, routes: page.data, total: page.meta.total, failed: false });
+      }, () => {
+        if (!controller.signal.aborted) setHistory({ driverId: selectedDriverId, routes: [], total: 0, failed: true });
+      });
+    return () => controller.abort();
+  }, [client, selectedDriverId, tripsToken]);
+  const selectedHistory = history?.driverId === selectedDriverId ? history : null;
+
+  function selectDriver(driver: Driver) {
+    setSelectedId(driver.id);
+    // En una sola columna el detalle queda debajo de la lista: se lleva la vista hasta él.
+    if (window.matchMedia('(max-width: 1023px)').matches) {
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      detailRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+    }
+  }
 
   const loading = crew.meta === null && crew.error === null;
   const loadError = crew.meta === null && crew.error !== null
@@ -271,9 +329,15 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         </Empty>
       )}
       {ready && !crewEmpty && (
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap" role="group" aria-label="Filtrar conductores">
+        <div className="flex justify-end">
+          <MetricsPeriodSelect id="driver-metrics-period" value={period} onChange={setPeriod} />
+        </div>
+      )}
+      {ready && !crewEmpty && (
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+          <div className="flex flex-col gap-3 lg:sticky lg:top-4">
+            <SearchInput value={query} onChange={setQuery} label="Buscar conductores" placeholder="Buscar nombre, documento o licencia" className="w-full" />
+            <div className="grid grid-cols-2 gap-1" role="group" aria-label="Filtrar conductores">
               {filterOptions.map((option) => (
                 <Button key={option.value} type="button" variant={filter === option.value ? 'secondary' : 'ghost'}
                   aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}>
@@ -282,37 +346,41 @@ export function DriverManagementPage({ client, canBindAccounts }: {
                 </Button>
               ))}
             </div>
-            <SearchInput value={query} onChange={setQuery} label="Buscar conductores" placeholder="Buscar nombre, documento o licencia" className="w-full lg:w-96" />
+            {visibleDrivers.length === 0 ? (
+              <Empty className="border">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
+                  <EmptyTitle>{query.trim() === '' ? 'No hay conductores en este grupo' : 'Ningún conductor coincide'}</EmptyTitle>
+                  <EmptyDescription>
+                    {query.trim() === ''
+                      ? 'Elige otro filtro o muestra todos los conductores.'
+                      : 'Prueba con otro nombre, documento o licencia, o muestra todos los conductores.'}
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button>
+                </EmptyContent>
+              </Empty>
+            ) : (
+              <ul aria-label="Personal registrado" aria-busy={crew.loading} className="flex flex-col gap-3 lg:max-h-[calc(100svh-16rem)] lg:overflow-y-auto lg:p-1">
+                {visibleDrivers.map((driver) => (
+                  <DriverListItem key={driver.id} driver={driver} totals={totalsOf(driver.id)}
+                    selected={driver.id === selectedDriver?.id} onSelect={() => selectDriver(driver)} />
+                ))}
+              </ul>
+            )}
+            <ListPager table={crew} label="conductores" />
           </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <p className="text-sm text-muted-foreground">Viajes de {periodLabel(period)}</p>
-            <MetricsPeriodSelect id="driver-metrics-period" value={period} onChange={setPeriod} />
+          <div ref={detailRef} className="scroll-mt-4">
+            {selectedDriver !== undefined && (
+              <DriverDetail driver={selectedDriver} stats={selectedStats} monthly={selectedMonthly}
+                account={accountByDriver.get(selectedDriver.id)} canBindAccounts={canBindAccounts}
+                routes={selectedHistory?.routes ?? []} routesTotal={selectedHistory?.total ?? 0} vehicles={vehicles}
+                statsError={trips === null} historyError={selectedHistory?.failed ?? false} historyLoading={selectedHistory === null}
+                periodLabel={periodLabel(period)} chartCaption={chartCaption(period)}
+                onEdit={() => startEditing(selectedDriver)} onManageAccount={() => openAccount(selectedDriver)} />
+            )}
           </div>
-
-          {visibleDrivers.length === 0 ? (
-            <Empty className="border">
-              <EmptyHeader>
-                <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
-                <EmptyTitle>{query.trim() === '' ? 'No hay conductores en este grupo' : 'Ningún conductor coincide'}</EmptyTitle>
-                <EmptyDescription>
-                  {query.trim() === ''
-                    ? 'Elige otro filtro o muestra todos los conductores.'
-                    : 'Prueba con otro nombre, documento o licencia, o muestra todos los conductores.'}
-                </EmptyDescription>
-              </EmptyHeader>
-              <EmptyContent>
-                <Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button>
-              </EmptyContent>
-            </Empty>
-          ) : (
-            <ul aria-label="Personal registrado" aria-busy={crew.loading} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-              {visibleDrivers.map((driver) => (
-                <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts} trips={tripsOf(driver.id)}
-                  onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
-              ))}
-            </ul>
-          )}
-          <ListPager table={crew} label="conductores" />
         </div>
       )}
 

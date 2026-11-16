@@ -1,6 +1,5 @@
 import { CalendarClock, Check, CircleCheckBig, CirclePause, MapPin, Package, Pencil, Route } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { lazy, Suspense, type ReactNode } from 'react';
+import { lazy, Suspense } from 'react';
 
 import type { DispatchRoute, Driver, Vehicle } from '../../api/client.js';
 import { ErrorNotice } from '../../components/Notices.js';
@@ -12,9 +11,10 @@ import { Skeleton } from '../../components/ui/skeleton.js';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table.js';
 import { ROUTE_BADGES, ROUTE_STATUS_LABELS } from '../../delivery/orderStatus.js';
 import { formatPlannedDate } from '../../lib/dates.js';
+import { Field, StatTile } from '../shared/DetailParts.js';
 import { countOrders, VEHICLE_IMAGES, vehicleKind, type MonthlyRoutes, type VehicleStats } from './vehicleStats.js';
 
-const VehicleRoutesChart = lazy(() => import('./VehicleRoutesChart.js'));
+const RoutesChart = lazy(() => import('../shared/RoutesChart.js'));
 
 const NUMBER = new Intl.NumberFormat('es-PE');
 const SINCE = new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeZone: 'America/Lima' });
@@ -58,7 +58,7 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, dr
               ? <p className="text-sm text-muted-foreground">Sin datos de rutas por ahora.</p>
               : (
                 <Suspense fallback={<Skeleton className="h-64 w-full" />}>
-                  <VehicleRoutesChart data={monthly} />
+                  <RoutesChart data={monthly} />
                 </Suspense>
               )}
           </CardContent>
@@ -163,23 +163,5 @@ function RouteHistory({ routes, drivers, historyError }: {
         ))}
       </TableBody>
     </Table>
-  );
-}
-
-function Field({ label, children }: { readonly label: string; readonly children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="font-medium">{children}</dd>
-    </div>
-  );
-}
-
-function StatTile({ icon: Icon, label, value }: { readonly icon: LucideIcon; readonly label: string; readonly value: string }) {
-  return (
-    <Card className="gap-3 py-4">
-      <dt className="flex items-center gap-2 px-4 text-sm font-medium"><Icon className="size-4 text-muted-foreground" aria-hidden="true" />{label}</dt>
-      <dd className="px-4 text-2xl font-semibold tabular-nums">{value}</dd>
-    </Card>
   );
 }

@@ -24,7 +24,7 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 
 - [x] T5 S9 — monthly series follows from/to (api) + web months/caption · inline · RED 2 api + 3 web → GREEN
 - [x] T6 S8 — ListPager always visible · inline · RED 2 → GREEN
-- [ ] T7 S7 — drivers list+detail like vehicles, shared chart/tiles · inline
+- [x] T7 S7 — drivers list+detail like vehicles, shared chart/tiles · inline · RED 8 → GREEN
 
 ## Log
 
@@ -41,3 +41,4 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 - L11 (2026-11-16): "analiza por favor los datos que tiene la vista de vehiculos porque creo quedo claro, lo que deseaba era uan vista como la de vehiculos en conductores, porque tampoco veo el paginado a nivel frontend de la lista de vehiculos y conductores, realiza un analisis antes por favor"
 - L12 (2026-11-16): "recuerda hacer siempre pruebas visuales pero antes de ir con desarrollo dime el plan  que se hará, las metricas, etc, pasa que hay unas barras por mes que salen en vehiculo y el filtro debería ocultar las barras en determinados meses, analiazlo por favor"
 - L13: Analysis: demo has 9 vehicles / 7 drivers → single page, ListPager hid itself; monthly series was fixed at 6 months. Plan approved (list+detail for drivers, pager always visible, bars per period, visual screenshots).
+- L14: T5–T7 done (T5+T6 in db12702). Visual check on localtest (headless Chrome via CDP, admin@demo.lima): bars per period verified — Este mes 1 (nov), Últimos 3 meses 3, Este año 12 (ene–dic, highlights nov), Todo 12 (dic 2025–nov 2026); pager visible "Mostrando 1–7 de 7"; drivers list+detail with history plates; mobile single column. Fixed from screenshots: single bar filled the whole chart → max bar width 56. Driver list page size 10 like vehicles. One intermittent failure of "summarizes the selected vehicle routes…" in one full run out of three (passes alone and in two full runs). Checks: vitest 723 passed / 79 skipped, typecheck clean, eslint clean.
