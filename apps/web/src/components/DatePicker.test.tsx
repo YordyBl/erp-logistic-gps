@@ -41,4 +41,9 @@ describe('DatePicker', () => {
     expect(screen.queryByRole('grid')).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it('acepta un formato corto para espacios estrechos', () => {
+    render(<DatePicker id="fecha" value="2026-11-06" onChange={vi.fn()} placeholder="Elige una fecha" displayFormat="dd/MM/yyyy" />);
+    expect(screen.getByRole('button').textContent).toMatch(/06\/11\/2026/);
+  });
 });

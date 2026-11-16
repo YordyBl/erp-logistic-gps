@@ -9,13 +9,15 @@ import { Calendar } from './ui/calendar.js';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover.js';
 
 /** Selector de día: recibe y entrega `YYYY-MM-DD`, o cadena vacía si no hay fecha. */
-export function DatePicker({ id, value, onChange, placeholder, disabled, invalid }: {
+export function DatePicker({ id, value, onChange, placeholder, disabled, invalid, displayFormat = 'PPP' }: {
   readonly id: string;
   readonly value: string;
   readonly onChange: (value: string) => void;
   readonly placeholder: string;
   readonly disabled?: boolean;
   readonly invalid?: boolean;
+  /** Formato de date-fns del día elegido; por defecto el largo ("6 de noviembre de 2026"). */
+  readonly displayFormat?: string;
 }) {
   const [open, setOpen] = useState(false);
   const selected = parseIsoDay(value);
@@ -27,7 +29,7 @@ export function DatePicker({ id, value, onChange, placeholder, disabled, invalid
           data-empty={selected === undefined || undefined}
           className="w-full justify-start font-normal data-[empty=true]:text-muted-foreground">
           <CalendarIcon data-icon="inline-start" aria-hidden="true" />
-          {selected === undefined ? placeholder : format(selected, 'PPP', { locale: es })}
+          {selected === undefined ? placeholder : format(selected, displayFormat, { locale: es })}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-0" align="start">

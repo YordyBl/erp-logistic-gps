@@ -46,7 +46,7 @@ export interface DataTableFilter {
  * solo la página actual: la búsqueda, los filtros, el orden y la página son estado controlado que
  * el hook envía al servidor, y el total y los números de las facetas salen de su respuesta.
  */
-export function DataTable<TData>({ label, columns, data, searchPlaceholder, filters = [], pageSize = 10, onRowClick, actions, server }: {
+export function DataTable<TData>({ label, columns, data, searchPlaceholder, filters = [], pageSize = 10, onRowClick, actions, server, filtered = false }: {
   readonly label: string;
   readonly columns: readonly ColumnDef<TData, unknown>[];
   /** Debe ser una referencia estable: sin `server`, cada cambio devuelve la tabla a la primera página. */
@@ -57,6 +57,8 @@ export function DataTable<TData>({ label, columns, data, searchPlaceholder, filt
   readonly pageSize?: number;
   readonly onRowClick?: (row: TData) => void;
   readonly actions?: ReactNode;
+  /** Hay filtros fuera de la tabla (por ejemplo, fechas en `actions`): una tabla vacía dice que nada coincide. */
+  readonly filtered?: boolean;
   readonly server?: DataTableServer;
 }) {
   const [localSorting, setLocalSorting] = useState<SortingState>([]);
@@ -169,7 +171,7 @@ export function DataTable<TData>({ label, columns, data, searchPlaceholder, filt
                 <Empty>
                   <EmptyHeader>
                     <EmptyMedia variant="icon"><CircleSlash aria-hidden="true" /></EmptyMedia>
-                    <EmptyDescription>{isEmptyLoading ? 'Cargando…' : isFiltered ? 'Ningún resultado coincide con la búsqueda o los filtros.' : 'Todavía no hay registros.'}</EmptyDescription>
+                    <EmptyDescription>{isEmptyLoading ? 'Cargando…' : isFiltered || filtered ? 'Ningún resultado coincide con la búsqueda o los filtros.' : 'Todavía no hay registros.'}</EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               </TableCell>

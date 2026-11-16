@@ -157,4 +157,11 @@ describe('DataTable in server mode', () => {
 
     await waitFor(() => expect(fetchPage.mock.lastCall?.[0]).toMatchObject({ status: 'delivered', page: 1 }));
   });
+
+  it('reports no matches when a filter outside the table leaves it empty', () => {
+    render(<DataTable label="Rutas" columns={columns} data={[]} searchPlaceholder="Buscar" filtered />);
+
+    expect(screen.getByText('Ningún resultado coincide con la búsqueda o los filtros.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Limpiar/ })).toBeNull();
+  });
 });

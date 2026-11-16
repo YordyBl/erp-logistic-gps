@@ -261,6 +261,43 @@ describe('DispatchPlanningPage', () => {
     expect(listDispatchRoutesPage).toHaveBeenCalledWith({ page: 1, pageSize: 10 }, expect.any(AbortSignal));
   });
 
+  it('filters routes by planned day on the server and keeps the table when the range is empty', async () => {
+    const user = setupUser();
+    const routes = [
+      { id: 'route-1', organizationId: 'org-1', publicCode: 'RUTA-001', plannedDate: '2026-11-02', driverId: 'driver-1',
+        vehicleId: 'vehicle-1', status: 'planned', createdAt: '2026-11-01T10:00:00.000Z', stops: [] },
+    ] as const;
+    const listDispatchRoutesPage = vi.fn().mockImplementation(async (params: PageParams) =>
+      params.plannedTo !== undefined ? page([], { status: { planned: 0, in_progress: 0, completed: 0 } }, 0)
+        : page(routes, { status: { planned: 1, in_progress: 0, completed: 0 } }));
+    render(<DispatchPlanningPage client={makeClient({ listDispatchRoutesPage })} />);
+    expect(await screen.findByText('RUTA-001')).toBeTruthy();
+
+    const from = await pickDay(user, screen.getByLabelText('Desde'), 10);
+    await waitFor(() => expect(listDispatchRoutesPage).toHaveBeenLastCalledWith(
+      { plannedFrom: from, page: 1, pageSize: 10 }, expect.any(AbortSignal)));
+
+    // A "to" before "from" is flagged and never sent.
+    const calls = listDispatchRoutesPage.mock.calls.length;
+    await pickDay(user, screen.getByLabelText('Hasta'), 9);
+    expect(screen.getByLabelText('Hasta').getAttribute('aria-invalid')).toBe('true');
+    expect(screen.getByText('La fecha "Hasta" no puede ser anterior a "Desde".')).toBeTruthy();
+    expect(listDispatchRoutesPage.mock.calls.length).toBe(calls);
+
+    const to = await pickDay(user, screen.getByLabelText('Hasta'), 20);
+    await waitFor(() => expect(listDispatchRoutesPage).toHaveBeenLastCalledWith(
+      { plannedFrom: from, plannedTo: to, page: 1, pageSize: 10 }, expect.any(AbortSignal)));
+    // No route in the range: the table and its filters stay, without the first-route empty state.
+    expect(await screen.findByLabelText('Desde')).toBeTruthy();
+    expect(screen.queryByText('No hay rutas para mostrar.')).toBeNull();
+    expect(await screen.findByText('Ningún resultado coincide con la búsqueda o los filtros.')).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Limpiar fechas' }));
+    await waitFor(() => expect(listDispatchRoutesPage).toHaveBeenLastCalledWith(
+      { page: 1, pageSize: 10 }, expect.any(AbortSignal)));
+    expect(await screen.findByText('RUTA-001')).toBeTruthy();
+  });
+
   it('searches eligible orders on the server, asks to refine and keeps selected orders', async () => {
     const user = setupUser();
     const client = makeClient();

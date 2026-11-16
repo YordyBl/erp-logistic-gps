@@ -33,6 +33,9 @@ import { countLabel, formatDateTime, initials } from '../lib/format.js';
 import {
   googleMapsPlaceUrl, googleMapsRouteUrl, mapLinkErrorMessage, mapLinkFailureMessage, type MapPoint,
 } from '../lib/googleMaps.js';
+import {
+  EMPTY_PLANNED_RANGE, isInvalidRange, PlannedRangeFilter, plannedRangeParams, type PlannedRange,
+} from './routes/PlannedRangeFilter.js';
 import { routeOrderIds } from './routes/routeDetails.js';
 import { RouteTimeline } from './routes/RouteTimeline.js';
 import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
@@ -85,9 +88,16 @@ function vehicleOptions(vehicles: readonly Vehicle[]) {
 }
 
 export function DispatchPlanningPage({ client }: { readonly client: DispatchClient }) {
+  // Rango de días planificados: se aplica en el servidor; un "Hasta" anterior a "Desde" se marca y no se envía.
+  const [plannedRange, setPlannedRange] = useState<PlannedRange>(EMPTY_PLANNED_RANGE);
+  const [appliedRange, setAppliedRange] = useState<PlannedRange>(EMPTY_PLANNED_RANGE);
+  const changePlannedRange = (range: PlannedRange) => {
+    setPlannedRange(range);
+    if (!isInvalidRange(range)) setAppliedRange(range);
+  };
   const table = useServerTable<DispatchRoute>(
     (params, signal) => client.listDispatchRoutesPage(params, signal),
-    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS },
+    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS, params: plannedRangeParams(appliedRange) },
   );
   const { rows: routes, meta, reload: reloadRoutes } = table;
   // Pedidos de las paradas de la página visible, para su avance y su detalle.
@@ -464,7 +474,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     planned: statusCounts.planned ?? 0,
     completed: statusCounts.completed ?? 0,
   };
-  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0;
+  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0
+    || appliedRange.from !== '' || appliedRange.to !== '';
   const isEmpty = meta !== null && meta.total === 0 && !hasCriteria;
   const eligibleCount = eligibleTotal ?? 0;
   const pickerTotal = picker?.meta.total ?? 0;
@@ -665,7 +676,9 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
       {meta !== null && !isEmpty && (
         <DataTable label="Rutas y progreso" columns={columns} data={routeRows} server={table.server}
           searchPlaceholder="Buscar ruta, conductor o placa"
-          filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)} />
+          filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)}
+          filtered={appliedRange.from !== '' || appliedRange.to !== ''}
+          actions={<PlannedRangeFilter value={plannedRange} onChange={changePlannedRange} />} />
       )}
 
       <DocumentSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }}
