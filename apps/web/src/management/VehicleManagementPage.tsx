@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleRouteStats, VehicleStatus } from '../api/client.js';
 import { FormSheet } from '../components/FormSheet.js';
 import { ListPager } from '../components/ListPager.js';
+import { MetricsPeriodSelect } from '../components/MetricsPeriodSelect.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
@@ -13,6 +14,7 @@ import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
 import { useServerTable } from '../hooks/use-server-table.js';
+import { DEFAULT_METRICS_PERIOD, limaToday, periodLabel, periodRange, type MetricsPeriod } from '../lib/metricsPeriod.js';
 import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
 import { VehicleDetail } from './vehicles/VehicleDetail.js';
 import { VehicleListItem } from './vehicles/VehicleListItem.js';
@@ -81,18 +83,32 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     type: '', capacityKg: '', status: 'active',
   });
 
-  // Las estadísticas y los conductores complementan la flota: si fallan, los vehículos se muestran igual.
-  const loadExtras = useCallback(async () => {
-    const [loadedStats, loadedDrivers] = await Promise.all([
-      client.getVehicleRouteStats().catch(() => null),
-      client.listDrivers().catch(() => [] as readonly Driver[]),
-    ]);
-    setRouteStats(loadedStats ?? []);
-    setDrivers(loadedDrivers);
-    setRoutesError(loadedStats === null);
+  // Los conductores solo nombran a quien manejó cada ruta del historial: si fallan, la flota se muestra igual.
+  useEffect(() => {
+    let cancelled = false;
+    client.listDrivers().then((loaded) => { if (!cancelled) setDrivers(loaded); }, () => undefined);
+    return () => { cancelled = true; };
   }, [client]);
 
-  useEffect(() => { void loadExtras(); }, [loadExtras]);
+  // Las métricas se piden solo para los vehículos de la página y el periodo elegido; cambiar el periodo
+  // no vuelve a pedir la lista. Si fallan, los vehículos se muestran igual.
+  const [period, setPeriod] = useState<MetricsPeriod>(DEFAULT_METRICS_PERIOD);
+  const [statsToken, setStatsToken] = useState(0);
+  const visibleIdsKey = vehicles.map((vehicle) => vehicle.id).join(',');
+  useEffect(() => {
+    if (visibleIdsKey === '') return undefined;
+    let cancelled = false;
+    client.getVehicleRouteStats({ ...periodRange(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
+      if (cancelled) return;
+      setRouteStats(loaded);
+      setRoutesError(false);
+    }, () => {
+      if (cancelled) return;
+      setRouteStats([]);
+      setRoutesError(true);
+    });
+    return () => { cancelled = true; };
+  }, [client, period, statsToken, visibleIdsKey]);
 
   // El resumen describe toda la flota: se toma de los conteos cuando no hay búsqueda y se conserva
   // mientras se busca (los conteos del servidor aplican la búsqueda).
@@ -130,7 +146,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         ...(capacityKg === undefined ? {} : { capacityKg }),
       });
       fleet.reload();
-      void loadExtras();
+      setStatsToken((token) => token + 1);
       setForm(emptyForm());
       setCreating(false);
       setRegistered(`El vehículo ${created.plate} se registró correctamente.`);
@@ -239,6 +255,11 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         </Empty>
       )}
       {ready && !fleetEmpty && (
+        <div className="flex justify-end">
+          <MetricsPeriodSelect id="vehicle-metrics-period" value={period} onChange={setPeriod} />
+        </div>
+      )}
+      {ready && !fleetEmpty && (
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
           <div className="flex flex-col gap-3 lg:sticky lg:top-4">
             <SearchInput value={query} onChange={setQuery} label="Buscar vehículos" placeholder="Buscar placa o tipo" className="w-full" />
@@ -278,7 +299,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
             {selectedVehicle !== undefined && (
               <VehicleDetail vehicle={selectedVehicle} stats={statsOf(selectedStats)}
                 monthly={selectedMonthly} routes={selectedHistory?.routes ?? []} routesTotal={selectedHistory?.total ?? 0}
-                drivers={driversById} routesError={routesError} historyError={selectedHistory?.failed ?? false}
+                drivers={driversById} routesError={routesError} periodLabel={periodLabel(period)} historyError={selectedHistory?.failed ?? false}
                 historyLoading={selectedHistory === null}
                 onEdit={() => startEditing(selectedVehicle)} />
             )}

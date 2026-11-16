@@ -15,8 +15,8 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 ## Tasks
 
 - [x] T1 S3,S5 — vehicles pagination + filters + `/vehicles/options` · inline · RED 8 api + 9 web tests → GREEN · d2492f9
-- [x] T2 S2,S5 — drivers pagination + filters + `/drivers/options` · inline · RED 7 api + 9 web tests → GREEN
-- [ ] T3 S4,S6 — generic route stats query with `ids` + from/to + vehicles period selector · inline
+- [x] T2 S2,S5 — drivers pagination + filters + `/drivers/options` · inline · RED 7 api + 9 web tests → GREEN · c52da38
+- [x] T3 S4,S6 — generic route stats query with `ids` + from/to + vehicles period selector · inline · RED query/route/web tests → GREEN
 - [ ] T4 S1,S4 — `GET /drivers/route-stats` + driver trips UI with period selector · inline
 
 ## Log
@@ -28,3 +28,4 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 - L5: Plan approved. Routes inline (no writer trigger: slices are sequential and share files). Forecast ~1500 authored lines → chained slices A-D.
 - L6: T1 done. S6 (`ids`) moved to T3 so the stats query is refactored once. Header drops "kg de capacidad activa": it needs the whole fleet; summary now comes from `meta.counts.status` and is kept while searching. PostgreSQL parity test added but skipped (no `DATABASE_URL`; localtest DB not used). Checks: `npx vitest run` 688 passed / 78 skipped, `npm run typecheck` clean, eslint clean.
 - L7: T2 done. Status and account facets both ignore the status and account filters (they are one chip group), so every chip keeps its count. Accent-insensitive search via `translate()` in SQL and NFD folding in memory (no `unaccent` extension). Account bindings now load separately: a failure shows a notice instead of blocking the page. Root README wrongly said any role could read drivers; fixed to ADMIN or DISPATCHER. Checks: vitest 696 passed / 79 skipped, typecheck clean, eslint clean; PostgreSQL parity test skipped (no `DATABASE_URL`).
+- L8: T3 done. `RouteStatsTypeOrmQuery` groups by vehicle or driver (fixed table/column, never input); `VehicleRouteStatsTypeOrmQuery` and `DriverRouteStatsTypeOrmQuery` are thin adapters. Periods are whole calendar months in Lima ending with the current month (incl. routes planned later this month); "Este año" is Jan 1–Dec 31. Default period is "Todo" so the screens show what they showed before. Dropped the planned 12-month span cap: totals over any range are cheap aggregates. Checks: vitest 707 passed / 79 skipped, typecheck clean, eslint clean.

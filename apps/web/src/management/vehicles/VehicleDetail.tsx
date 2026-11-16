@@ -23,7 +23,7 @@ const SINCE = new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeZone: 
  * Detalle del vehículo elegido: actividad por mes, ficha, totales e historial de rutas. Los totales y la
  * serie vienen agregados del servidor; el historial es solo la página más reciente de sus rutas.
  */
-export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, drivers, routesError, historyError, historyLoading = false, onEdit }: {
+export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, drivers, routesError, historyError, historyLoading = false, periodLabel = 'todo el historial', onEdit }: {
   readonly vehicle: Vehicle;
   readonly stats: VehicleStats;
   readonly monthly: readonly MonthlyRoutes[];
@@ -38,6 +38,8 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, dr
   readonly historyError: boolean;
   /** El historial del vehículo aún no llega. */
   readonly historyLoading?: boolean;
+  /** Periodo de los totales, en minúsculas ("este mes"). La última ruta siempre es la más reciente. */
+  readonly periodLabel?: string;
   readonly onEdit: () => void;
 }) {
   const active = vehicle.status === 'active';
@@ -89,12 +91,15 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, dr
         </Card>
       </div>
 
-      <dl className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <StatTile icon={CircleCheckBig} label="Completadas" value={routesError ? '—' : `${NUMBER.format(stats.completedRoutes)} de ${NUMBER.format(stats.routes)}`} />
-        <StatTile icon={MapPin} label="Paradas" value={routesError ? '—' : NUMBER.format(stats.stops)} />
-        <StatTile icon={Package} label="Pedidos" value={routesError ? '—' : NUMBER.format(stats.orders)} />
-        <StatTile icon={CalendarClock} label="Última ruta" value={routesError ? '—' : stats.lastRouteDay === null ? 'Sin rutas' : formatPlannedDate(stats.lastRouteDay)} />
-      </dl>
+      <section aria-label="Métricas del vehículo" className="flex flex-col gap-2">
+        <p className="text-xs text-muted-foreground">Métricas de {periodLabel}</p>
+        <dl className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+          <StatTile icon={CircleCheckBig} label="Completadas" value={routesError ? '—' : `${NUMBER.format(stats.completedRoutes)} de ${NUMBER.format(stats.routes)}`} />
+          <StatTile icon={MapPin} label="Paradas" value={routesError ? '—' : NUMBER.format(stats.stops)} />
+          <StatTile icon={Package} label="Pedidos" value={routesError ? '—' : NUMBER.format(stats.orders)} />
+          <StatTile icon={CalendarClock} label="Última ruta" value={routesError ? '—' : stats.lastRouteDay === null ? 'Sin rutas' : formatPlannedDate(stats.lastRouteDay)} />
+        </dl>
+      </section>
 
       <Card>
         <CardHeader>

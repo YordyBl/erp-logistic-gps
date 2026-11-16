@@ -40,10 +40,14 @@ describe('ApiClient dispatch planning', () => {
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
 
     await expect(client.getVehicleRouteStats()).resolves.toEqual(stats);
-    await client.getVehicleRouteStats(12);
+    await client.getVehicleRouteStats({ months: 12 });
+    await client.getVehicleRouteStats({ from: '2026-11-01', to: '2026-11-30', ids: ['vehicle-1', 'vehicle-2'] });
+    await client.getVehicleRouteStats({ ids: [] });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
       '/api/v1/vehicles/route-stats', '/api/v1/vehicles/route-stats?months=12',
+      '/api/v1/vehicles/route-stats?from=2026-11-01&to=2026-11-30&ids=vehicle-1%2Cvehicle-2',
+      '/api/v1/vehicles/route-stats',
     ]);
   });
 });

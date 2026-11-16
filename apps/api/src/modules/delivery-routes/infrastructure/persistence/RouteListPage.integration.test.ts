@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
 import { RoutePlanningTypeOrmStore } from '../../../../infrastructure/dispatch/RoutePlanningTypeOrmStore.js';
+import { DriverRouteStatsTypeOrmQuery } from '../../../../infrastructure/dispatch/DriverRouteStatsTypeOrmQuery.js';
 import { VehicleRouteStatsTypeOrmQuery } from '../../../../infrastructure/dispatch/VehicleRouteStatsTypeOrmQuery.js';
 import { InMemoryDeliveryOrderRepository } from '../../../delivery-orders/composition/composition-root.js';
 import { DeliveryOrder } from '../../../delivery-orders/domain/entities/DeliveryOrder.js';
@@ -228,7 +229,7 @@ describe.skipIf(databaseUrl === null)('Route listing and vehicle route stats (Po
     await foreign.plan(0, { plannedDate: '2026-11-06', orderCount: 4 }, false);
 
     const stats = await new VehicleRouteStatsTypeOrmQuery(source)
-      .getStats(owner.organizationId, 3, new Date('2026-11-16T04:00:00.000Z'));
+      .getStats(owner.organizationId, { months: 3 }, new Date('2026-11-16T04:00:00.000Z'));
 
     const byVehicle = new Map(stats.map((item) => [item.vehicleId, item]));
     expect(stats).toHaveLength(3);
@@ -244,5 +245,24 @@ describe.skipIf(databaseUrl === null)('Route listing and vehicle route stats (Po
       vehicleId: idle!.vehicleId, routes: 0, completed: 0, stops: 0, orders: 0, lastRouteDay: null,
       monthly: [{ month: '2026-09', routes: 0 }, { month: '2026-10', routes: 0 }, { month: '2026-11', routes: 0 }],
     });
+
+    // The period bounds the totals only; the last route day stays the latest ever.
+    const november = await new VehicleRouteStatsTypeOrmQuery(source).getStats(owner.organizationId,
+      { months: 3, from: '2026-11-01', to: '2026-11-30', ids: [crewA!.vehicleId, crewB!.vehicleId, foreign.resources[0]!.vehicleId] },
+      new Date('2026-11-16T04:00:00.000Z'));
+    expect(november.map((item) => item.vehicleId).sort()).toEqual([crewA!.vehicleId, crewB!.vehicleId].sort());
+    expect(november.find((item) => item.vehicleId === crewA!.vehicleId)).toMatchObject({
+      routes: 1, completed: 0, stops: 1, orders: 1, lastRouteDay: '2026-11-06',
+    });
+    expect(november.find((item) => item.vehicleId === crewB!.vehicleId)).toMatchObject({
+      routes: 0, completed: 0, stops: 0, orders: 0, lastRouteDay: '2026-12-01',
+    });
+
+    const byDriver = new Map((await new DriverRouteStatsTypeOrmQuery(source)
+      .getStats(owner.organizationId, { months: 3 }, new Date('2026-11-16T04:00:00.000Z')))
+      .map((item) => [item.driverId, item]));
+    expect(byDriver.size).toBe(3);
+    expect(byDriver.get(crewA!.driverId)).toMatchObject({ routes: 2, completed: 1, stops: 3, orders: 3, lastRouteDay: '2026-11-06' });
+    expect(byDriver.get(idle!.driverId)).toMatchObject({ routes: 0, lastRouteDay: null });
   });
 });

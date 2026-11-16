@@ -253,4 +253,26 @@ describe('VehicleManagementPage', () => {
     await user.type(screen.getByLabelText('Buscar vehículos'), 'zzz');
     expect(await screen.findByText('Ningún vehículo coincide')).toBeTruthy();
   });
+
+  it('scopes the route metrics to the visible vehicles and the chosen period without reloading the list', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-16T15:00:00.000Z'));
+    const user = setupUser();
+    const client = buildClient();
+    render(<VehicleManagementPage client={client} />);
+
+    await screen.findByRole('listitem', { name: /ABC-123/ });
+    await waitFor(() => expect(client.getVehicleRouteStats).toHaveBeenCalledWith({ ids: [vehicle.id] }));
+    expect(screen.getByText('Métricas de todo el historial')).toBeTruthy();
+    const listCalls = client.listVehiclesPage.mock.calls.length;
+
+    await chooseOption(user, screen.getByLabelText('Periodo de las métricas'), 'Este mes');
+
+    await waitFor(() => expect(client.getVehicleRouteStats).toHaveBeenLastCalledWith({
+      from: '2026-11-01', to: '2026-11-30', ids: [vehicle.id],
+    }));
+    expect(await screen.findByText('Métricas de este mes')).toBeTruthy();
+    expect(client.listVehiclesPage.mock.calls.length).toBe(listCalls);
+    vi.useRealTimers();
+  });
 });

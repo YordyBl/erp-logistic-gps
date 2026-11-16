@@ -329,6 +329,17 @@ interface ApiEnvelope<T> {
   readonly data: T;
 }
 
+/** Alcance de las métricas de rutas (`/vehicles/route-stats`, `/drivers/route-stats`). */
+export interface RouteStatsParams {
+  readonly months?: number;
+  /** Primer día planificado (`YYYY-MM-DD`) que cuenta en los totales. */
+  readonly from?: string;
+  /** Último día planificado (`YYYY-MM-DD`) que cuenta en los totales. */
+  readonly to?: string;
+  /** Solo estos IDs; una lista vacía no filtra. */
+  readonly ids?: readonly string[];
+}
+
 /** Valor de un parámetro de consulta: las listas viajan separadas por comas (`status=a,b`). */
 export type QueryValue = string | number | boolean | readonly (string | number)[] | null | undefined;
 
@@ -487,9 +498,13 @@ export class ApiClient {
     return this.requestPage('/delivery-routes', params, signal);
   }
 
-  /** Totales y serie mensual de rutas por vehículo, agregados en el servidor (1 a 12 meses, por defecto 6). */
-  async getVehicleRouteStats(months?: number): Promise<readonly VehicleRouteStats[]> {
-    return this.requestData(`/vehicles/route-stats${buildQuery({ months })}`);
+  /**
+   * Totales y serie mensual de rutas por vehículo, agregados en el servidor. `from`/`to` limitan los
+   * totales a días planificados (inclusivos); `ids` pide solo esos vehículos; `months` es el largo de la
+   * serie (1 a 12, por defecto 6).
+   */
+  async getVehicleRouteStats(params: RouteStatsParams = {}): Promise<readonly VehicleRouteStats[]> {
+    return this.requestData(`/vehicles/route-stats${buildQuery({ ...params })}`);
   }
 
   async getDispatchDashboardSummary(): Promise<DispatchDashboardSummary> {
