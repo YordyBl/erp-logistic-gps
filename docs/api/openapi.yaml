@@ -2302,6 +2302,8 @@ paths:
         current month in America/Lima, grouped by planned month. `orders`
         counts every order link of the vehicle's routes. `from`/`to` bound the
         totals to planned days; `lastRouteDay` is always the latest route ever.
+        With both `from` and `to`, `monthly` covers the months of the period
+        (the last 12 when longer) instead of `months` ending today.
         `ids` limits the vehicles. Without them the response covers every
         vehicle over all history.
       security:

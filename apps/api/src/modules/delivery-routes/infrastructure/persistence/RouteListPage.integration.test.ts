@@ -253,6 +253,7 @@ describe.skipIf(databaseUrl === null)('Route listing and vehicle route stats (Po
     expect(november.map((item) => item.vehicleId).sort()).toEqual([crewA!.vehicleId, crewB!.vehicleId].sort());
     expect(november.find((item) => item.vehicleId === crewA!.vehicleId)).toMatchObject({
       routes: 1, completed: 0, stops: 1, orders: 1, lastRouteDay: '2026-11-06',
+      monthly: [{ month: '2026-11', routes: 1 }],
     });
     expect(november.find((item) => item.vehicleId === crewB!.vehicleId)).toMatchObject({
       routes: 0, completed: 0, stops: 0, orders: 0, lastRouteDay: '2026-12-01',

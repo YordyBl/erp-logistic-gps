@@ -262,7 +262,8 @@ describe('VehicleManagementPage', () => {
     render(<VehicleManagementPage client={client} />);
 
     await screen.findByRole('listitem', { name: /ABC-123/ });
-    await waitFor(() => expect(client.getVehicleRouteStats).toHaveBeenCalledWith({ ids: [vehicle.id] }));
+    await waitFor(() => expect(client.getVehicleRouteStats).toHaveBeenCalledWith({ months: 12, ids: [vehicle.id] }));
+    expect(screen.getByText('Últimos 12 meses, por fecha planificada.')).toBeTruthy();
     expect(screen.getByText('Métricas de todo el historial')).toBeTruthy();
     const listCalls = client.listVehiclesPage.mock.calls.length;
 
@@ -272,6 +273,7 @@ describe('VehicleManagementPage', () => {
       from: '2026-11-01', to: '2026-11-30', ids: [vehicle.id],
     }));
     expect(await screen.findByText('Métricas de este mes')).toBeTruthy();
+    expect(screen.getByText('Este mes, por fecha planificada.')).toBeTruthy();
     expect(client.listVehiclesPage.mock.calls.length).toBe(listCalls);
     vi.useRealTimers();
   });

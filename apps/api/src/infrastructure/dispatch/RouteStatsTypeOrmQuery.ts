@@ -10,7 +10,10 @@ export type RouteStatsSubject = 'vehicle' | 'driver';
 
 /** What to aggregate. Without `from`/`to` the totals cover every route; without `ids`, every subject. */
 export interface RouteStatsScope {
-  /** Length of the monthly series ending with the current Lima month (1..12, default 6). */
+  /**
+   * Length of the monthly series ending with the current Lima month (1..12, default 6). Ignored when
+   * both `from` and `to` are given: the series is then the months of that period.
+   */
   readonly months?: number;
   /** First planned day (`YYYY-MM-DD`, inclusive) counted in the totals. */
   readonly from?: string;
@@ -31,7 +34,10 @@ export interface SubjectRouteStats {
   readonly orders: number;
   /** Planned day (`YYYY-MM-DD`) of the latest route ever, or `null` when it never had one. */
   readonly lastRouteDay: string | null;
-  /** Routes per planned month (`YYYY-MM`), oldest first, ending with the current Lima month. */
+  /**
+   * Routes per planned month (`YYYY-MM`), oldest first: the months of the period (the last
+   * {@link MAX_ROUTE_STATS_MONTHS} when longer), or `months` ending with the current Lima month.
+   */
   readonly monthly: readonly { readonly month: string; readonly routes: number }[];
 }
 
@@ -75,7 +81,9 @@ export class RouteStatsTypeOrmQuery {
     organizationId: string, scope: RouteStatsScope = {}, now = new Date(),
   ): Promise<readonly SubjectRouteStats[]> {
     const { table, column } = SUBJECTS[this.subject];
-    const keys = monthKeys(limaDate(now), scope.months ?? DEFAULT_ROUTE_STATS_MONTHS);
+    const keys = scope.from !== undefined && scope.to !== undefined
+      ? periodMonthKeys(scope.from, scope.to)
+      : monthKeys(limaDate(now), scope.months ?? DEFAULT_ROUTE_STATS_MONTHS);
     const monthFrom = `${keys[0]}-01`;
     const monthUntil = `${nextMonth(keys[keys.length - 1]!)}-01`;
     const ids = scope.ids === undefined ? null : [...scope.ids];
@@ -146,6 +154,13 @@ export function monthKeys(today: string, months: number): readonly string[] {
   const month = Number(today.slice(5, 7));
   return Array.from({ length: months }, (_, index) =>
     new Date(Date.UTC(year, month - 1 - (months - 1 - index), 1)).toISOString().slice(0, 7));
+}
+
+/** Months (`YYYY-MM`) from the month of `from` to the month of `to`, the last 12 when longer. */
+export function periodMonthKeys(from: string, to: string): readonly string[] {
+  const span = (Number(to.slice(0, 4)) - Number(from.slice(0, 4))) * 12
+    + Number(to.slice(5, 7)) - Number(from.slice(5, 7)) + 1;
+  return monthKeys(to, Math.min(Math.max(span, 1), MAX_ROUTE_STATS_MONTHS));
 }
 
 function nextMonth(key: string): string {

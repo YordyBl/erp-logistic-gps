@@ -23,7 +23,7 @@ const SINCE = new Intl.DateTimeFormat('es-PE', { dateStyle: 'medium', timeZone: 
  * Detalle del vehículo elegido: actividad por mes, ficha, totales e historial de rutas. Los totales y la
  * serie vienen agregados del servidor; el historial es solo la página más reciente de sus rutas.
  */
-export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, drivers, routesError, historyError, historyLoading = false, periodLabel = 'todo el historial', onEdit }: {
+export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, drivers, routesError, historyError, historyLoading = false, periodLabel = 'todo el historial', chartCaption = 'Últimos 12 meses', onEdit }: {
   readonly vehicle: Vehicle;
   readonly stats: VehicleStats;
   readonly monthly: readonly MonthlyRoutes[];
@@ -40,6 +40,8 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, dr
   readonly historyLoading?: boolean;
   /** Periodo de los totales, en minúsculas ("este mes"). La última ruta siempre es la más reciente. */
   readonly periodLabel?: string;
+  /** Meses que cubre la serie mensual ("Este mes", "Últimos 12 meses"). */
+  readonly chartCaption?: string;
   readonly onEdit: () => void;
 }) {
   const active = vehicle.status === 'active';
@@ -49,7 +51,7 @@ export function VehicleDetail({ vehicle, stats, monthly, routes, routesTotal, dr
         <Card>
           <CardHeader>
             <CardTitle>Rutas por mes</CardTitle>
-            <CardDescription>Últimos 6 meses, por fecha planificada.</CardDescription>
+            <CardDescription>{chartCaption}, por fecha planificada.</CardDescription>
           </CardHeader>
           <CardContent>
             {routesError

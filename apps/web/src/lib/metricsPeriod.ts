@@ -43,6 +43,19 @@ export function periodRange(period: MetricsPeriod, today: string): PlannedRange 
   }
 }
 
+/**
+ * Alcance que se pide al servidor: el rango del periodo (los totales y una barra por mes del rango) o,
+ * para "Todo", todo el historial con las barras de los últimos 12 meses.
+ */
+export function statsScope(period: MetricsPeriod, today: string): PlannedRange & { readonly months?: number } {
+  return period === 'all' ? { months: 12 } : periodRange(period, today);
+}
+
+/** Título de la serie mensual según el periodo ("Este mes", "Últimos 12 meses" para "Todo"). */
+export function chartCaption(period: MetricsPeriod): string {
+  return period === 'all' ? 'Últimos 12 meses' : METRICS_PERIODS.find((option) => option.value === period)?.label ?? '';
+}
+
 /** El periodo en minúsculas, para frases como "12 rutas · este mes". */
 export function periodLabel(period: MetricsPeriod): string {
   return period === 'all' ? 'todo el historial' : (METRICS_PERIODS.find((option) => option.value === period)?.label ?? '').toLowerCase();

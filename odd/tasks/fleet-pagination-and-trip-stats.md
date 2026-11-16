@@ -10,6 +10,9 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 - S3 (L3): "añade tambien ahí paginado y filtro del listado de vehiculos". `GET /vehicles` returns `{ data, meta }` with `page`, `pageSize`, `q` (plate, type), `sort`, `status` and `meta.counts.status`.
 - S4 (L4): "añade tambien un filtro para las metricas, no para el listado, en ambos casos para poder ver las métricas a disposición". `route-stats` accepts `from`/`to` (`YYYY-MM-DD`, planned date); totals use the range, `lastRouteDay` stays all-time; absent = all history. UI period selector (Este mes, Últimos 3 meses, Últimos 6 meses, Este año, Todo) independent of list filters; changing it refetches only stats.
 - S5 (decision): full lists move to `GET /vehicles/options` and `GET /drivers/options` (same roles, unchanged shape) so selector/lookup pages keep working; web `listVehicles()`/`listDrivers()` point there.
+- S7 (L11): "lo que deseaba era uan vista como la de vehiculos en conductores" — drivers screen uses the vehicles layout: list + detail (Viajes por mes, Ficha del conductor, tiles, Historial de viajes with vehicle plate).
+- S8 (L11): "tampoco veo el paginado a nivel frontend de la lista de vehiculos y conductores" — pager always visible ("Mostrando a–b de N · Página x de y").
+- S9 (L12): "hay unas barras por mes que salen en vehiculo y el filtro debería ocultar las barras en determinados meses" — monthly bars = months of the period (Este mes 1, 3m 3, 6m 6, Este año ene–dic, Todo últimos 12).
 - S6 (decision): `route-stats` accepts optional `ids` so pages aggregate only visible rows; absent = every subject.
 
 ## Tasks
@@ -18,6 +21,10 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 - [x] T2 S2,S5 — drivers pagination + filters + `/drivers/options` · inline · RED 7 api + 9 web tests → GREEN · c52da38
 - [x] T3 S4,S6 — generic route stats query with `ids` + from/to + vehicles period selector · inline · RED query/route/web tests → GREEN · 58433bc
 - [x] T4 S1,S4 — `GET /drivers/route-stats` + driver trips UI with period selector · inline · RED 8 api + 2 web tests → GREEN
+
+- [x] T5 S9 — monthly series follows from/to (api) + web months/caption · inline · RED 2 api + 3 web → GREEN
+- [x] T6 S8 — ListPager always visible · inline · RED 2 → GREEN
+- [ ] T7 S7 — drivers list+detail like vehicles, shared chart/tiles · inline
 
 ## Log
 
@@ -31,3 +38,6 @@ Branch: feat/redesign-back · Delivery: ask-on-risk, one commit per slice (A-D) 
 - L8: T3 done. `RouteStatsTypeOrmQuery` groups by vehicle or driver (fixed table/column, never input); `VehicleRouteStatsTypeOrmQuery` and `DriverRouteStatsTypeOrmQuery` are thin adapters. Periods are whole calendar months in Lima ending with the current month (incl. routes planned later this month); "Este año" is Jan 1–Dec 31. Default period is "Todo" so the screens show what they showed before. Dropped the planned 12-month span cap: totals over any range are cheap aggregates. Checks: vitest 707 passed / 79 skipped, typecheck clean, eslint clean.
 - L9: T4 done. Each driver card shows Viajes, Completados and Último viaje (all-time) for the visible page and the chosen period; failures show dashes. No monthly chart for drivers: the drivers screen has no detail panel (planned item 6 not done). Checks: vitest 717 passed / 79 skipped, typecheck clean, eslint clean. Pending: PostgreSQL integration/parity tests (skipped without `DATABASE_URL`).
 - L10: T4 commit cf00f82. Independent verifier: S1–S6 pass, no functional blockers. Fixed its advisories: `docs/api/openapi.yaml` now documents the paginated `/vehicles` and `/drivers`, `/options`, `/drivers/route-stats` and `from`/`to`/`ids` (it also failed to parse before this feature: four unquoted backtick descriptions and one `data: []` description, now quoted). Driver trips now refresh after create/update. Native review: user chose "Skip this time" (declined_this_candidate). Open: header "kg de capacidad activa" removed in T1 needs the user's decision.
+- L11 (2026-11-16): "analiza por favor los datos que tiene la vista de vehiculos porque creo quedo claro, lo que deseaba era uan vista como la de vehiculos en conductores, porque tampoco veo el paginado a nivel frontend de la lista de vehiculos y conductores, realiza un analisis antes por favor"
+- L12 (2026-11-16): "recuerda hacer siempre pruebas visuales pero antes de ir con desarrollo dime el plan  que se hará, las metricas, etc, pasa que hay unas barras por mes que salen en vehiculo y el filtro debería ocultar las barras en determinados meses, analiazlo por favor"
+- L13: Analysis: demo has 9 vehicles / 7 drivers → single page, ListPager hid itself; monthly series was fixed at 6 months. Plan approved (list+detail for drivers, pager always visible, bars per period, visual screenshots).

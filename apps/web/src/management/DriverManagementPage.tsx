@@ -15,7 +15,7 @@ import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
 import { useServerTable } from '../hooks/use-server-table.js';
-import { DEFAULT_METRICS_PERIOD, limaToday, periodLabel, periodRange, type MetricsPeriod } from '../lib/metricsPeriod.js';
+import { chartCaption, DEFAULT_METRICS_PERIOD, limaToday, periodLabel, statsScope, type MetricsPeriod } from '../lib/metricsPeriod.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
 import { DriverCard, type DriverTrips } from './drivers/DriverCard.js';
 import {
@@ -110,7 +110,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   useEffect(() => {
     if (visibleIdsKey === '') return undefined;
     let cancelled = false;
-    client.getDriverRouteStats({ ...periodRange(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
+    client.getDriverRouteStats({ ...statsScope(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
       if (!cancelled) setTrips(new Map(loaded.map((item) => [item.driverId, item] as const)));
     }, () => {
       if (!cancelled) setTrips(null);

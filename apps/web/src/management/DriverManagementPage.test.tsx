@@ -232,7 +232,7 @@ describe('DriverManagementPage', () => {
     const idleCard = screen.getByRole('listitem', { name: /Luis Peña/ });
     expect(within(idleCard).getByText('Viajes').nextElementSibling?.textContent).toBe('0');
     expect(within(idleCard).getByText('Último viaje').nextElementSibling?.textContent).toBe('Sin viajes');
-    expect(client.getDriverRouteStats).toHaveBeenCalledWith({ ids: [driver.id, idle.id] });
+    expect(client.getDriverRouteStats).toHaveBeenCalledWith({ months: 12, ids: [driver.id, idle.id] });
     expect(screen.getByText('Viajes de todo el historial')).toBeTruthy();
     const listCalls = client.listDriversPage.mock.calls.length;
 

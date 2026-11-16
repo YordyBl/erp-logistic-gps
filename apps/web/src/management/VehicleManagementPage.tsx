@@ -14,7 +14,7 @@ import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
 import { useServerTable } from '../hooks/use-server-table.js';
-import { DEFAULT_METRICS_PERIOD, limaToday, periodLabel, periodRange, type MetricsPeriod } from '../lib/metricsPeriod.js';
+import { chartCaption, DEFAULT_METRICS_PERIOD, limaToday, periodLabel, statsScope, type MetricsPeriod } from '../lib/metricsPeriod.js';
 import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
 import { VehicleDetail } from './vehicles/VehicleDetail.js';
 import { VehicleListItem } from './vehicles/VehicleListItem.js';
@@ -98,7 +98,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   useEffect(() => {
     if (visibleIdsKey === '') return undefined;
     let cancelled = false;
-    client.getVehicleRouteStats({ ...periodRange(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
+    client.getVehicleRouteStats({ ...statsScope(period, limaToday()), ids: visibleIdsKey.split(',') }).then((loaded) => {
       if (cancelled) return;
       setRouteStats(loaded);
       setRoutesError(false);
@@ -299,7 +299,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
             {selectedVehicle !== undefined && (
               <VehicleDetail vehicle={selectedVehicle} stats={statsOf(selectedStats)}
                 monthly={selectedMonthly} routes={selectedHistory?.routes ?? []} routesTotal={selectedHistory?.total ?? 0}
-                drivers={driversById} routesError={routesError} periodLabel={periodLabel(period)} historyError={selectedHistory?.failed ?? false}
+                drivers={driversById} routesError={routesError} periodLabel={periodLabel(period)} chartCaption={chartCaption(period)} historyError={selectedHistory?.failed ?? false}
                 historyLoading={selectedHistory === null}
                 onEdit={() => startEditing(selectedVehicle)} />
             )}

@@ -66,7 +66,8 @@ describe('VehicleRouteStatsTypeOrmQuery', () => {
       new Date('2026-11-15T15:00:00.000Z'));
 
     expect(query.mock.calls[0]?.[1]).toEqual(['org-1', '2026-11-01', '2026-11-30', ['v-1', 'v-2']]);
-    expect(query.mock.calls[1]?.[1]).toEqual(['org-1', '2026-10-01', '2026-12-01', ['v-1', 'v-2']]);
+    // With a period the monthly bars are the months of the period, not `months` ending today.
+    expect(query.mock.calls[1]?.[1]).toEqual(['org-1', '2026-11-01', '2026-12-01', ['v-1', 'v-2']]);
     const [totals, monthly] = query.mock.calls.map(([statement]) => normalize(statement));
     expect(totals).toContain('planned_date >= $2::date');
     expect(totals).toContain('planned_date <= $3::date');
@@ -74,6 +75,30 @@ describe('VehicleRouteStatsTypeOrmQuery', () => {
     expect(totals).toMatch(/max\(planned_date\) as last_route_day from listed/);
     expect(totals).toContain('subjects.id = any($4::uuid[])');
     expect(monthly).toContain('vehicle_id = any($4::uuid[])');
+  });
+
+  it('builds one monthly bar per month of the period, the last twelve when longer', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce([{ subject_id: 'v-1', routes: 1, completed: 1, stops: 1, orders: 1, last_route_day: '2026-03-02' }])
+      .mockResolvedValueOnce([{ subject_id: 'v-1', month: '2026-03', routes: 1 }])
+      .mockResolvedValue([]);
+    const stats = new VehicleRouteStatsTypeOrmQuery({ query } as unknown as Pick<DataSource, 'query'>);
+    const now = new Date('2026-11-16T15:00:00.000Z');
+
+    const year = await stats.getStats('org-1', { months: 6, from: '2026-01-01', to: '2026-12-31' }, now);
+    expect(year[0]?.monthly.map((item) => item.month)).toEqual([
+      '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06',
+      '2026-07', '2026-08', '2026-09', '2026-10', '2026-11', '2026-12',
+    ]);
+    expect(year[0]?.monthly.find((item) => item.month === '2026-03')?.routes).toBe(1);
+    expect(query.mock.calls[1]?.[1]).toEqual(['org-1', '2026-01-01', '2027-01-01', null]);
+
+    await stats.getStats('org-1', { from: '2024-05-10', to: '2026-02-03' }, now);
+    expect(query.mock.calls[3]?.[1]).toEqual(['org-1', '2025-03-01', '2026-03-01', null]);
+
+    // An open-ended period keeps `months` ending in the current month.
+    await stats.getStats('org-1', { months: 2, from: '2026-01-01' }, now);
+    expect(query.mock.calls[5]?.[1]).toEqual(['org-1', '2026-10-01', '2026-12-01', null]);
   });
 
   it('lists month keys across the year change', () => {

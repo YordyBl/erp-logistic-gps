@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { limaToday, METRICS_PERIODS, periodLabel, periodRange } from './metricsPeriod.js';
+import { chartCaption, limaToday, METRICS_PERIODS, periodLabel, periodRange, statsScope } from './metricsPeriod.js';
 
 describe('metricsPeriod', () => {
   it('reads today in Lima, not in UTC', () => {
@@ -15,6 +15,14 @@ describe('metricsPeriod', () => {
     expect(periodRange('6m', '2026-02-10')).toEqual({ from: '2025-09-01', to: '2026-02-28' });
     expect(periodRange('year', '2026-11-16')).toEqual({ from: '2026-01-01', to: '2026-12-31' });
     expect(periodRange('all', '2026-11-16')).toEqual({});
+  });
+
+  it('asks the server for the bars of the period: its months, or the last twelve for everything', () => {
+    expect(statsScope('3m', '2026-11-16')).toEqual({ from: '2026-09-01', to: '2026-11-30' });
+    expect(statsScope('all', '2026-11-16')).toEqual({ months: 12 });
+    expect(chartCaption('month')).toBe('Este mes');
+    expect(chartCaption('year')).toBe('Este año');
+    expect(chartCaption('all')).toBe('Últimos 12 meses');
   });
 
   it('labels every option', () => {
