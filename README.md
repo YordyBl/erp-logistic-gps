@@ -219,7 +219,8 @@ is a defect.
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List one page of the customer catalog (`q`, `status`, `ids`, `sort`) or read one customer (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
-| `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | List or read the driver catalog (any authenticated role) |
+| `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | Page (search, status and account filters, sort) or read the driver catalog (ADMIN or DISPATCHER) |
+| `GET` | `/api/v1/drivers/options` | Whole crew for selectors (ADMIN or DISPATCHER) |
 | `PATCH` | `/api/v1/drivers/:driverId` | Update the mutable driver fields (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/vehicles` | Create a vehicle (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/vehicles`, `/api/v1/vehicles/:vehicleId` | Page (search, status filter, sort) or read the fleet catalog (any authenticated role) |

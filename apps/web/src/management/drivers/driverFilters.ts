@@ -1,4 +1,7 @@
-import type { Driver, DriverAccountOption } from '../../api/client.js';
+import type { ColumnFiltersState } from '@tanstack/react-table';
+
+import type { DriverAccountOption } from '../../api/client.js';
+import type { FacetCounts } from '../../hooks/use-server-table.js';
 
 export type DriverFilter = 'all' | 'active' | 'inactive' | 'unlinked';
 
@@ -16,32 +19,26 @@ export function indexAccountsByDriver(accounts: readonly DriverAccountOption[]):
   return new Map(accounts.flatMap((account) => account.driverId === null ? [] : [[account.driverId, account] as const]));
 }
 
-export function matchesFilter(driver: Driver, filter: DriverFilter, accounts: AccountsByDriver): boolean {
+/** El chip elegido como filtro del servidor: `status` para el estado y `account` para "Sin cuenta". */
+export function toColumnFilters(filter: DriverFilter): ColumnFiltersState {
   switch (filter) {
-    case 'all': return true;
-    case 'active': return driver.status === 'active';
-    case 'inactive': return driver.status === 'inactive';
-    case 'unlinked': return !accounts.has(driver.id);
+    case 'all': return [];
+    case 'active':
+    case 'inactive': return [{ id: 'status', value: filter }];
+    case 'unlinked': return [{ id: 'account', value: 'unlinked' }];
   }
 }
 
-export function countByFilter(drivers: readonly Driver[], accounts: AccountsByDriver): Readonly<Record<DriverFilter, number>> {
-  const counts: Record<DriverFilter, number> = { all: 0, active: 0, inactive: 0, unlinked: 0 };
-  for (const driver of drivers) {
-    for (const { value } of DRIVER_FILTERS) if (matchesFilter(driver, value, accounts)) counts[value] += 1;
-  }
-  return counts;
+/** El chip que corresponde a los filtros actuales de la tabla. */
+export function filterFromColumns(filters: ColumnFiltersState): DriverFilter {
+  const status = filters.find((item) => item.id === 'status')?.value;
+  if (status === 'active' || status === 'inactive') return status;
+  return filters.some((item) => item.id === 'account' && item.value === 'unlinked') ? 'unlinked' : 'all';
 }
 
-/** Conductores del filtro cuyo nombre, documento, licencia o teléfono contienen la búsqueda. */
-export function filterDrivers(drivers: readonly Driver[], filter: DriverFilter, query: string, accounts: AccountsByDriver): readonly Driver[] {
-  const needle = normalize(query.trim());
-  return drivers.filter((driver) => matchesFilter(driver, filter, accounts) &&
-    (needle === '' || [driver.fullName, driver.documentNumber, driver.licenseNumber, driver.phone]
-      .some((value) => normalize(value).includes(needle))));
-}
-
-/** Minúsculas y sin tildes, para que "Gomez" encuentre "Gómez". */
-function normalize(value: string): string {
-  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('es-PE');
+/** Conteo de cada chip según las facetas del servidor, que ignoran el chip elegido. */
+export function chipCounts(counts: FacetCounts | undefined): Readonly<Record<DriverFilter, number>> {
+  const active = counts?.status?.active ?? 0;
+  const inactive = counts?.status?.inactive ?? 0;
+  return { all: active + inactive, active, inactive, unlinked: counts?.account?.unlinked ?? 0 };
 }

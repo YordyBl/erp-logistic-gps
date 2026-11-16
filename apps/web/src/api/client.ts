@@ -681,8 +681,18 @@ export class ApiClient {
     return this.requestData(`/delivery-orders/${encodeURIComponent(orderId)}/history`);
   }
 
+  /** Todos los conductores, para selectores y para resolver nombres por ID. */
   async listDrivers(): Promise<readonly Driver[]> {
-    return this.requestData('/drivers');
+    return this.requestData('/drivers/options');
+  }
+
+  /**
+   * Una página de conductores. Filtros: `status`, `account` (`linked` o `unlinked`) e `ids`; `q`
+   * busca en nombre, documento, licencia y teléfono sin distinguir tildes; orden por `fullName`
+   * (por defecto, ascendente) o `createdAt`. `meta.counts` trae `status` y `account`.
+   */
+  listDriversPage(params: PageParams, signal?: AbortSignal): Promise<Page<Driver>> {
+    return this.requestPage('/drivers', params, signal);
   }
 
   async listDriverAccounts(): Promise<readonly DriverAccountOption[]> {

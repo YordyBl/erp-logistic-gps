@@ -301,8 +301,10 @@ describe('ApiClient driver management', () => {
       status: 'active', createdAt: '2026-11-02T10:00:00.000Z', updatedAt: '2026-11-02T10:00:00.000Z',
     };
     const account = { userId: 'user-1', email: 'driver@example.test', status: 'active', driverId: null };
+    const meta = { page: 1, pageSize: 12, total: 1, counts: { status: { active: 1, inactive: 0 }, account: { linked: 0, unlinked: 1 } } };
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [driver] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [driver], meta }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [account] }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: driver }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: driver }), { status: 200 }))
@@ -311,6 +313,8 @@ describe('ApiClient driver management', () => {
     client.setAccessToken('admin-token');
 
     await expect(client.listDrivers()).resolves.toEqual([driver]);
+    await expect(client.listDriversPage({ pageSize: 12, account: 'unlinked', q: 'gómez' }))
+      .resolves.toEqual({ data: [driver], meta });
     await expect(client.listDriverAccounts()).resolves.toEqual([account]);
     await expect(client.createDriver({
       fullName: driver.fullName, documentNumber: driver.documentNumber,
@@ -320,11 +324,12 @@ describe('ApiClient driver management', () => {
     await expect(client.bindDriverAccount(driver.id, account.userId)).resolves.toEqual({ driverId: driver.id, userId: account.userId });
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      '/api/v1/drivers', '/api/v1/drivers/accounts', '/api/v1/drivers',
+      '/api/v1/drivers/options', '/api/v1/drivers?pageSize=12&account=unlinked&q=g%C3%B3mez',
+      '/api/v1/drivers/accounts', '/api/v1/drivers',
       '/api/v1/drivers/driver-1', '/api/v1/drivers/driver-1/account',
     ]);
-    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toMatchObject({ documentNumber: 'DNI-123456' });
-    expect(JSON.parse(String(fetcher.mock.calls[4]?.[1]?.body))).toEqual({ userId: 'user-1' });
+    expect(JSON.parse(String(fetcher.mock.calls[3]?.[1]?.body))).toMatchObject({ documentNumber: 'DNI-123456' });
+    expect(JSON.parse(String(fetcher.mock.calls[5]?.[1]?.body))).toEqual({ userId: 'user-1' });
   });
 });
 

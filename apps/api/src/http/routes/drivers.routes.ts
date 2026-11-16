@@ -1,15 +1,24 @@
 import type { RequestHandler } from 'express';
 import { Router } from 'express';
+import { z } from 'zod';
 
 import { createDriverCommandSchema } from '../../modules/drivers/application/use-cases/create-driver/CreateDriverCommand.js';
 import type { CreateDriverUseCase } from '../../modules/drivers/application/use-cases/create-driver/CreateDriverUseCase.js';
 import type { GetDriverUseCase } from '../../modules/drivers/application/use-cases/get-driver/GetDriverUseCase.js';
+import {
+  DRIVER_ACCOUNT_STATES,
+  DRIVER_SORT_FIELDS,
+  type DriverPageCriteria,
+} from '../../modules/drivers/application/ports/DriverRepository.js';
+import type { ListDriversPageUseCase } from '../../modules/drivers/application/use-cases/list-drivers/ListDriversPageUseCase.js';
 import type { ListDriversUseCase } from '../../modules/drivers/application/use-cases/list-drivers/ListDriversUseCase.js';
+import { DRIVER_STATUSES } from '../../modules/drivers/domain/entities/Driver.js';
 import { updateDriverBodySchema } from '../../modules/drivers/application/use-cases/update-driver/UpdateDriverCommand.js';
 import type { UpdateDriverUseCase } from '../../modules/drivers/application/use-cases/update-driver/UpdateDriverUseCase.js';
 import { bindDriverAccountBodySchema, type BindDriverAccountUseCase } from '../../modules/drivers/application/use-cases/bind-driver-account/BindDriverAccountUseCase.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { requireRole } from '../middleware/require-role.js';
+import { csvEnum, csvUuid, pageQueryShape, sortSchema, toPageResponse } from '../pagination.js';
 import { parseDriverOrThrow } from '../validation.js';
 import { getAuthenticatedUser } from '../request-context.js';
 
@@ -22,7 +31,9 @@ import { getAuthenticatedUser } from '../request-context.js';
  */
 export interface DriversHttpPorts {
   readonly createDriver: CreateDriverUseCase;
+  /** Whole crew for selectors and name lookups (`GET /drivers/options`). */
   readonly listDrivers: ListDriversUseCase;
+  readonly listDriversPage: ListDriversPageUseCase;
   readonly getDriver: GetDriverUseCase;
   readonly updateDriver: UpdateDriverUseCase;
   readonly bindDriverAccount: BindDriverAccountUseCase;
@@ -31,6 +42,28 @@ export interface DriversHttpPorts {
 const createDriverBodySchema = createDriverCommandSchema.omit({
   organizationId: true,
 });
+
+/**
+ * Paginated crew query (`GET /drivers`). Unknown parameters are rejected; the
+ * default sort is `fullName:asc` because drivers are browsed and picked by name.
+ */
+const listDriversPageQuerySchema = z
+  .strictObject({
+    ...pageQueryShape,
+    sort: sortSchema(DRIVER_SORT_FIELDS, { field: 'fullName', direction: 'asc' }),
+    status: csvEnum(DRIVER_STATUSES).optional(),
+    account: z.enum(DRIVER_ACCOUNT_STATES).optional(),
+    ids: csvUuid().optional(),
+  })
+  .transform(({ page, pageSize, sort, q, status, account, ids }): DriverPageCriteria => ({
+    page,
+    pageSize,
+    sort,
+    ...(q === undefined ? {} : { q }),
+    ...(status === undefined ? {} : { status }),
+    ...(account === undefined ? {} : { account }),
+    ...(ids === undefined ? {} : { ids }),
+  }));
 
 export function createDriversRouter(
   ports: DriversHttpPorts,
@@ -58,7 +91,22 @@ export function createDriversRouter(
       .json({ data: result.driver });
   });
 
-  router.get('/', async (_request, response) => {
+  router.get('/', async (request, response) => {
+    const criteria = parseDriverOrThrow(
+      listDriversPageQuerySchema,
+      request.query,
+      'List drivers query is invalid',
+    );
+    const result = await ports.listDriversPage.execute({
+      organizationId: requireOrganizationId(response),
+      criteria,
+    });
+
+    response.status(200).json(toPageResponse(result, criteria.page, criteria.pageSize));
+  });
+
+  // Before `/:driverId`, which would otherwise take `options` as an id.
+  router.get('/options', async (_request, response) => {
     const result = await ports.listDrivers.execute({
       organizationId: requireOrganizationId(response),
     });

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, setupUser } from '../test/ui.js';
 
-import type { ApiClient, Driver, DriverAccountOption } from '../api/client.js';
+import type { ApiClient, Driver, DriverAccountOption, PageParams } from '../api/client.js';
 import { DriverManagementPage } from './DriverManagementPage.js';
 
 const driver: Driver = {
@@ -18,14 +18,40 @@ const account: DriverAccountOption = {
   userId: 'user-1', email: 'valeria@example.test', status: 'active', driverId: null,
 };
 
-function buildClient() {
+/** Paginates and filters like `GET /drivers`; the status and account facets ignore both chip filters. */
+function crewPage(crew: readonly Driver[], linkedIds: ReadonlySet<string> = new Set()) {
+  return async (params: PageParams) => {
+    const fold = (value: string) => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
+    const needle = fold(String(params.q ?? ''));
+    const searched = crew.filter((item) => needle === '' ||
+      [item.fullName, item.documentNumber, item.licenseNumber, item.phone].some((value) => fold(value).includes(needle)));
+    const filtered = searched.filter((item) =>
+      (params.status === undefined || item.status === params.status) &&
+      (params.account === undefined || (params.account === 'linked') === linkedIds.has(item.id)));
+    const pageSize = Number(params.pageSize ?? 20);
+    const start = (Number(params.page ?? 1) - 1) * pageSize;
+    const count = (predicate: (item: Driver) => boolean) => searched.filter(predicate).length;
+    return {
+      data: filtered.slice(start, start + pageSize),
+      meta: {
+        page: Number(params.page ?? 1), pageSize, total: filtered.length,
+        counts: {
+          status: { active: count((item) => item.status === 'active'), inactive: count((item) => item.status === 'inactive') },
+          account: { linked: count((item) => linkedIds.has(item.id)), unlinked: count((item) => !linkedIds.has(item.id)) },
+        },
+      },
+    };
+  };
+}
+
+function buildClient(crew: readonly Driver[] = [driver], linkedIds?: ReadonlySet<string>) {
   return {
-    listDrivers: vi.fn().mockResolvedValue([driver]),
+    listDriversPage: vi.fn().mockImplementation(crewPage(crew, linkedIds)),
     listDriverAccounts: vi.fn().mockResolvedValue([account]),
     createDriver: vi.fn().mockResolvedValue({ ...driver, id: 'driver-2', fullName: 'Luis Paredes' }),
     updateDriver: vi.fn().mockResolvedValue({ ...driver, phone: '+51 900 111 222' }),
     bindDriverAccount: vi.fn().mockResolvedValue({ driverId: driver.id, userId: account.userId }),
-  } satisfies Pick<ApiClient, 'listDrivers' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
+  } satisfies Pick<ApiClient, 'listDriversPage' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
 }
 
 afterEach(() => {
@@ -43,6 +69,8 @@ describe('DriverManagementPage', () => {
     const row = await screen.findByRole('listitem', { name: /Valeria Gomez/ });
     expect(within(row).getByText('DNI-123456')).toBeTruthy();
     expect(within(row).getByText('A-123456')).toBeTruthy();
+    expect(screen.getByText('1 de 1 conductores activos · 0 con cuenta vinculada.')).toBeTruthy();
+    client.listDriversPage.mockImplementation(crewPage([driver, { ...driver, id: 'driver-2', fullName: 'Luis Paredes' }]));
 
     await user.click(screen.getByRole('button', { name: 'Registrar conductor' }));
     await user.type(screen.getByLabelText('Nombre completo'), 'Luis Paredes');
@@ -84,7 +112,7 @@ describe('DriverManagementPage', () => {
     const client = buildClient();
     client.listDriverAccounts
       .mockResolvedValueOnce([account])
-      .mockResolvedValueOnce([{ ...account, driverId: driver.id }]);
+      .mockResolvedValue([{ ...account, driverId: driver.id }]);
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     render(<DriverManagementPage client={client} canBindAccounts />);
 
@@ -127,32 +155,56 @@ describe('DriverManagementPage', () => {
     expect(within(row).getByText('Vinculación reservada a ADMIN')).toBeTruthy();
   });
 
-  it('filters drivers by status and account, and searches ignoring accents', async () => {
+  it('filters drivers by status and account, and searches ignoring accents, on the server', async () => {
     const user = setupUser();
-    const client = buildClient();
     const inactive: Driver = { ...driver, id: 'driver-2', fullName: 'Luis Peña', documentNumber: 'DNI-999999', status: 'inactive' };
-    client.listDrivers.mockResolvedValue([driver, inactive]);
+    const client = buildClient([driver, inactive], new Set([driver.id]));
     client.listDriverAccounts.mockResolvedValue([{ ...account, driverId: driver.id }]);
     render(<DriverManagementPage client={client} canBindAccounts />);
 
     await screen.findByRole('listitem', { name: /Valeria Gomez/ });
-    await user.click(screen.getByRole('button', { name: /Inactivos/ }));
-    expect(screen.queryByRole('listitem', { name: /Valeria Gomez/ })).toBeNull();
+    expect(screen.getByText('1 de 2 conductores activos · 1 con cuenta vinculada.')).toBeTruthy();
+    const chips = screen.getByRole('group', { name: 'Filtrar conductores' });
+    expect(within(chips).getByRole('button', { name: /Sin cuenta/ }).textContent).toContain('1');
+    await user.click(within(chips).getByRole('button', { name: /Inactivos/ }));
+    await waitFor(() => expect(client.listDriversPage).toHaveBeenLastCalledWith(
+      { status: 'inactive', page: 1, pageSize: 12 }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.queryByRole('listitem', { name: /Valeria Gomez/ })).toBeNull());
     expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Sin cuenta/ }));
+    await user.click(within(chips).getByRole('button', { name: /Sin cuenta/ }));
+    await waitFor(() => expect(client.listDriversPage).toHaveBeenLastCalledWith(
+      { account: 'unlinked', page: 1, pageSize: 12 }, expect.any(AbortSignal)));
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
     expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: /Todos/ }));
+    await user.click(within(chips).getByRole('button', { name: /Todos/ }));
     await user.type(screen.getByLabelText('Buscar conductores'), 'pena');
-    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    await waitFor(() => expect(client.listDriversPage).toHaveBeenLastCalledWith(
+      { page: 1, pageSize: 12, q: 'pena' }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
     expect(screen.getByRole('listitem', { name: /Luis Peña/ })).toBeTruthy();
+    expect(screen.getByText('1 de 2 conductores activos · 1 con cuenta vinculada.')).toBeTruthy();
 
     await user.clear(screen.getByLabelText('Buscar conductores'));
     await user.type(screen.getByLabelText('Buscar conductores'), 'zzz');
-    expect(screen.getByText('Ningún conductor coincide')).toBeTruthy();
+    expect(await screen.findByText('Ningún conductor coincide')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Ver todos' }));
-    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2));
+  });
+
+  it('pages the crew on the server', async () => {
+    const user = setupUser();
+    const crew = Array.from({ length: 14 }, (_, index): Driver => ({
+      ...driver, id: `driver-${index + 1}`, fullName: `Conductor ${String(index + 1).padStart(2, '0')}`,
+    }));
+    const client = buildClient(crew);
+    render(<DriverManagementPage client={client} canBindAccounts={false} />);
+
+    await screen.findByRole('listitem', { name: /Conductor 01/ });
+    expect(screen.getAllByRole('listitem')).toHaveLength(12);
+    await user.click(screen.getByRole('button', { name: 'Página siguiente de conductores' }));
+    expect(await screen.findByRole('listitem', { name: /Conductor 14/ })).toBeTruthy();
+    expect(screen.getByText('Página 2 de 2')).toBeTruthy();
   });
 });

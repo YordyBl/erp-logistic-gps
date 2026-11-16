@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 
 import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
 import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
+import { ListPager } from '../components/ListPager.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
@@ -12,12 +13,15 @@ import { Badge } from '../components/ui/badge.js';
 import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
 import { DriverCard } from './drivers/DriverCard.js';
-import { countByFilter, DRIVER_FILTERS, filterDrivers, indexAccountsByDriver, type DriverFilter } from './drivers/driverFilters.js';
+import {
+  chipCounts, DRIVER_FILTERS, filterFromColumns, indexAccountsByDriver, toColumnFilters, type DriverFilter,
+} from './drivers/driverFilters.js';
 
 type DriverClient = Pick<ApiClient,
-  'listDrivers' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
+  'listDriversPage' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
 
 interface DriverForm {
   fullName: string;
@@ -32,6 +36,9 @@ const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: s
   { value: 'inactive', label: 'Inactivo' },
 ];
 
+/** Conductores por página: tres filas de la cuadrícula de cuatro columnas. */
+export const CREW_PAGE_SIZE = 12;
+
 const newDriverForm = (): DriverForm => ({
   fullName: '', documentNumber: '', phone: '', licenseNumber: '', status: 'active',
 });
@@ -40,10 +47,11 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   readonly client: DriverClient;
   readonly canBindAccounts: boolean;
 }) {
-  const [drivers, setDrivers] = useState<readonly Driver[]>([]);
+  const crew = useServerTable<Driver>(
+    (params, signal) => client.listDriversPage(params, signal), { pageSize: CREW_PAGE_SIZE },
+  );
+  const drivers = crew.rows;
   const [accounts, setAccounts] = useState<readonly DriverAccountOption[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [registered, setRegistered] = useState<string | null>(null);
@@ -55,27 +63,43 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const [form, setForm] = useState<DriverForm>(newDriverForm);
   const [editForm, setEditForm] = useState<DriverForm>(newDriverForm);
   const [selectedAccounts, setSelectedAccounts] = useState<Readonly<Record<string, string>>>({});
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<DriverFilter>('all');
+  const query = crew.state.globalFilter;
+  const setQuery = (value: string) => crew.handlers.onGlobalFilterChange(value);
+  const filter = filterFromColumns(crew.state.columnFilters);
+  const setFilter = (value: DriverFilter) => crew.handlers.onColumnFiltersChange(toColumnFilters(value));
+  const [accountsError, setAccountsError] = useState(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
+  // Las cuentas solo las ve ADMIN; se vuelven a pedir con la página tras vincular o desvincular.
+  const loadAccounts = useCallback(async () => {
+    if (!canBindAccounts) return;
     try {
-      const [loadedDrivers, loadedAccounts] = await Promise.all([
-        client.listDrivers(),
-        canBindAccounts ? client.listDriverAccounts() : Promise.resolve([]),
-      ]);
-      setDrivers(loadedDrivers);
-      setAccounts(loadedAccounts);
+      setAccounts(await client.listDriverAccounts());
+      setAccountsError(false);
     } catch {
-      setLoadError('No se pudieron cargar los conductores. Comprueba la conexión e inténtalo de nuevo.');
-    } finally {
-      setLoading(false);
+      setAccountsError(true);
     }
   }, [canBindAccounts, client]);
 
-  useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => { void loadAccounts(); }, [loadAccounts]);
+
+  const loadData = useCallback(async () => {
+    crew.reload();
+    await loadAccounts();
+  }, [crew.reload, loadAccounts]);
+
+  // El resumen describe todo el personal: se toma de los conteos cuando no hay búsqueda y se
+  // conserva mientras se busca (los conteos del servidor aplican la búsqueda).
+  const facets = crew.meta?.counts;
+  const searching = crew.params.q !== undefined;
+  const [crewSummary, setCrewSummary] = useState<{ readonly active: number; readonly total: number; readonly linked: number } | null>(null);
+  useEffect(() => {
+    if (facets === undefined || searching) return;
+    const counts = chipCounts(facets);
+    setCrewSummary({ active: counts.active, total: counts.all, linked: facets.account?.linked ?? 0 });
+  }, [facets, searching]);
+  const loading = crew.meta === null && crew.error === null;
+  const loadError = crew.meta === null && crew.error !== null
+    ? 'No se pudieron cargar los conductores. Comprueba la conexión e inténtalo de nuevo.' : null;
 
   function openCreate() {
     setActionError(null);
@@ -93,7 +117,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         fullName: form.fullName.trim(), documentNumber: form.documentNumber.trim(),
         phone: form.phone.trim(), licenseNumber: form.licenseNumber.trim(), status: form.status,
       });
-      setDrivers((current) => [...current, created].sort(compareDrivers));
+      crew.reload();
       setForm(newDriverForm());
       setCreateOpen(false);
       setRegistered(`El conductor ${created.fullName} se registró correctamente.`);
@@ -124,7 +148,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
         fullName: editForm.fullName.trim(), phone: editForm.phone.trim(),
         licenseNumber: editForm.licenseNumber.trim(), status: editForm.status,
       });
-      setDrivers((current) => current.map((item) => item.id === updated.id ? updated : item));
+      crew.reload();
       setEditingDriverId(null);
       setNotice(`Cambios de ${updated.fullName} guardados.`);
     } catch (cause) {
@@ -180,13 +204,12 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const editingDriver = drivers.find((driver) => driver.id === editingDriverId);
   const accountDriver = drivers.find((driver) => driver.id === accountDriverId);
   const sheetOpen = createOpen || editingDriver !== undefined || accountDriver !== undefined;
-  const activeCount = drivers.filter((driver) => driver.status === 'active').length;
-  const linkedCount = accounts.filter((account) => account.driverId !== null).length;
   const ready = !loading && loadError === null;
+  const crewEmpty = ready && crewSummary?.total === 0;
 
   const accountByDriver = useMemo(() => indexAccountsByDriver(accounts), [accounts]);
-  const filterCounts = useMemo(() => countByFilter(drivers, accountByDriver), [accountByDriver, drivers]);
-  const visibleDrivers = useMemo(() => filterDrivers(drivers, filter, query, accountByDriver), [accountByDriver, drivers, filter, query]);
+  const filterCounts = chipCounts(facets);
+  const visibleDrivers = drivers;
   const filterOptions = DRIVER_FILTERS.filter((option) => canBindAccounts || option.value !== 'unlinked');
 
   function openAccount(driver: Driver) {
@@ -197,7 +220,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
 
   return (
     <section className="flex flex-col gap-6">
-      <PageHeader title="Conductores" description={ready && drivers.length > 0 ? `${activeCount} de ${drivers.length} conductores activos${canBindAccounts ? ` · ${linkedCount} con cuenta vinculada` : ''}.` : 'Administra los perfiles operativos y las cuentas autorizadas para ejecutar rutas.'}>
+      <PageHeader title="Conductores" description={ready && crewSummary !== null && crewSummary.total > 0 ? `${crewSummary.active} de ${crewSummary.total} conductores activos${canBindAccounts ? ` · ${crewSummary.linked} con cuenta vinculada` : ''}.` : 'Administra los perfiles operativos y las cuentas autorizadas para ejecutar rutas.'}>
         <Button onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Registrar conductor</Button>
       </PageHeader>
 
@@ -209,7 +232,10 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       {!loading && loadError !== null && (
         <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => void loadData()}>Reintentar</Button>}>{loadError}</ErrorNotice>
       )}
-      {ready && drivers.length === 0 && (
+      {canBindAccounts && accountsError && (
+        <ErrorNotice>No se pudieron cargar las cuentas DRIVER. Las vinculaciones pueden no estar al día.</ErrorNotice>
+      )}
+      {crewEmpty && (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon"><IdCard aria-hidden="true" /></EmptyMedia>
@@ -219,7 +245,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
           <EmptyContent><Button onClick={openCreate}>Registrar el primero</Button></EmptyContent>
         </Empty>
       )}
-      {ready && drivers.length > 0 && (
+      {ready && !crewEmpty && (
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap" role="group" aria-label="Filtrar conductores">
@@ -250,13 +276,14 @@ export function DriverManagementPage({ client, canBindAccounts }: {
               </EmptyContent>
             </Empty>
           ) : (
-            <ul aria-label="Personal registrado" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <ul aria-label="Personal registrado" aria-busy={crew.loading} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {visibleDrivers.map((driver) => (
                 <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts}
                   onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
               ))}
             </ul>
           )}
+          <ListPager table={crew} label="conductores" />
         </div>
       )}
 
@@ -351,10 +378,6 @@ function AccountSection({ canBindAccounts, driver, linkedAccount, choices, selec
       <Button type="button" disabled={selectedUserId === '' || busy} onClick={onLink}>Vincular cuenta</Button>
     </div>
   );
-}
-
-function compareDrivers(left: Driver, right: Driver): number {
-  return left.fullName.localeCompare(right.fullName) || left.id.localeCompare(right.id);
 }
 
 function errorMessage(error: unknown, fallback: string): string {

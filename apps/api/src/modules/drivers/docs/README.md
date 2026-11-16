@@ -22,7 +22,8 @@ and gated PostgreSQL integration tests are implemented.
 | Method | Path | Roles | Result |
 |---|---|---|---|
 | `POST` | `/api/v1/drivers` | ADMIN, DISPATCHER | `201` with `Location`; `409 DRIVER_INVARIANT_VIOLATION` on a repeated document |
-| `GET` | `/api/v1/drivers` | ADMIN, DISPATCHER | `200` with the caller organization drivers, oldest first |
+| `GET` | `/api/v1/drivers` | ADMIN, DISPATCHER | `200` with one page `{ data, meta }`: `page`, `pageSize` (max 100), `q` (full name, document, license or phone; case- and accent-insensitive), `sort` (`fullName` default ascending, `createdAt`), `status=active,inactive`, `account=linked\|unlinked`, `ids`. `meta.counts.status` and `meta.counts.account` ignore both `status` and `account` (one chip group) but keep `q`. The account state is a cross-module read of `driver_accounts`. `400 DRIVER_INVALID_INPUT` on unknown or invalid parameters |
+| `GET` | `/api/v1/drivers/options` | ADMIN, DISPATCHER | `200` with every driver of the caller organization, oldest first (selectors and name lookups) |
 | `GET` | `/api/v1/drivers/accounts` | ADMIN | Active and disabled same-tenant DRIVER accounts with binding state; never returns password hashes |
 | `GET` | `/api/v1/drivers/{driverId}` | ADMIN, DISPATCHER | `200`, or `404 DRIVER_NOT_FOUND` |
 | `PATCH` | `/api/v1/drivers/{driverId}` | ADMIN, DISPATCHER | `200`, `400 DRIVER_INVALID_INPUT`, or `404 DRIVER_NOT_FOUND` |
