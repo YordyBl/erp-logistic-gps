@@ -212,7 +212,98 @@ describe('GET /api/v1/vehicles', () => {
           vehicle.organizationId === ORGANIZATION_ID,
       ),
     ).toBe(true);
+    expect(response.body.meta).toEqual({
+      page: 1, pageSize: 20, total: 2, counts: { status: { active: 2, inactive: 0 } },
+    });
   });
+
+  /** Four own vehicles (one inactive) and one in the other organization. */
+  async function seedFleet() {
+    const actors = await seedActors();
+    const create = async (token: string, overrides: Record<string, unknown>) => {
+      const response = await createVehicle(actors.testApp, token, validVehicleBody(overrides));
+      expect(response.status).toBe(201);
+      return response.body.data as { id: string };
+    };
+    const delta = await create(actors.adminToken, { plate: 'DDD-400', type: 'Camión 5T' });
+    const alpha = await create(actors.adminToken, { plate: 'AAA-100', type: 'Furgoneta' });
+    const charlie = await create(actors.adminToken, { plate: 'CCC-300', type: 'Moto_carga', status: 'inactive' });
+    const bravo = await create(actors.adminToken, { plate: 'BBB-200', type: 'Camioneta 100%' });
+    const foreign = await create(actors.otherAdminToken, { plate: 'AAA-100', type: 'Furgoneta' });
+    return { ...actors, delta, alpha, charlie, bravo, foreign };
+  }
+
+  it('pages, sorts by plate or creation, filters by status and ids and searches plate and type', async () => {
+    const { testApp, adminToken, otherAdminToken, alpha, bravo, charlie, delta, foreign } = await seedFleet();
+    const list = (query: Record<string, string>) =>
+      request(testApp.app).get(VEHICLES_PATH).query(query).set(bearer(adminToken));
+    const ids = async (query: Record<string, string>) =>
+      (await list(query)).body.data.map((vehicle: { id: string }) => vehicle.id);
+
+    await expect(ids({})).resolves.toEqual([alpha.id, bravo.id, charlie.id, delta.id]);
+    await expect(ids({ sort: 'plate:desc' })).resolves.toEqual([delta.id, charlie.id, bravo.id, alpha.id]);
+    await expect(ids({ sort: 'createdAt:asc' })).resolves.toEqual([delta.id, alpha.id, charlie.id, bravo.id]);
+
+    const second = await list({ page: '2', pageSize: '3' });
+    expect(second.body.data.map((vehicle: { id: string }) => vehicle.id)).toEqual([delta.id]);
+    expect(second.body.meta).toEqual({
+      page: 2, pageSize: 3, total: 4, counts: { status: { active: 3, inactive: 1 } },
+    });
+
+    const inactive = await list({ status: 'inactive' });
+    expect(inactive.body.data.map((vehicle: { id: string }) => vehicle.id)).toEqual([charlie.id]);
+    expect(inactive.body.meta).toMatchObject({ total: 1, counts: { status: { active: 3, inactive: 1 } } });
+
+    await expect(ids({ q: 'bbb' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: 'camion' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: 'CAMIÓN' })).resolves.toEqual([delta.id]);
+    await expect(ids({ q: '100%' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: '_' })).resolves.toEqual([charlie.id]);
+
+    await expect(ids({ ids: `${alpha.id},${foreign.id}` })).resolves.toEqual([alpha.id]);
+    const other = await request(testApp.app).get(VEHICLES_PATH).set(bearer(otherAdminToken));
+    expect(other.body.data.map((vehicle: { id: string }) => vehicle.id)).toEqual([foreign.id]);
+  });
+
+  it.each([
+    ['an unknown sort field', { sort: 'type:asc' }],
+    ['a page size above 100', { pageSize: '101' }],
+    ['an unknown status', { status: 'retired' }],
+    ['a malformed id', { ids: 'nope' }],
+    ['an unknown parameter', { limit: '5' }],
+  ])('returns 400 for %s', async (_label, query) => {
+    const { testApp, adminToken } = await seedActors();
+
+    const response = await request(testApp.app).get(VEHICLES_PATH).query(query).set(bearer(adminToken));
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('VEHICLE_INVALID_INPUT');
+  });
+});
+
+describe('GET /api/v1/vehicles/options', () => {
+  it('returns the whole tenant fleet, oldest first, for every role', async () => {
+    const { testApp, driverToken, alpha, bravo, charlie, delta } = await seedFleetForOptions();
+
+    const response = await request(testApp.app).get(`${VEHICLES_PATH}/options`).set(bearer(driverToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.map((vehicle: { id: string }) => vehicle.id))
+      .toEqual([delta.id, alpha.id, charlie.id, bravo.id]);
+    expect(response.body.meta).toBeUndefined();
+  });
+
+  async function seedFleetForOptions() {
+    const actors = await seedActors();
+    const create = async (overrides: Record<string, unknown>) =>
+      (await createVehicle(actors.testApp, actors.adminToken, validVehicleBody(overrides))).body.data as { id: string };
+    const delta = await create({ plate: 'DDD-400' });
+    const alpha = await create({ plate: 'AAA-100' });
+    const charlie = await create({ plate: 'CCC-300', status: 'inactive' });
+    const bravo = await create({ plate: 'BBB-200' });
+    await createVehicle(actors.testApp, actors.otherAdminToken, validVehicleBody({ plate: 'ZZZ-999' }));
+    return { ...actors, delta, alpha, charlie, bravo };
+  }
 });
 
 describe('GET /api/v1/vehicles/:vehicleId', () => {

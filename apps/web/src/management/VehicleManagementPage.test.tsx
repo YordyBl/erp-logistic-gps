@@ -37,16 +37,38 @@ const stats: VehicleRouteStats = {
 
 const page = <T,>(data: readonly T[], total = data.length) => ({ data, meta: { page: 1, pageSize: 20, total } });
 
-function buildClient() {
+/** Paginates and filters like `GET /vehicles`: `status` and `q` (plate or type), counts ignore `status`. */
+function fleetPage(fleet: readonly Vehicle[]) {
+  return async (params: PageParams) => {
+    const needle = String(params.q ?? '').toLowerCase();
+    const searched = fleet.filter((item) => needle === '' || `${item.plate} ${item.type}`.toLowerCase().includes(needle));
+    const statuses = params.status === undefined ? undefined : String(params.status).split(',');
+    const filtered = searched.filter((item) => statuses === undefined || statuses.includes(item.status));
+    const pageSize = Number(params.pageSize ?? 20);
+    const start = (Number(params.page ?? 1) - 1) * pageSize;
+    return {
+      data: filtered.slice(start, start + pageSize),
+      meta: {
+        page: Number(params.page ?? 1), pageSize, total: filtered.length,
+        counts: { status: {
+          active: searched.filter((item) => item.status === 'active').length,
+          inactive: searched.filter((item) => item.status === 'inactive').length,
+        } },
+      },
+    };
+  };
+}
+
+function buildClient(fleet: readonly Vehicle[] = [vehicle]) {
   return {
-    listVehicles: vi.fn().mockResolvedValue([vehicle]),
+    listVehiclesPage: vi.fn().mockImplementation(fleetPage(fleet)),
     createVehicle: vi.fn().mockResolvedValue({ ...vehicle, id: 'vehicle-2', plate: 'XYZ-987' }),
     updateVehicle: vi.fn().mockResolvedValue({ ...vehicle, status: 'inactive' }),
     getVehicleRouteStats: vi.fn().mockResolvedValue([stats]),
     listDispatchRoutesPage: vi.fn().mockImplementation(async (params: PageParams) =>
       page(params.vehicleId === vehicle.id ? [route] : [])),
     listDrivers: vi.fn().mockResolvedValue([driver]),
-  } satisfies Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
+  } satisfies Pick<ApiClient, 'listVehiclesPage' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
     | 'listDispatchRoutesPage' | 'listDrivers'>;
 }
 
@@ -64,6 +86,8 @@ describe('VehicleManagementPage', () => {
     const item = await screen.findByRole('listitem', { name: /ABC-123/ });
     expect(within(item).getByText(/Van/)).toBeTruthy();
     expect(screen.getByText('1,200 kg')).toBeTruthy();
+    expect(screen.getByText('1 de 1 vehículos activos.')).toBeTruthy();
+    client.listVehiclesPage.mockImplementation(fleetPage([vehicle, { ...vehicle, id: 'vehicle-2', plate: 'XYZ-987' }]));
 
     await user.click(screen.getByRole('button', { name: 'Registrar vehículo' }));
     await user.type(screen.getByLabelText('Placa'), 'xyz-987');
@@ -122,7 +146,7 @@ describe('VehicleManagementPage', () => {
     const user = setupUser();
     const client = buildClient();
     const moto: Vehicle = { ...vehicle, id: 'vehicle-2', plate: 'MOT-001', type: 'Moto', capacityKg: null };
-    client.listVehicles.mockResolvedValue([vehicle, moto]);
+    client.listVehiclesPage.mockImplementation(fleetPage([vehicle, moto]));
     render(<VehicleManagementPage client={client} />);
 
     const item = await screen.findByRole('listitem', { name: /MOT-001/ });
@@ -139,7 +163,8 @@ describe('VehicleManagementPage', () => {
     const client = buildClient();
     render(<VehicleManagementPage client={client} />);
 
-    const item = await screen.findByRole('listitem', { name: /ABC-123/ });
+    await screen.findByRole('listitem', { name: /ABC-123/ });
+    client.listVehiclesPage.mockImplementation(fleetPage([{ ...vehicle, status: 'inactive', capacityKg: null }]));
     await user.click(screen.getByRole('button', { name: 'Editar vehículo ABC-123' }));
     const sheet = screen.getByRole('dialog', { name: 'Editar ABC-123' });
     expect(within(sheet).queryByLabelText('Placa')).toBeNull();
@@ -150,7 +175,7 @@ describe('VehicleManagementPage', () => {
     await waitFor(() => expect(client.updateVehicle).toHaveBeenCalledWith(vehicle.id, {
       type: vehicle.type, capacityKg: null, status: 'inactive',
     }));
-    expect(within(item).getByText('ABC-123')).toBeTruthy();
+    const item = await screen.findByRole('listitem', { name: /ABC-123/ });
     expect(await within(item).findByText('Inactivo')).toBeTruthy();
     expect(screen.queryByRole('dialog')).toBeNull();
   });
@@ -183,11 +208,49 @@ describe('VehicleManagementPage', () => {
   it('keeps loading errors, empty catalogs and retry accessible', async () => {
     const user = setupUser();
     const client = buildClient();
-    client.listVehicles.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    client.listVehiclesPage.mockRejectedValueOnce(new Error('offline')).mockImplementation(fleetPage([]));
     render(<VehicleManagementPage client={client} />);
 
     expect(await screen.findByRole('alert')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Reintentar' }));
     expect(await screen.findByText('Aún no hay vehículos')).toBeTruthy();
+  });
+
+  it('searches, filters by availability and pages the fleet on the server', async () => {
+    const user = setupUser();
+    const fleet = Array.from({ length: 12 }, (_, index): Vehicle => ({
+      ...vehicle, id: `vehicle-${index + 1}`, plate: `PLT-${String(index + 1).padStart(3, '0')}`,
+      type: index === 11 ? 'Moto' : 'Van', status: index < 9 ? 'active' : 'inactive',
+    }));
+    const client = buildClient(fleet);
+    render(<VehicleManagementPage client={client} />);
+
+    expect(await screen.findByRole('listitem', { name: /PLT-001/ })).toBeTruthy();
+    expect(screen.getByText('9 de 12 vehículos activos.')).toBeTruthy();
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
+    expect(client.listVehiclesPage).toHaveBeenLastCalledWith({ page: 1, pageSize: 10 }, expect.any(AbortSignal));
+
+    await user.click(screen.getByRole('button', { name: 'Página siguiente de vehículos' }));
+    expect(await screen.findByRole('listitem', { name: /PLT-012/ })).toBeTruthy();
+    expect(screen.getByText('Página 2 de 2')).toBeTruthy();
+
+    const filters = screen.getByRole('group', { name: 'Filtrar vehículos' });
+    expect(within(filters).getByRole('button', { name: /Inactivos/ }).textContent).toContain('3');
+    await user.click(within(filters).getByRole('button', { name: /Inactivos/ }));
+    await waitFor(() => expect(client.listVehiclesPage).toHaveBeenLastCalledWith(
+      { status: 'inactive', page: 1, pageSize: 10 }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(3));
+
+    await user.click(within(filters).getByRole('button', { name: /Todos/ }));
+    await user.type(screen.getByLabelText('Buscar vehículos'), 'moto');
+    await waitFor(() => expect(client.listVehiclesPage).toHaveBeenLastCalledWith(
+      { page: 1, pageSize: 10, q: 'moto' }, expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    // The fleet summary keeps describing the whole fleet while searching.
+    expect(screen.getByText('9 de 12 vehículos activos.')).toBeTruthy();
+
+    await user.clear(screen.getByLabelText('Buscar vehículos'));
+    await user.type(screen.getByLabelText('Buscar vehículos'), 'zzz');
+    expect(await screen.findByText('Ningún vehículo coincide')).toBeTruthy();
   });
 });

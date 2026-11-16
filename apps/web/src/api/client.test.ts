@@ -334,26 +334,31 @@ describe('ApiClient vehicle management', () => {
       id: 'vehicle-1', organizationId: 'org-1', plate: 'ABC-123', type: 'Van', capacityKg: 1200,
       status: 'active', createdAt: '2026-11-02T10:00:00.000Z', updatedAt: '2026-11-02T10:00:00.000Z',
     };
+    const meta = { page: 2, pageSize: 10, total: 11, counts: { status: { active: 1, inactive: 10 } } };
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [vehicle] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [vehicle], meta }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: vehicle }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { ...vehicle, capacityKg: null, status: 'inactive' } }), { status: 200 }));
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
     client.setAccessToken('operator-token');
 
     await expect(client.listVehicles()).resolves.toEqual([vehicle]);
+    await expect(client.listVehiclesPage({ page: 2, pageSize: 10, q: 'abc', status: ['active'] }))
+      .resolves.toEqual({ data: [vehicle], meta });
     await expect(client.createVehicle({ plate: 'abc-123', type: 'Van', capacityKg: 1200 }))
       .resolves.toEqual(vehicle);
     await expect(client.updateVehicle(vehicle.id, { capacityKg: null, status: 'inactive' }))
       .resolves.toMatchObject({ capacityKg: null, status: 'inactive' });
 
     expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method ?? 'GET'])).toEqual([
-      ['/api/v1/vehicles', 'GET'], ['/api/v1/vehicles', 'POST'], ['/api/v1/vehicles/vehicle-1', 'PATCH'],
+      ['/api/v1/vehicles/options', 'GET'], ['/api/v1/vehicles?page=2&pageSize=10&q=abc&status=active', 'GET'],
+      ['/api/v1/vehicles', 'POST'], ['/api/v1/vehicles/vehicle-1', 'PATCH'],
     ]);
-    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({
       plate: 'abc-123', type: 'Van', capacityKg: 1200,
     });
-    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({ capacityKg: null, status: 'inactive' });
+    expect(JSON.parse(String(fetcher.mock.calls[3]?.[1]?.body))).toEqual({ capacityKg: null, status: 'inactive' });
   });
 });
 

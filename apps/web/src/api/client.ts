@@ -705,8 +705,17 @@ export class ApiClient {
     });
   }
 
+  /** La flota completa, para selectores y para resolver placas por ID. */
   async listVehicles(): Promise<readonly Vehicle[]> {
-    return this.requestData('/vehicles');
+    return this.requestData('/vehicles/options');
+  }
+
+  /**
+   * Una página de la flota. Filtros: `status` e `ids`; `q` busca en la placa y el tipo; orden por
+   * `plate` (por defecto, ascendente) o `createdAt`. `meta.counts` trae `status`.
+   */
+  listVehiclesPage(params: PageParams, signal?: AbortSignal): Promise<Page<Vehicle>> {
+    return this.requestPage('/vehicles', params, signal);
   }
 
   async createVehicle(input: CreateVehicleInput): Promise<Vehicle> {

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 
 import type { ApiClient, DispatchRoute, Driver, Vehicle, VehicleRouteStats, VehicleStatus } from '../api/client.js';
 import { FormSheet } from '../components/FormSheet.js';
+import { ListPager } from '../components/ListPager.js';
 import { SelectField, TextField } from '../components/FormFields.js';
 import { RegistrationDialog } from '../components/RegistrationDialog.js';
 import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
@@ -11,16 +12,26 @@ import { SearchInput } from '../components/SearchInput.js';
 import { Button } from '../components/ui/button.js';
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { FieldGroup } from '../components/ui/field.js';
+import { useServerTable } from '../hooks/use-server-table.js';
 import { IDENTIFIER_PATTERN } from '../lib/patterns.js';
 import { VehicleDetail } from './vehicles/VehicleDetail.js';
 import { VehicleListItem } from './vehicles/VehicleListItem.js';
 import { EMPTY_STATS, toMonthlyRoutes, toVehicleStats } from './vehicles/vehicleStats.js';
 
-type VehicleClient = Pick<ApiClient, 'listVehicles' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
+type VehicleClient = Pick<ApiClient, 'listVehiclesPage' | 'createVehicle' | 'updateVehicle' | 'getVehicleRouteStats'
   | 'listDispatchRoutesPage' | 'listDrivers'>;
 
 /** Rutas del historial del vehículo elegido: la página más reciente. */
 const HISTORY_PAGE_SIZE = 20;
+/** Vehículos por página de la lista. */
+export const FLEET_PAGE_SIZE = 10;
+
+type FleetFilter = 'all' | VehicleStatus;
+const FLEET_FILTERS: readonly { readonly value: FleetFilter; readonly label: string }[] = [
+  { value: 'all', label: 'Todos' },
+  { value: 'active', label: 'Activos' },
+  { value: 'inactive', label: 'Inactivos' },
+];
 
 interface RouteHistoryState {
   readonly vehicleId: string;
@@ -43,16 +54,21 @@ const STATUS_OPTIONS: readonly { readonly value: VehicleStatus; readonly label: 
 const emptyForm = (): VehicleForm => ({ plate: '', type: '', capacityKg: '' });
 
 export function VehicleManagementPage({ client }: { readonly client: VehicleClient }) {
-  const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
+  const fleet = useServerTable<Vehicle>(
+    (params, signal) => client.listVehiclesPage(params, signal), { pageSize: FLEET_PAGE_SIZE },
+  );
+  const vehicles = fleet.rows;
   const [routeStats, setRouteStats] = useState<readonly VehicleRouteStats[]>([]);
   const [history, setHistory] = useState<RouteHistoryState | null>(null);
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [routesError, setRoutesError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const query = fleet.state.globalFilter;
+  const setQuery = (value: string) => fleet.handlers.onGlobalFilterChange(value);
+  const filter = (fleet.state.columnFilters.find((item) => item.id === 'status')?.value as FleetFilter | undefined) ?? 'all';
+  const setFilter = (value: FleetFilter) =>
+    fleet.handlers.onColumnFiltersChange(value === 'all' ? [] : [{ id: 'status', value }]);
   const detailRef = useRef<HTMLDivElement>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [registered, setRegistered] = useState<string | null>(null);
@@ -65,28 +81,32 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
     type: '', capacityKg: '', status: 'active',
   });
 
-  const loadVehicles = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      // Las estadísticas complementan la flota: si fallan, los vehículos se muestran igual.
-      const [loadedVehicles, loadedStats, loadedDrivers] = await Promise.all([
-        client.listVehicles(),
-        client.getVehicleRouteStats().catch(() => null),
-        client.listDrivers().catch(() => [] as readonly Driver[]),
-      ]);
-      setVehicles(loadedVehicles);
-      setRouteStats(loadedStats ?? []);
-      setDrivers(loadedDrivers);
-      setRoutesError(loadedStats === null);
-    } catch {
-      setLoadError('No se pudieron cargar los vehículos. Comprueba la conexión e inténtalo de nuevo.');
-    } finally {
-      setLoading(false);
-    }
+  // Las estadísticas y los conductores complementan la flota: si fallan, los vehículos se muestran igual.
+  const loadExtras = useCallback(async () => {
+    const [loadedStats, loadedDrivers] = await Promise.all([
+      client.getVehicleRouteStats().catch(() => null),
+      client.listDrivers().catch(() => [] as readonly Driver[]),
+    ]);
+    setRouteStats(loadedStats ?? []);
+    setDrivers(loadedDrivers);
+    setRoutesError(loadedStats === null);
   }, [client]);
 
-  useEffect(() => { void loadVehicles(); }, [loadVehicles]);
+  useEffect(() => { void loadExtras(); }, [loadExtras]);
+
+  // El resumen describe toda la flota: se toma de los conteos cuando no hay búsqueda y se conserva
+  // mientras se busca (los conteos del servidor aplican la búsqueda).
+  const [fleetSummary, setFleetSummary] = useState<{ readonly active: number; readonly total: number } | null>(null);
+  const statusCounts = fleet.meta?.counts?.status;
+  const searching = fleet.params.q !== undefined;
+  useEffect(() => {
+    if (statusCounts === undefined || searching) return;
+    const active = statusCounts.active ?? 0;
+    setFleetSummary({ active, total: active + (statusCounts.inactive ?? 0) });
+  }, [searching, statusCounts]);
+  const loading = fleet.meta === null && fleet.error === null;
+  const loadError = fleet.meta === null && fleet.error !== null
+    ? 'No se pudieron cargar los vehículos. Comprueba la conexión e inténtalo de nuevo.' : null;
 
   function openCreate() {
     setActionError(null);
@@ -109,7 +129,8 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         plate: form.plate.trim(), type: form.type.trim(),
         ...(capacityKg === undefined ? {} : { capacityKg }),
       });
-      setVehicles((current) => [...current, created].sort(compareVehicles));
+      fleet.reload();
+      void loadExtras();
       setForm(emptyForm());
       setCreating(false);
       setRegistered(`El vehículo ${created.plate} se registró correctamente.`);
@@ -147,7 +168,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
         capacityKg: capacityKg ?? null,
         status: editForm.status,
       });
-      setVehicles((current) => current.map((item) => item.id === updated.id ? updated : item));
+      fleet.reload();
       setEditingVehicleId(null);
       setNotice(`Cambios del vehículo ${updated.plate} guardados.`);
     } catch (cause) {
@@ -158,17 +179,12 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
   }
 
   const editingVehicle = vehicles.find((vehicle) => vehicle.id === editingVehicleId);
-  const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
-  const activeCapacity = activeVehicles.reduce((total, vehicle) => total + (vehicle.capacityKg ?? 0), 0);
   const ready = !loading && loadError === null;
+  const fleetEmpty = ready && fleetSummary?.total === 0;
 
   const statsByVehicle = useMemo(() => new Map(routeStats.map((item) => [item.vehicleId, item] as const)), [routeStats]);
   const driversById = useMemo(() => new Map(drivers.map((driver) => [driver.id, driver] as const)), [drivers]);
-  const visibleVehicles = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase('es-PE');
-    return needle === '' ? vehicles : vehicles.filter((vehicle) =>
-      `${vehicle.plate} ${vehicle.type}`.toLocaleLowerCase('es-PE').includes(needle));
-  }, [query, vehicles]);
+  const visibleVehicles = vehicles;
   const selectedVehicle = visibleVehicles.find((vehicle) => vehicle.id === selectedId) ?? visibleVehicles[0];
   const selectedVehicleId = selectedVehicle?.id;
   const selectedStats = selectedVehicleId === undefined ? undefined : statsByVehicle.get(selectedVehicleId);
@@ -201,7 +217,7 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
 
   return (
     <section className="flex flex-col gap-6">
-      <PageHeader title="Vehículos" description={ready && vehicles.length > 0 ? `${activeVehicles.length} de ${vehicles.length} vehículos activos · ${new Intl.NumberFormat('es-PE').format(activeCapacity)} kg de capacidad activa.` : 'Registra la flota y marca cada vehículo activo o inactivo para la operación.'}>
+      <PageHeader title="Vehículos" description={ready && fleetSummary !== null && fleetSummary.total > 0 ? `${fleetSummary.active} de ${fleetSummary.total} vehículos activos.` : 'Registra la flota y marca cada vehículo activo o inactivo para la operación.'}>
         <Button onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Registrar vehículo</Button>
       </PageHeader>
 
@@ -210,9 +226,9 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
 
       {loading && <LoadingRows label="Cargando vehículos…" />}
       {!loading && loadError !== null && (
-        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => void loadVehicles()}>Reintentar</Button>}>{loadError}</ErrorNotice>
+        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => fleet.reload()}>Reintentar</Button>}>{loadError}</ErrorNotice>
       )}
-      {ready && vehicles.length === 0 && (
+      {fleetEmpty && (
         <Empty className="border">
           <EmptyHeader>
             <EmptyMedia variant="icon"><Truck aria-hidden="true" /></EmptyMedia>
@@ -222,10 +238,23 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
           <EmptyContent><Button onClick={openCreate}>Registrar el primero</Button></EmptyContent>
         </Empty>
       )}
-      {ready && vehicles.length > 0 && (
+      {ready && !fleetEmpty && (
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
           <div className="flex flex-col gap-3 lg:sticky lg:top-4">
             <SearchInput value={query} onChange={setQuery} label="Buscar vehículos" placeholder="Buscar placa o tipo" className="w-full" />
+            <div className="grid grid-cols-3 gap-1" role="group" aria-label="Filtrar vehículos">
+              {FLEET_FILTERS.map((option) => (
+                <Button key={option.value} type="button" variant={filter === option.value ? 'secondary' : 'ghost'}
+                  aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}>
+                  {option.label}
+                  <span className="text-muted-foreground tabular-nums">
+                    {option.value === 'all'
+                      ? (statusCounts?.active ?? 0) + (statusCounts?.inactive ?? 0)
+                      : statusCounts?.[option.value] ?? 0}
+                  </span>
+                </Button>
+              ))}
+            </div>
             {visibleVehicles.length === 0 ? (
               <Empty className="border">
                 <EmptyHeader>
@@ -233,16 +262,17 @@ export function VehicleManagementPage({ client }: { readonly client: VehicleClie
                   <EmptyTitle>Ningún vehículo coincide</EmptyTitle>
                   <EmptyDescription>Prueba con otra placa o tipo de vehículo.</EmptyDescription>
                 </EmptyHeader>
-                <EmptyContent><Button variant="outline" onClick={() => setQuery('')}>Ver todos</Button></EmptyContent>
+                <EmptyContent><Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button></EmptyContent>
               </Empty>
             ) : (
-              <ul aria-label="Flota registrada" className="flex flex-col gap-3 lg:max-h-[calc(100svh-12rem)] lg:overflow-y-auto lg:p-1">
+              <ul aria-label="Flota registrada" aria-busy={fleet.loading} className="flex flex-col gap-3 lg:max-h-[calc(100svh-16rem)] lg:overflow-y-auto lg:p-1">
                 {visibleVehicles.map((vehicle) => (
                   <VehicleListItem key={vehicle.id} vehicle={vehicle} stats={statsOf(statsByVehicle.get(vehicle.id))}
                     selected={vehicle.id === selectedVehicle?.id} onSelect={() => selectVehicle(vehicle)} />
                 ))}
               </ul>
             )}
+            <ListPager table={fleet} label="vehículos" />
           </div>
           <div ref={detailRef} className="scroll-mt-4">
             {selectedVehicle !== undefined && (
@@ -309,10 +339,6 @@ function parseCapacity(value: string): number | undefined | typeof INVALID_CAPAC
   if (value.trim() === '') return undefined;
   const capacity = Number(value);
   return Number.isFinite(capacity) && capacity > 0 && capacity <= 100_000 ? capacity : INVALID_CAPACITY;
-}
-
-function compareVehicles(left: Vehicle, right: Vehicle): number {
-  return left.plate.localeCompare(right.plate) || left.id.localeCompare(right.id);
 }
 
 

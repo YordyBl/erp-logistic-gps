@@ -222,7 +222,8 @@ is a defect.
 | `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | List or read the driver catalog (any authenticated role) |
 | `PATCH` | `/api/v1/drivers/:driverId` | Update the mutable driver fields (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/vehicles` | Create a vehicle (ADMIN or DISPATCHER) |
-| `GET` | `/api/v1/vehicles`, `/api/v1/vehicles/:vehicleId` | List or read the fleet catalog (any authenticated role) |
+| `GET` | `/api/v1/vehicles`, `/api/v1/vehicles/:vehicleId` | Page (search, status filter, sort) or read the fleet catalog (any authenticated role) |
+| `GET` | `/api/v1/vehicles/options` | Whole fleet for selectors (any authenticated role) |
 | `PATCH` | `/api/v1/vehicles/:vehicleId` | Update the mutable vehicle fields (ADMIN or DISPATCHER) |
 | `GET` | `/healthz` | Liveness; never touches PostgreSQL |
 | `GET` | `/readyz` | Readiness; `503` while PostgreSQL is unavailable |

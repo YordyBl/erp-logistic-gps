@@ -21,7 +21,8 @@ PostgreSQL integration tests are implemented.
 | Method | Path | Roles | Result |
 |---|---|---|---|
 | `POST` | `/api/v1/vehicles` | ADMIN, DISPATCHER | `201` with `Location`; `409 VEHICLE_INVARIANT_VIOLATION` on a repeated plate |
-| `GET` | `/api/v1/vehicles` | ADMIN, DISPATCHER, DRIVER | `200` with the caller organization vehicles, oldest first |
+| `GET` | `/api/v1/vehicles` | ADMIN, DISPATCHER, DRIVER | `200` with one page `{ data, meta }`: `page`, `pageSize` (max 100), `q` (plate or type, case-insensitive), `sort` (`plate` default ascending, `createdAt`), `status=active,inactive`, `ids`; `meta.counts.status` ignores the status filter. `400 VEHICLE_INVALID_INPUT` on unknown or invalid parameters |
+| `GET` | `/api/v1/vehicles/options` | ADMIN, DISPATCHER, DRIVER | `200` with every vehicle of the caller organization, oldest first (selectors and plate lookups) |
 | `GET` | `/api/v1/vehicles/route-stats` | ADMIN, DISPATCHER | `200` with per-vehicle route totals and a monthly series (`?months=1..12`, default 6), aggregated in SQL by `infrastructure/dispatch/VehicleRouteStatsTypeOrmQuery.ts`; `400 VEHICLE_INVALID_INPUT` on invalid parameters |
 | `GET` | `/api/v1/vehicles/{vehicleId}` | ADMIN, DISPATCHER, DRIVER | `200`, or `404 VEHICLE_NOT_FOUND` |
 | `PATCH` | `/api/v1/vehicles/{vehicleId}` | ADMIN, DISPATCHER | `200`, `400 VEHICLE_INVALID_INPUT`, or `404 VEHICLE_NOT_FOUND` |

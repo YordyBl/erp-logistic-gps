@@ -4,6 +4,8 @@ import type { DataSource } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
+import type { VehiclePageCriteria } from '../../application/ports/VehicleRepository.js';
+import { InMemoryVehicleRepository } from '../../composition/composition-root.js';
 import { Vehicle } from '../../domain/entities/Vehicle.js';
 import { VehicleInvariantError } from '../../domain/errors/VehicleError.js';
 import { probeVehiclesDatabase } from '../../tests/support/test-database.js';
@@ -126,6 +128,51 @@ describe.skipIf(databaseUrl === null)('vehicles persistence (PostgreSQL)', () =>
 
     const listed = await store.list(organizationId);
     expect(listed.map((item) => item.id)).toEqual([vehicle.id]);
+  });
+
+  it('pages, filters, searches and counts like the in-memory adapter', async () => {
+    const ownerId = await newOrganization();
+    const foreignId = await newOrganization();
+    const store = required(repository, 'repository');
+    const memory = new InMemoryVehicleRepository();
+    const variant = (organizationId: string, plate: string, type: string, createdAt: string,
+      status: 'active' | 'inactive' = 'active') =>
+      Vehicle.create({ id: randomUUID(), organizationId, plate, type, capacityKg: null, status, createdAt });
+    const vehicles = [
+      variant(ownerId, 'DDD-400', 'Camión 5T', '2026-10-27T15:00:00.000Z'),
+      variant(ownerId, 'AAA-100', 'Furgoneta', '2026-10-27T16:00:00.000Z'),
+      variant(ownerId, 'CCC-300', 'Moto_carga', '2026-10-27T16:00:00.000Z', 'inactive'),
+      variant(ownerId, 'BBB-200', 'Camioneta 100%', '2026-10-27T17:00:00.000Z'),
+      variant(foreignId, 'AAA-100', 'Furgoneta', '2026-10-27T18:00:00.000Z'),
+    ];
+    for (const vehicle of vehicles) {
+      await store.save(vehicle);
+      await memory.save(vehicle);
+    }
+
+    const base = { page: 1, pageSize: 20, sort: { field: 'plate', direction: 'asc' } } as const;
+    const scenarios: VehiclePageCriteria[] = [
+      base,
+      { ...base, page: 2, pageSize: 3 },
+      { ...base, sort: { field: 'plate', direction: 'desc' } },
+      { ...base, sort: { field: 'createdAt', direction: 'asc' } },
+      { ...base, sort: { field: 'createdAt', direction: 'desc' } },
+      { ...base, status: ['inactive'] },
+      { ...base, q: 'bbb' },
+      { ...base, q: 'CAMIÓN' },
+      { ...base, q: '100%' },
+      { ...base, q: '_' },
+      { ...base, q: 'aaa', status: ['inactive'] },
+      { ...base, ids: [vehicles[0]!.id, vehicles[4]!.id] },
+      { ...base, page: 9 },
+    ];
+    for (const criteria of scenarios) {
+      const [stored, inMemory] = await Promise.all([
+        store.listPage(ownerId, criteria),
+        memory.listPage(ownerId, criteria),
+      ]);
+      expect(stored, JSON.stringify(criteria)).toEqual(inMemory);
+    }
   });
 
   it('enforces unique plate per organization and allows it across tenants', async () => {
