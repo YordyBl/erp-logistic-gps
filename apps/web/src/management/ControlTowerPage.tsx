@@ -12,8 +12,9 @@ import type { RouteDetails } from './routes/routeDetails.js';
 import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
-export const OPENFREEMAP_STYLE = import.meta.env.VITE_MAP_STYLE_URL?.trim() ||
-  'https://tiles.openfreemap.org/styles/bright';
+import { OPENFREEMAP_STYLE } from '../lib/mapStyle.js';
+
+export { OPENFREEMAP_STYLE };
 const DATA_SOURCE = 'control-tower-data';
 const TRACK_SOURCE = 'control-tower-track';
 const POSITIONS_LAYER = 'control-tower-positions';
