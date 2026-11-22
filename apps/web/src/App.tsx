@@ -1,5 +1,6 @@
 import { ArrowLeft } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
 
 import { ApiError, api, type AuthSession } from './api/client.js';
 import { LoginScreen } from './auth/LoginScreen.js';
@@ -18,9 +19,23 @@ import { OrdersPage } from './management/OrdersPage.js';
 import { VehicleManagementPage } from './management/VehicleManagementPage.js';
 import { AppShell } from './shell/AppShell.js';
 import { IncidentNotifications } from './shell/IncidentNotifications.js';
-import type { OperatorView } from './shell/navigation.js';
+import { APP_BASE, orderPath, viewFromPath, viewPath, viewSegment, type OperatorView } from './shell/navigation.js';
 
+/**
+ * `/` belongs to the public site (still to come) and the ERP lives under `/app`.
+ * The router itself is provided by `main.tsx` (and by `MemoryRouter` in tests).
+ */
 export function App() {
+  return (
+    <Routes>
+      <Route path={`${APP_BASE}/*`} element={<ErpApp />} />
+      <Route path="*" element={<Navigate to={APP_BASE} replace />} />
+    </Routes>
+  );
+}
+
+function ErpApp() {
+  const navigate = useNavigate();
   const [session, setSession] = useState<AuthSession | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -48,6 +63,8 @@ export function App() {
   async function signOut(): Promise<void> {
     await api.logout().catch(() => undefined);
     setSession(null);
+    // The next account must not land on the previous one's screen.
+    void navigate(APP_BASE, { replace: true });
   }
 
   if (loading) return <BootScreen />;
@@ -66,69 +83,71 @@ function BootScreen() {
 }
 
 function Workspace({ session, onSignOut }: { readonly session: AuthSession; readonly onSignOut: () => Promise<void> }) {
-  const isDriver = session.user.role === 'DRIVER';
-  const [activeView, setActiveView] = useState<OperatorView>('dashboard');
-  const [selectedOrderCode, setSelectedOrderCode] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const activeView = viewFromPath(useLocation().pathname);
 
-  /** Incident notifications open one order's detail inside Pedidos. */
-  function openOrder(code: string): void {
-    setSelectedOrderCode(code);
-    setActiveView('orders');
-  }
-
-  /** Navigating from the sidebar opens the plain list, without a previously opened detail. */
-  function navigate(view: OperatorView): void {
-    setSelectedOrderCode(null);
-    setActiveView(view);
+  if (session.user.role === 'DRIVER') {
+    return (
+      <AppShell session={session} activeView={activeView} pageId="mi-ruta" onSignOut={() => void onSignOut()}>
+        <Routes>
+          <Route index element={<DriverWorkspace client={api} />} />
+          <Route path="*" element={<Navigate to={APP_BASE} replace />} />
+        </Routes>
+      </AppShell>
+    );
   }
 
   return (
-    <AppShell session={session} activeView={activeView} pageId={isDriver ? 'mi-ruta' : activeView}
-      headerActions={isDriver ? undefined : (
-        <IncidentNotifications client={api} refreshKey={activeView} onOpenOrder={openOrder} onOpenDispatch={() => setActiveView('routes')} />
+    <AppShell session={session} activeView={activeView} pageId={activeView}
+      headerActions={(
+        <IncidentNotifications client={api} refreshKey={activeView}
+          onOpenOrder={(code) => void navigate(orderPath(code))} onOpenDispatch={() => void navigate(viewPath('routes'))} />
       )}
-      onNavigate={navigate} onSignOut={() => void onSignOut()}>
-      {isDriver ? <DriverWorkspace client={api} /> : <OperatorPage view={activeView} session={session} selectedOrderCode={selectedOrderCode}
-        onNavigate={setActiveView} onSelectOrder={setSelectedOrderCode} />}
+      onSignOut={() => void onSignOut()}>
+      <OperatorRoutes session={session} />
     </AppShell>
   );
 }
 
-function OperatorPage({ view, session, selectedOrderCode, onNavigate, onSelectOrder }: {
-  readonly view: OperatorView;
-  readonly session: AuthSession;
-  readonly selectedOrderCode: string | null;
-  readonly onNavigate: (view: OperatorView) => void;
-  readonly onSelectOrder: (code: string | null) => void;
-}) {
-  switch (view) {
-    case 'dashboard':
-      return <DispatchDashboardPage client={api} userName={session.user.email.split('@')[0] ?? ''} onOpenOrders={() => onNavigate('orders')}
-        onOpenDispatch={() => onNavigate('routes')} onOpenControlTower={() => onNavigate('control-tower')} />;
-    case 'customers':
-      return <CustomerCatalogPage client={api} />;
-    case 'orders':
-      return <OrdersPage client={api} selectedCode={selectedOrderCode} onSelectOrder={onSelectOrder} onManage={() => onNavigate('orders-manage')} />;
-    case 'orders-manage':
-      return (
+function OperatorRoutes({ session }: { readonly session: AuthSession }) {
+  const navigate = useNavigate();
+  const goTo = (view: OperatorView) => () => void navigate(viewPath(view));
+
+  return (
+    <Routes>
+      <Route index element={(
+        <DispatchDashboardPage client={api} userName={session.user.email.split('@')[0] ?? ''} onOpenOrders={goTo('orders')}
+          onOpenDispatch={goTo('routes')} onOpenControlTower={goTo('control-tower')} />
+      )} />
+      <Route path={viewSegment('control-tower')} element={<ControlTowerPage client={api} />} />
+      <Route path={`${viewSegment('orders')}/:codigo?`} element={<OrdersRoute />} />
+      <Route path={viewSegment('orders-manage')} element={(
         <>
           <div>
-            <Button variant="ghost" onClick={() => onNavigate('orders')}>
+            <Button variant="ghost" onClick={goTo('orders')}>
               <ArrowLeft data-icon="inline-start" aria-hidden="true" /> Volver a pedidos
             </Button>
           </div>
           <DeliveryOrderManagementPage client={api} />
         </>
-      );
-    case 'routes':
-      return <DispatchPlanningPage client={api} />;
-    case 'control-tower':
-      return <ControlTowerPage client={api} />;
-    case 'drivers':
-      return <DriverManagementPage client={api} canBindAccounts={session.user.role === 'ADMIN'} />;
-    case 'vehicles':
-      return <VehicleManagementPage client={api} />;
-    case 'evidence':
-      return <EvidenceWorkspace client={api} />;
-  }
+      )} />
+      <Route path={viewSegment('routes')} element={<DispatchPlanningPage client={api} />} />
+      <Route path={viewSegment('drivers')} element={<DriverManagementPage client={api} canBindAccounts={session.user.role === 'ADMIN'} />} />
+      <Route path={viewSegment('vehicles')} element={<VehicleManagementPage client={api} />} />
+      <Route path={viewSegment('customers')} element={<CustomerCatalogPage client={api} />} />
+      <Route path={viewSegment('evidence')} element={<EvidenceWorkspace client={api} />} />
+      <Route path="*" element={<Navigate to={APP_BASE} replace />} />
+    </Routes>
+  );
+}
+
+/** Pedidos with the order detail driven by `/app/pedidos/:codigo`, so it can be shared and reloaded. */
+function OrdersRoute() {
+  const navigate = useNavigate();
+  const { codigo } = useParams();
+  return (
+    <OrdersPage client={api} selectedCode={codigo ?? null}
+      onSelectOrder={(code) => void navigate(code === null ? viewPath('orders') : orderPath(code))}
+      onManage={() => void navigate(viewPath('orders-manage'))} />
+  );
 }

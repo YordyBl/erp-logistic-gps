@@ -28,6 +28,48 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { view: 'evidence', label: 'Evidencias', icon: Camera },
 ];
 
+/** The ERP lives under `/app`; `/` is reserved for the public site. */
+export const APP_BASE = '/app';
+
+/** URL segment of each view under `/app`. The dashboard is the index. */
+const VIEW_SEGMENTS: Record<OperatorView, string> = {
+  dashboard: '',
+  'control-tower': 'torre-control',
+  orders: 'pedidos',
+  'orders-manage': 'pedidos/gestionar',
+  routes: 'despacho',
+  drivers: 'conductores',
+  vehicles: 'vehiculos',
+  customers: 'clientes',
+  evidence: 'evidencias',
+};
+
+/** Relative route path of a view, for `<Route path>`. */
+export function viewSegment(view: OperatorView): string {
+  return VIEW_SEGMENTS[view];
+}
+
+/** Absolute URL of a view. */
+export function viewPath(view: OperatorView): string {
+  const segment = VIEW_SEGMENTS[view];
+  return segment === '' ? APP_BASE : `${APP_BASE}/${segment}`;
+}
+
+/** Absolute URL of one order's detail inside Pedidos. */
+export function orderPath(publicCode: string): string {
+  return `${viewPath('orders')}/${encodeURIComponent(publicCode)}`;
+}
+
+/** The view a URL belongs to; unknown paths fall back to the dashboard. */
+export function viewFromPath(pathname: string): OperatorView {
+  const rest = pathname.replace(/\/+$/, '').slice(APP_BASE.length).replace(/^\//, '');
+  if (rest === viewSegment('orders-manage')) return 'orders-manage';
+  const first = rest.split('/')[0] ?? '';
+  const match = (Object.keys(VIEW_SEGMENTS) as OperatorView[])
+    .find((view) => view !== 'orders-manage' && VIEW_SEGMENTS[view] === first);
+  return match ?? 'dashboard';
+}
+
 /** The Pedidos item stays highlighted while managing orders. */
 export function isNavItemActive(item: NavView, activeView: OperatorView): boolean {
   return item === activeView || (item === 'orders' && activeView === 'orders-manage');
