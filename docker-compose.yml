@@ -116,6 +116,10 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        # Public site (served at /). Empty values keep visible placeholders.
+        SITE_URL: ${SITE_URL:-}
+        PUBLIC_WHATSAPP_NUMBER: ${PUBLIC_WHATSAPP_NUMBER:-}
     environment:
       TZ: ${TZ:-America/Lima}
     depends_on:

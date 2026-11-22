@@ -1,12 +1,19 @@
 # syntax=docker/dockerfile:1
 
-# Build the React client and serve only its static output from the runtime image.
+# Build the public site (Astro, served at /) and the ERP client (React SPA, served at
+# /app), and serve only their static output from the runtime image.
 FROM node:22-alpine AS build
+
+# Public site settings, baked in at build time. Empty values keep the visible
+# placeholders and leave out canonical URLs and the sitemap host.
+ARG SITE_URL=""
+ARG PUBLIC_WHATSAPP_NUMBER=""
+ENV SITE_URL=$SITE_URL PUBLIC_WHATSAPP_NUMBER=$PUBLIC_WHATSAPP_NUMBER
 
 WORKDIR /workspace
 COPY . .
-RUN npm ci --workspace=@erp-logistic/web --include-workspace-root=true
-RUN npm run build --workspace=@erp-logistic/web
+RUN npm ci --workspace=@erp-logistic/web --workspace=@erp-logistic/site --include-workspace-root=true
+RUN npm run build --workspace=@erp-logistic/web && npm run build --workspace=@erp-logistic/site
 
 # nginx:alpine runs as the unprivileged nginx user and listens on 8080.
 FROM nginx:alpine AS runtime
@@ -65,14 +72,40 @@ http {
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
-        location / {
-            try_files $uri $uri/ /index.html;
+        # ERP single-page app: every /app URL boots the same document and the
+        # client router picks the screen.
+        # Public tracking page for recipients. The link key travels after "#",
+        # so it never reaches these logs. Keep it out of caches and search engines.
+        location = /seguimiento {
+            add_header Cache-Control "no-store" always;
+            add_header Referrer-Policy "no-referrer" always;
+            add_header X-Robots-Tag "noindex, nofollow" always;
+            try_files /seguimiento.html =404;
         }
+
+        location = /app {
+            try_files /app.html =404;
+        }
+
+        location /app/ {
+            try_files $uri /app.html;
+        }
+
+        # Public site: prebuilt HTML files (/privacidad -> privacidad.html).
+        location / {
+            try_files $uri $uri.html $uri/index.html =404;
+        }
+
+        error_page 404 /404.html;
     }
 }
 NGINX_CONF
 
+# The ERP document becomes app.html so the site's index.html can own /. Their
+# assets do not collide: Vite emits /assets/*, Astro emits /_astro/*.
 COPY --from=build /workspace/apps/web/dist /usr/share/nginx/html
+RUN mv /usr/share/nginx/html/index.html /usr/share/nginx/html/app.html
+COPY --from=build /workspace/apps/site/dist /usr/share/nginx/html
 
 # nginx:alpine ships tzdata, so access and error log timestamps follow the
 # America/Lima decision (plan §2) without an extra package.
