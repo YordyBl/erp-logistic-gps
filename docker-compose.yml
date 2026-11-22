@@ -40,6 +40,11 @@ x-api-environment: &api-environment
   EVIDENCE_S3_REGION: ${EVIDENCE_S3_REGION:-us-east-1}
   # Optional local routing service; enable it with docker-compose.valhalla.yml.
   VALHALLA_URL: ${VALHALLA_URL:-}
+  # Development-only route simulation (needs NODE_ENV=development and Valhalla).
+  # The interval is bounded to 3-5 s; the time scale (1-100) speeds simulated
+  # driving up so a multi-stop demo route closes in minutes, not hours.
+  GPS_SIMULATION_INTERVAL_SECONDS: ${GPS_SIMULATION_INTERVAL_SECONDS:-4}
+  GPS_SIMULATION_TIME_SCALE: ${GPS_SIMULATION_TIME_SCALE:-10}
 
 services:
   postgres:

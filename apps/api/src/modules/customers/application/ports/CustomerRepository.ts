@@ -1,4 +1,19 @@
-import type { Customer } from '../../domain/entities/Customer.js';
+import type { PageCriteria, PageResult } from '../../../../http/pagination.js';
+import type { Customer, CustomerStatus } from '../../domain/entities/Customer.js';
+
+/** Fields `listPage` may sort by; `id` in the same direction always breaks ties. */
+export const CUSTOMER_SORT_FIELDS = ['name', 'createdAt'] as const;
+export type CustomerSortField = (typeof CUSTOMER_SORT_FIELDS)[number];
+
+/**
+ * One page of a tenant's customers. Filters are optional and combine with AND;
+ * `q` matches (case-insensitive substring) the name, public code and the
+ * contact name, email and phone.
+ */
+export interface CustomerPageCriteria extends PageCriteria<CustomerSortField> {
+  readonly status?: readonly CustomerStatus[];
+  readonly ids?: readonly string[];
+}
 
 /**
  * Persistence port for the customer catalog.
@@ -17,6 +32,19 @@ export interface CustomerRepository {
     publicCode: string,
   ): Promise<Customer | null>;
 
-  /** Customers of one organization, oldest first. */
+  /**
+   * Every customer of one organization, oldest first. Kept unpaginated for the
+   * order import, which resolves customer codes against the whole catalog.
+   */
   list(organizationId: string): Promise<Customer[]>;
+
+  /**
+   * One page of the tenant's customers with the filtered total and
+   * `counts.status`, which applies every filter except `status` and lists
+   * every status (0 when nothing matches).
+   */
+  listPage(
+    organizationId: string,
+    criteria: CustomerPageCriteria,
+  ): Promise<PageResult<Customer>>;
 }

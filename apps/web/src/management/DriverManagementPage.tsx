@@ -1,8 +1,20 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { IdCard, Plus, SearchX } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type { ApiClient, Driver, DriverAccountOption, DriverStatus } from '../api/client.js';
-import { Button, StatusPill, Surface } from '../components/Primitives.js';
-import './DriverManagementPage.css';
+import { DocumentSheet, FormSheet } from '../components/FormSheet.js';
+import { SelectField, TextField } from '../components/FormFields.js';
+import { RegistrationDialog } from '../components/RegistrationDialog.js';
+import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { SearchInput } from '../components/SearchInput.js';
+import { Badge } from '../components/ui/badge.js';
+import { Button } from '../components/ui/button.js';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
+import { FieldGroup } from '../components/ui/field.js';
+import { IDENTIFIER_PATTERN, PHONE_PATTERN } from '../lib/patterns.js';
+import { DriverCard } from './drivers/DriverCard.js';
+import { countByFilter, DRIVER_FILTERS, filterDrivers, indexAccountsByDriver, type DriverFilter } from './drivers/driverFilters.js';
 
 type DriverClient = Pick<ApiClient,
   'listDrivers' | 'listDriverAccounts' | 'createDriver' | 'updateDriver' | 'bindDriverAccount'>;
@@ -14,6 +26,11 @@ interface DriverForm {
   licenseNumber: string;
   status: DriverStatus;
 }
+
+const STATUS_OPTIONS: readonly { readonly value: DriverStatus; readonly label: string }[] = [
+  { value: 'active', label: 'Activo' },
+  { value: 'inactive', label: 'Inactivo' },
+];
 
 const newDriverForm = (): DriverForm => ({
   fullName: '', documentNumber: '', phone: '', licenseNumber: '', status: 'active',
@@ -29,12 +46,17 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [registered, setRegistered] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [accountDriverId, setAccountDriverId] = useState<string | null>(null);
   const [busyDriverId, setBusyDriverId] = useState<string | null>(null);
   const [editingDriverId, setEditingDriverId] = useState<string | null>(null);
   const [form, setForm] = useState<DriverForm>(newDriverForm);
   const [editForm, setEditForm] = useState<DriverForm>(newDriverForm);
   const [selectedAccounts, setSelectedAccounts] = useState<Readonly<Record<string, string>>>({});
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<DriverFilter>('all');
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -55,6 +77,12 @@ export function DriverManagementPage({ client, canBindAccounts }: {
 
   useEffect(() => { void loadData(); }, [loadData]);
 
+  function openCreate() {
+    setActionError(null);
+    setNotice(null);
+    setCreateOpen(true);
+  }
+
   async function createDriver(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionError(null);
@@ -67,7 +95,8 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       });
       setDrivers((current) => [...current, created].sort(compareDrivers));
       setForm(newDriverForm());
-      setNotice(`Conductor ${created.fullName} registrado.`);
+      setCreateOpen(false);
+      setRegistered(`El conductor ${created.fullName} se registró correctamente.`);
     } catch (cause) {
       setActionError(errorMessage(cause, 'No se pudo registrar el conductor.'));
     } finally {
@@ -75,7 +104,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
     }
   }
 
-  function startEditing(driver: Driver) {
+  const startEditing = useCallback((driver: Driver) => {
     setEditingDriverId(driver.id);
     setEditForm({
       fullName: driver.fullName, documentNumber: driver.documentNumber,
@@ -83,7 +112,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
     });
     setActionError(null);
     setNotice(null);
-  }
+  }, []);
 
   async function saveDriver(event: FormEvent<HTMLFormElement>, driver: Driver) {
     event.preventDefault();
@@ -120,6 +149,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       await client.bindDriverAccount(driver.id, userId);
       setSelectedAccounts((current) => ({ ...current, [driver.id]: '' }));
       await loadData();
+      setAccountDriverId(null);
       setNotice(`Cuenta vinculada a ${driver.fullName}.`);
       setBusyDriverId(null);
     } catch (cause) {
@@ -138,6 +168,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
       await client.bindDriverAccount(driver.id, null);
       setSelectedAccounts((current) => ({ ...current, [driver.id]: '' }));
       await loadData();
+      setAccountDriverId(null);
       setNotice(`Cuenta desvinculada de ${driver.fullName}.`);
       setBusyDriverId(null);
     } catch (cause) {
@@ -146,147 +177,179 @@ export function DriverManagementPage({ client, canBindAccounts }: {
     }
   }
 
+  const editingDriver = drivers.find((driver) => driver.id === editingDriverId);
+  const accountDriver = drivers.find((driver) => driver.id === accountDriverId);
+  const sheetOpen = createOpen || editingDriver !== undefined || accountDriver !== undefined;
+  const activeCount = drivers.filter((driver) => driver.status === 'active').length;
+  const linkedCount = accounts.filter((account) => account.driverId !== null).length;
+  const ready = !loading && loadError === null;
+
+  const accountByDriver = useMemo(() => indexAccountsByDriver(accounts), [accounts]);
+  const filterCounts = useMemo(() => countByFilter(drivers, accountByDriver), [accountByDriver, drivers]);
+  const visibleDrivers = useMemo(() => filterDrivers(drivers, filter, query, accountByDriver), [accountByDriver, drivers, filter, query]);
+  const filterOptions = DRIVER_FILTERS.filter((option) => canBindAccounts || option.value !== 'unlinked');
+
+  function openAccount(driver: Driver) {
+    setActionError(null);
+    setNotice(null);
+    setAccountDriverId(driver.id);
+  }
+
   return (
-    <section className="driver-management">
-      <header className="driver-management__header">
-        <div>
-          <h1>Conductores</h1>
-          <p>Administra los perfiles operativos y las cuentas autorizadas para ejecutar rutas.</p>
-        </div>
-        <span className="driver-management__count" aria-label={`${drivers.length} conductores`}>
-          {drivers.length} {drivers.length === 1 ? 'conductor' : 'conductores'}
-        </span>
-      </header>
+    <section className="flex flex-col gap-6">
+      <PageHeader title="Conductores" description={ready && drivers.length > 0 ? `${activeCount} de ${drivers.length} conductores activos${canBindAccounts ? ` · ${linkedCount} con cuenta vinculada` : ''}.` : 'Administra los perfiles operativos y las cuentas autorizadas para ejecutar rutas.'}>
+        <Button onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Registrar conductor</Button>
+      </PageHeader>
 
-      {actionError !== null && <p className="driver-management__alert" role="alert">{actionError}</p>}
-      {notice !== null && <p className="driver-management__success" role="status">{notice}</p>}
+      {!sheetOpen && actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+      {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
+      <RegistrationDialog title="Conductor registrado" message={registered} onClose={() => setRegistered(null)} />
 
-      <Surface className="driver-management__create-surface">
-        <div className="driver-management__section-heading">
-          <div><h2>Registrar conductor</h2><p>Los documentos de identidad no se pueden cambiar después del registro.</p></div>
-        </div>
-        <form className="driver-management__form" onSubmit={(event) => void createDriver(event)}>
-          <label className="driver-management__field" htmlFor="new-driver-name">Nombre completo
-            <input id="new-driver-name" required minLength={2} maxLength={120} value={form.fullName}
-              onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} />
-          </label>
-          <label className="driver-management__field" htmlFor="new-driver-document">Documento de identidad
-            <input id="new-driver-document" required minLength={6} maxLength={20}
-              pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*" value={form.documentNumber}
-              onChange={(event) => setForm((current) => ({ ...current, documentNumber: event.target.value }))} />
-          </label>
-          <label className="driver-management__field" htmlFor="new-driver-phone">Teléfono
-            <input id="new-driver-phone" required minLength={6} maxLength={32} pattern="[+]?[0-9][0-9 ()-]*"
-              value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} />
-          </label>
-          <label className="driver-management__field" htmlFor="new-driver-license">Licencia de conducir
-            <input id="new-driver-license" required minLength={4} maxLength={40}
-              pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*" value={form.licenseNumber}
-              onChange={(event) => setForm((current) => ({ ...current, licenseNumber: event.target.value }))} />
-          </label>
-          <div className="driver-management__form-actions">
-            <Button type="submit" disabled={creating}>{creating ? 'Registrando…' : 'Registrar conductor'}</Button>
-          </div>
-        </form>
-      </Surface>
-
-      <Surface className="driver-management__list-surface">
-        <div className="driver-management__section-heading">
-          <div><h2>Personal registrado</h2><p>Documento y licencia identifican el perfil; la cuenta DRIVER autoriza el acceso operativo.</p></div>
-        </div>
-        {loading ? <p className="driver-management__loading" role="status">Cargando conductores…</p>
-          : loadError !== null ? <div className="driver-management__empty" role="alert">
-            <p>{loadError}</p><Button variant="secondary" onClick={() => void loadData()}>Reintentar</Button>
-          </div>
-            : drivers.length === 0 ? <div className="driver-management__empty">
-              <h3>Aún no hay conductores</h3><p>Registra el primer perfil para habilitar la planificación de rutas.</p>
+      {loading && <LoadingRows label="Cargando conductores…" />}
+      {!loading && loadError !== null && (
+        <ErrorNotice action={<Button variant="outline" className="mt-2" onClick={() => void loadData()}>Reintentar</Button>}>{loadError}</ErrorNotice>
+      )}
+      {ready && drivers.length === 0 && (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><IdCard aria-hidden="true" /></EmptyMedia>
+            <EmptyTitle>Aún no hay conductores</EmptyTitle>
+            <EmptyDescription>Registra el primer perfil para habilitar la planificación de rutas.</EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent><Button onClick={openCreate}>Registrar el primero</Button></EmptyContent>
+        </Empty>
+      )}
+      {ready && drivers.length > 0 && (
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap" role="group" aria-label="Filtrar conductores">
+              {filterOptions.map((option) => (
+                <Button key={option.value} type="button" variant={filter === option.value ? 'secondary' : 'ghost'}
+                  aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}>
+                  {option.label}
+                  <span className="text-muted-foreground tabular-nums">{filterCounts[option.value]}</span>
+                </Button>
+              ))}
             </div>
-              : <ul className="driver-management__list">
-                {drivers.map((driver) => {
-                  const linkedAccount = accounts.find((account) => account.driverId === driver.id);
-                  const selectedUserId = selectedAccounts[driver.id] ?? linkedAccount?.userId ?? '';
-                  const accountChoices = accounts.filter((account) => account.status === 'active' &&
-                    (account.driverId === null || account.driverId === driver.id));
-                  const isEditing = editingDriverId === driver.id;
-                  return (
-                    <li className="driver-management__row" key={driver.id} aria-label={`Conductor ${driver.fullName}`}>
-                      <div className="driver-management__identity">
-                        <div>
-                          <h3>{driver.fullName}</h3>
-                          <p><span>Documento</span>{driver.documentNumber}</p>
-                          <p><span>Teléfono</span>{driver.phone}</p>
-                          <p><span>Licencia</span>{driver.licenseNumber}</p>
-                        </div>
-                        <StatusPill tone={driver.status === 'active' ? 'success' : 'neutral'}>
-                          {driver.status === 'active' ? 'Activo' : 'Inactivo'}
-                        </StatusPill>
-                      </div>
+            <SearchInput value={query} onChange={setQuery} label="Buscar conductores" placeholder="Buscar nombre, documento o licencia" className="w-full lg:w-96" />
+          </div>
 
-                      {isEditing ? (
-                        <form className="driver-management__edit-form" onSubmit={(event) => void saveDriver(event, driver)}>
-                          <label className="driver-management__field" htmlFor={`edit-driver-name-${driver.id}`}>Nombre completo
-                            <input id={`edit-driver-name-${driver.id}`} required minLength={2} maxLength={120} value={editForm.fullName}
-                              onChange={(event) => setEditForm((current) => ({ ...current, fullName: event.target.value }))} />
-                          </label>
-                          <label className="driver-management__field" htmlFor={`edit-driver-phone-${driver.id}`}>Teléfono
-                            <input id={`edit-driver-phone-${driver.id}`} required minLength={6} maxLength={32} pattern="[+]?[0-9][0-9 ()-]*" value={editForm.phone}
-                              onChange={(event) => setEditForm((current) => ({ ...current, phone: event.target.value }))} />
-                          </label>
-                          <label className="driver-management__field" htmlFor={`edit-driver-license-${driver.id}`}>Licencia de conducir
-                            <input id={`edit-driver-license-${driver.id}`} required minLength={4} maxLength={40} pattern="[A-Za-z0-9]+(-[A-Za-z0-9]+)*" value={editForm.licenseNumber}
-                              onChange={(event) => setEditForm((current) => ({ ...current, licenseNumber: event.target.value }))} />
-                          </label>
-                          <label className="driver-management__field" htmlFor={`edit-driver-status-${driver.id}`}>Estado
-                            <select id={`edit-driver-status-${driver.id}`} value={editForm.status}
-                              onChange={(event) => setEditForm((current) => ({ ...current, status: event.target.value as DriverStatus }))}>
-                              <option value="active">Activo</option><option value="inactive">Inactivo</option>
-                            </select>
-                          </label>
-                          <div className="driver-management__row-actions">
-                            <Button type="submit" disabled={busyDriverId === driver.id}>Guardar cambios</Button>
-                            <Button type="button" variant="secondary" onClick={() => setEditingDriverId(null)}>Cancelar</Button>
-                          </div>
-                        </form>
-                      ) : (
-                        <div className="driver-management__row-actions">
-                          <Button type="button" variant="secondary" onClick={() => startEditing(driver)} aria-label={`Editar ${driver.fullName}`}>
-                            Editar conductor
-                          </Button>
-                        </div>
-                      )}
+          {visibleDrivers.length === 0 ? (
+            <Empty className="border">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
+                <EmptyTitle>{query.trim() === '' ? 'No hay conductores en este grupo' : 'Ningún conductor coincide'}</EmptyTitle>
+                <EmptyDescription>
+                  {query.trim() === ''
+                    ? 'Elige otro filtro o muestra todos los conductores.'
+                    : 'Prueba con otro nombre, documento o licencia, o muestra todos los conductores.'}
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button variant="outline" onClick={() => { setQuery(''); setFilter('all'); }}>Ver todos</Button>
+              </EmptyContent>
+            </Empty>
+          ) : (
+            <ul aria-label="Personal registrado" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {visibleDrivers.map((driver) => (
+                <DriverCard key={driver.id} driver={driver} account={accountByDriver.get(driver.id)} canBindAccounts={canBindAccounts}
+                  onEdit={() => startEditing(driver)} onManageAccount={() => openAccount(driver)} />
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
-                      <div className="driver-management__account">
-                        <h4>Cuenta de acceso</h4>
-                        {canBindAccounts ? linkedAccount !== undefined ? (
-                          <div className="driver-management__linked-account">
-                            <span>{linkedAccount.email}</span>
-                            {linkedAccount.status === 'disabled' && <StatusPill tone="danger">Cuenta desactivada</StatusPill>}
-                            <Button type="button" variant="quiet" disabled={busyDriverId === driver.id}
-                              onClick={() => void unlinkAccount(driver)} aria-label="Desvincular cuenta">Desvincular</Button>
-                          </div>
-                        ) : (
-                          <div className="driver-management__link-controls">
-                            <label className="driver-management__field" htmlFor={`driver-account-${driver.id}`}>Cuenta para {driver.fullName}
-                              <select id={`driver-account-${driver.id}`} value={selectedUserId}
-                                onChange={(event) => setSelectedAccounts((current) => ({ ...current, [driver.id]: event.target.value }))}>
-                                <option value="">Selecciona una cuenta sin vínculo</option>
-                                {accountChoices.map((account) => <option key={account.userId} value={account.userId}>{account.email}</option>)}
-                              </select>
-                            </label>
-                            <Button type="button" disabled={!selectedUserId || busyDriverId === driver.id}
-                              onClick={() => void saveAccountLink(driver, selectedUserId)}>
-                              Vincular cuenta
-                            </Button>
-                            {accountChoices.length === 0 && <p>No hay cuentas DRIVER activas sin vínculo.</p>}
-                          </div>
-                        ) : <p className="driver-management__account-restricted">Vinculación reservada a ADMIN</p>}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>}
-      </Surface>
+      <FormSheet open={createOpen} onOpenChange={setCreateOpen} title="Registrar conductor"
+        description="Los documentos de identidad no se pueden cambiar después del registro."
+        onSubmit={(event) => void createDriver(event)}
+        footer={(
+          <>
+            <Button type="button" variant="outline" disabled={creating} onClick={() => setCreateOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={creating}>{creating ? 'Registrando…' : 'Registrar conductor'}</Button>
+          </>
+        )}>
+        {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+        <FieldGroup className="gap-4">
+          <TextField id="new-driver-name" label="Nombre completo" placeholder="Ej. Andrea Quispe Rojas" required minLength={2} maxLength={120} value={form.fullName}
+            onChange={(event) => setForm((current) => ({ ...current, fullName: event.target.value }))} />
+          <TextField id="new-driver-document" label="Documento de identidad" placeholder="Ej. 70123456" required minLength={6} maxLength={20}
+            pattern={IDENTIFIER_PATTERN} value={form.documentNumber}
+            onChange={(event) => setForm((current) => ({ ...current, documentNumber: event.target.value }))} />
+          <TextField id="new-driver-phone" label="Teléfono" placeholder="Ej. 900 000 123" required minLength={6} maxLength={32} pattern={PHONE_PATTERN}
+            value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} />
+          <TextField id="new-driver-license" label="Licencia de conducir" placeholder="Ej. Q-12345678" required minLength={4} maxLength={40}
+            pattern={IDENTIFIER_PATTERN} value={form.licenseNumber}
+            onChange={(event) => setForm((current) => ({ ...current, licenseNumber: event.target.value }))} />
+        </FieldGroup>
+      </FormSheet>
+
+      <FormSheet open={editingDriver !== undefined} onOpenChange={(open) => { if (!open) setEditingDriverId(null); }}
+        title={`Editar ${editingDriver?.fullName ?? 'conductor'}`} description="El documento de identidad no se puede cambiar."
+        onSubmit={(event) => { if (editingDriver !== undefined) void saveDriver(event, editingDriver); }}
+        footer={(
+          <>
+            <Button type="button" variant="outline" onClick={() => setEditingDriverId(null)}>Cancelar</Button>
+            <Button type="submit" disabled={busyDriverId === editingDriverId}>Guardar cambios</Button>
+          </>
+        )}>
+        {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+        <FieldGroup className="gap-4">
+          <TextField id="edit-driver-name" label="Nombre completo" placeholder="Ej. Andrea Quispe Rojas" required minLength={2} maxLength={120} value={editForm.fullName}
+            onChange={(event) => setEditForm((current) => ({ ...current, fullName: event.target.value }))} />
+          <TextField id="edit-driver-phone" label="Teléfono" placeholder="Ej. 900 000 123" required minLength={6} maxLength={32} pattern={PHONE_PATTERN} value={editForm.phone}
+            onChange={(event) => setEditForm((current) => ({ ...current, phone: event.target.value }))} />
+          <TextField id="edit-driver-license" label="Licencia de conducir" placeholder="Ej. Q-12345678" required minLength={4} maxLength={40} pattern={IDENTIFIER_PATTERN} value={editForm.licenseNumber}
+            onChange={(event) => setEditForm((current) => ({ ...current, licenseNumber: event.target.value }))} />
+          <SelectField id="edit-driver-status" label="Estado" placeholder="Selecciona un estado" value={editForm.status}
+            options={STATUS_OPTIONS} onChange={(status) => setEditForm((current) => ({ ...current, status }))} />
+        </FieldGroup>
+      </FormSheet>
+
+      <DocumentSheet open={accountDriver !== undefined} onOpenChange={(open) => { if (!open) setAccountDriverId(null); }}
+        title={`Cuenta de ${accountDriver?.fullName ?? 'conductor'}`} description="La cuenta DRIVER autoriza a ejecutar rutas en la aplicación.">
+        {actionError !== null && <ErrorNotice>{actionError}</ErrorNotice>}
+        {accountDriver !== undefined && (
+          <AccountSection canBindAccounts={canBindAccounts} driver={accountDriver} linkedAccount={accounts.find((account) => account.driverId === accountDriver.id)}
+            choices={accounts.filter((account) => account.status === 'active' && (account.driverId === null || account.driverId === accountDriver.id))}
+            selectedUserId={selectedAccounts[accountDriver.id] ?? accounts.find((account) => account.driverId === accountDriver.id)?.userId ?? ''}
+            busy={busyDriverId === accountDriver.id}
+            onSelect={(userId) => setSelectedAccounts((current) => ({ ...current, [accountDriver.id]: userId }))}
+            onLink={() => void saveAccountLink(accountDriver, selectedAccounts[accountDriver.id] ?? '')} onUnlink={() => void unlinkAccount(accountDriver)} />
+        )}
+      </DocumentSheet>
     </section>
+  );
+}
+
+function AccountSection({ canBindAccounts, driver, linkedAccount, choices, selectedUserId, busy, onSelect, onLink, onUnlink }: {
+  readonly canBindAccounts: boolean;
+  readonly driver: Driver;
+  readonly linkedAccount: DriverAccountOption | undefined;
+  readonly choices: readonly DriverAccountOption[];
+  readonly selectedUserId: string;
+  readonly busy: boolean;
+  readonly onSelect: (userId: string) => void;
+  readonly onLink: () => void;
+  readonly onUnlink: () => void;
+}) {
+  if (!canBindAccounts) return <p className="text-sm text-muted-foreground">Vinculación reservada a ADMIN</p>;
+  if (linkedAccount !== undefined) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span>{linkedAccount.email}</span>
+        {linkedAccount.status === 'disabled' && <Badge variant="destructive">Cuenta desactivada</Badge>}
+        <Button type="button" variant="ghost" disabled={busy} onClick={onUnlink} aria-label="Desvincular cuenta">Desvincular</Button>
+      </div>
+    );
+  }
+  if (choices.length === 0) return <p className="text-muted-foreground">Sin vincular. No hay cuentas DRIVER activas disponibles.</p>;
+  return (
+    <div className="flex flex-col gap-2">
+      <SelectField id={`driver-account-${driver.id}`} label={`Cuenta para ${driver.fullName}`} placeholder="Selecciona una cuenta sin vínculo"
+        value={selectedUserId} options={choices.map((account) => ({ value: account.userId, label: account.email }))} onChange={onSelect} />
+      <Button type="button" disabled={selectedUserId === '' || busy} onClick={onLink}>Vincular cuenta</Button>
+    </div>
   );
 }
 

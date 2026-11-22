@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { api, type AuthSession, type DeliveryEvidence, type DeliveryOrder, type DeliveryRoute } from './api/client.js';
+import { api, type AuthSession, type DeliveryEvidence, type DeliveryOrder, type DeliveryRoute, type Page } from './api/client.js';
 import { App } from './App.js';
 
 vi.mock('./management/ControlTowerPage.js', () => ({
@@ -31,6 +31,13 @@ const evidence: DeliveryEvidence = {
   mimeType: 'image/jpeg', byteSize: 4, checksum: 'checksum', uploadedBy: 'driver-1',
   status: 'available', createdAt: '2026-10-29T12:00:00.000Z', availableAt: '2026-10-29T12:00:01.000Z',
 };
+
+/** Una página de `GET /delivery-orders` con sus conteos por estado. */
+function pageOf(orders: readonly DeliveryOrder[]): Page<DeliveryOrder> {
+  const status: Record<string, number> = {};
+  for (const item of orders) status[item.status] = (status[item.status] ?? 0) + 1;
+  return { data: orders, meta: { page: 1, pageSize: 10, total: orders.length, counts: { status } } };
+}
 
 function session(role: AuthSession['user']['role']): AuthSession {
   return {
@@ -70,6 +77,50 @@ describe('role-specific delivery workspace', () => {
     expect(api.login).toHaveBeenCalledWith('driver@example.test', 'password');
   });
 
+  it('validates the sign-in form before calling the API', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(null);
+    const login = vi.spyOn(api, 'login');
+
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: /Ingresar/ }));
+    expect(await screen.findByText('Ingresa tu correo.')).toBeTruthy();
+    expect(screen.getByText('Ingresa tu contraseña.')).toBeTruthy();
+
+    await user.type(screen.getByLabelText('Correo operativo'), 'sin-arroba');
+    await user.type(screen.getByLabelText('Contraseña'), 'password');
+    await user.click(screen.getByRole('button', { name: /Ingresar/ }));
+    expect(await screen.findByText('Ingresa un correo válido.')).toBeTruthy();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it('opens Pedidos as a plain link and shows an order detail from the list, not from the menu', async () => {
+    const user = userEvent.setup();
+    const secondOrder: DeliveryOrder = {
+      ...order,
+      id: 'order-2',
+      publicCode: 'LIM-2042',
+      status: 'in_transit',
+      recipient: { name: 'Luis Soto', phone: '999 222 333' },
+      deliveryAddress: { addressLine: 'Jr. Los Olivos 55', district: 'Miraflores', latitude: null, longitude: null },
+    };
+    vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order, secondOrder]));
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+
+    render(<App />);
+    await screen.findByRole('heading', { name: 'Estado del reparto' });
+
+    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
+    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
+    // With thousands of orders the menu must stay usable: it never lists order codes.
+    expect(screen.queryByRole('button', { name: 'Pedido LIM-2042' })).toBeNull();
+
+    await user.click(await screen.findByText('LIM-2042'));
+
+    expect(await screen.findByRole('heading', { name: 'LIM-2042' })).toBeTruthy();
+    expect(screen.getByText('999 222 333')).toBeTruthy();
+  });
+
   it('shows the assigned driver route and start action without exposing operator evidence search', async () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
@@ -91,8 +142,10 @@ describe('role-specific delivery workspace', () => {
       status: 'active' as const, createdAt: '2026-10-29T12:00:00.000Z',
     };
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
-    vi.spyOn(api, 'listCustomers').mockResolvedValue([customer]);
-    vi.spyOn(api, 'listDeliveryOrders').mockResolvedValue([order]);
+    vi.spyOn(api, 'listCustomersPage').mockResolvedValue({
+      data: [customer], meta: { page: 1, pageSize: 10, total: 1, counts: { status: { active: 1, inactive: 0 } } },
+    });
+    vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order]));
 
     render(<App />);
 
@@ -101,9 +154,10 @@ describe('role-specific delivery workspace', () => {
     expect(await screen.findByText('Lima Supply')).toBeTruthy();
 
     await user.click(screen.getByRole('button', { name: 'Pedidos' }));
-    expect(await screen.findByRole('heading', { name: 'Pedidos de entrega' })).toBeTruthy();
-    expect(await screen.findByText('LIM-2041')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
+    expect((await screen.findAllByText('LIM-2041')).length).toBeGreaterThan(0);
   });
+
 
   it('opens the control tower for dispatchers while keeping it out of the driver workspace', async () => {
     const user = userEvent.setup();
@@ -172,14 +226,16 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
     vi.spyOn(api, 'findOrderByPublicCode').mockResolvedValue({ ...order, status: 'delivered' });
     const listEvidence = vi.spyOn(api, 'listEvidence').mockResolvedValue([evidence]);
+    const listEvidencePage = vi.spyOn(api, 'listEvidencePage').mockResolvedValue({ data: [], meta: { page: 1, pageSize: 8, total: 0 } });
 
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'Evidencias' }));
     await user.type(await screen.findByLabelText('Código del pedido'), 'LIM-2041');
-    await user.click(screen.getByRole('button', { name: /Buscar pedido/ }));
 
     expect(await screen.findByText('Foto 1')).toBeTruthy();
     expect(listEvidence).toHaveBeenCalledWith(order.id);
+    expect(listEvidence).toHaveBeenCalledOnce();
+    expect(listEvidencePage).toHaveBeenCalledWith({ page: 1, pageSize: 8 }, expect.any(AbortSignal));
     expect(screen.getByText('Disponible')).toBeTruthy();
   });
 

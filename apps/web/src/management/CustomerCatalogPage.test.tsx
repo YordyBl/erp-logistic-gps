@@ -1,10 +1,11 @@
 /** @vitest-environment jsdom */
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ApiClient, Customer } from '../api/client.js';
+import { chooseOption, setupUser } from '../test/ui.js';
+
+import type { ApiClient, Customer, Page } from '../api/client.js';
 import { CustomerCatalogPage } from './CustomerCatalogPage.js';
 
 const firstCustomer: Customer = {
@@ -19,12 +20,21 @@ const newCustomer: Customer = {
   status: 'inactive',
 };
 
-function makeClient(overrides: Partial<Pick<ApiClient, 'listCustomers' | 'createCustomer'>> = {}) {
+/** Una página del servidor con los conteos por estado de esas filas. */
+function pageOf(customers: readonly Customer[], counts?: { active: number; inactive: number }): Page<Customer> {
+  const status = counts ?? {
+    active: customers.filter((customer) => customer.status === 'active').length,
+    inactive: customers.filter((customer) => customer.status === 'inactive').length,
+  };
+  return { data: customers, meta: { page: 1, pageSize: 10, total: customers.length, counts: { status } } };
+}
+
+function makeClient(overrides: Partial<Pick<ApiClient, 'listCustomersPage' | 'createCustomer'>> = {}) {
   return {
-    listCustomers: vi.fn().mockResolvedValue([firstCustomer]),
+    listCustomersPage: vi.fn().mockResolvedValue(pageOf([firstCustomer])),
     createCustomer: vi.fn().mockResolvedValue(newCustomer),
     ...overrides,
-  } satisfies Pick<ApiClient, 'listCustomers' | 'createCustomer'>;
+  } satisfies Pick<ApiClient, 'listCustomersPage' | 'createCustomer'>;
 }
 
 afterEach(cleanup);
@@ -40,30 +50,62 @@ describe('CustomerCatalogPage', () => {
     expect(screen.getByText('Lucía Rojas')).toBeTruthy();
     expect(screen.getByText('lucia@acme.example')).toBeTruthy();
     expect(screen.getByText('Activo')).toBeTruthy();
-    expect(client.listCustomers).toHaveBeenCalledOnce();
+    expect(client.listCustomersPage).toHaveBeenCalledOnce();
+    expect(client.listCustomersPage).toHaveBeenCalledWith({ page: 1, pageSize: 10, sort: 'name:asc' }, expect.any(AbortSignal));
     expect(screen.queryByRole('button', { name: /editar|eliminar|borrar/i })).toBeNull();
   });
 
-  it('shows loading feedback and lets the operator retry after a list error', async () => {
-    const user = userEvent.setup();
-    const listCustomers = vi.fn()
-      .mockRejectedValueOnce(new Error('Sin conexión'))
-      .mockResolvedValueOnce([firstCustomer]);
+  it('takes the active share of the catalog from the server counts', async () => {
+    const client = makeClient({ listCustomersPage: vi.fn().mockResolvedValue(pageOf([firstCustomer], { active: 7, inactive: 5 })) });
 
-    render(<CustomerCatalogPage client={makeClient({ listCustomers })} />);
+    render(<CustomerCatalogPage client={client} />);
+
+    expect(await screen.findByText('Empresas que contratan el servicio · 7 de 12 activas.')).toBeTruthy();
+  });
+
+  it('sends search, status filter and sort as page parameters', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<CustomerCatalogPage client={client} />);
+    await screen.findByText('ACME-01');
+
+    await user.type(screen.getByPlaceholderText('Buscar empresa, código o contacto'), 'acme');
+    await waitFor(() => expect(client.listCustomersPage).toHaveBeenLastCalledWith(
+      { page: 1, pageSize: 10, q: 'acme', sort: 'name:asc' }, expect.any(AbortSignal)));
+
+    await user.click(screen.getByRole('button', { name: 'Estado' }));
+    await user.click(await screen.findByRole('option', { name: /Inactivo/ }));
+    await waitFor(() => expect(client.listCustomersPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: 'inactive', q: 'acme' }), expect.any(AbortSignal)));
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: /Empresa/ }));
+    await waitFor(() => expect(client.listCustomersPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort: 'name:desc' }), expect.any(AbortSignal)));
+    // Contacto y estado no se pueden ordenar en el servidor.
+    expect(screen.queryByRole('button', { name: /^Contacto/ })).toBeNull();
+  });
+
+  it('shows loading feedback and lets the operator retry after a list error', async () => {
+    const user = setupUser();
+    const listCustomersPage = vi.fn()
+      .mockRejectedValueOnce(new Error('Sin conexión'))
+      .mockResolvedValueOnce(pageOf([firstCustomer]));
+
+    render(<CustomerCatalogPage client={makeClient({ listCustomersPage })} />);
 
     expect(screen.getByText('Cargando clientes…')).toBeTruthy();
     expect(await screen.findByText('No se pudo cargar el catálogo. Revisa la conexión e inténtalo de nuevo.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Reintentar' }));
 
     expect(await screen.findByText('ACME-01')).toBeTruthy();
-    expect(listCustomers).toHaveBeenCalledTimes(2);
+    expect(listCustomersPage).toHaveBeenCalledTimes(2);
   });
 
   it('explains an empty catalog and opens the inline creation form', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
 
-    render(<CustomerCatalogPage client={makeClient({ listCustomers: vi.fn().mockResolvedValue([]) })} />);
+    render(<CustomerCatalogPage client={makeClient({ listCustomersPage: vi.fn().mockResolvedValue(pageOf([])) })} />);
 
     expect(await screen.findByText('Todavía no hay clientes')).toBeTruthy();
     expect(screen.getByText('Registra la primera empresa para asociarla a sus pedidos de entrega.')).toBeTruthy();
@@ -73,9 +115,12 @@ describe('CustomerCatalogPage', () => {
     expect(screen.getByLabelText('Código del cliente')).toBeTruthy();
   });
 
-  it('submits exactly the customer API fields, reports success, and adds the customer to the list', async () => {
-    const user = userEvent.setup();
-    const client = makeClient();
+  it('submits exactly the customer API fields, reports success, and reloads the page from the server', async () => {
+    const user = setupUser();
+    const client = makeClient({
+      listCustomersPage: vi.fn().mockResolvedValueOnce(pageOf([firstCustomer]))
+        .mockResolvedValue(pageOf([firstCustomer, newCustomer])),
+    });
 
     render(<CustomerCatalogPage client={client} />);
     await user.click(await screen.findByRole('button', { name: 'Nuevo cliente' }));
@@ -84,7 +129,7 @@ describe('CustomerCatalogPage', () => {
     await user.type(screen.getByLabelText('Nombre de contacto'), 'Mario Salas');
     await user.type(screen.getByLabelText('Correo de contacto'), 'mario@norte.example');
     await user.type(screen.getByLabelText('Teléfono de contacto'), '01 555 1234');
-    await user.selectOptions(screen.getByLabelText('Estado'), 'inactive');
+    await chooseOption(user, screen.getByLabelText('Estado'), 'Inactivo');
     await user.click(screen.getByRole('button', { name: 'Guardar cliente' }));
 
     await waitFor(() => expect(client.createCustomer).toHaveBeenCalledWith({
@@ -95,14 +140,15 @@ describe('CustomerCatalogPage', () => {
       contactPhone: '01 555 1234',
       status: 'inactive',
     }));
-    expect(await screen.findByText('Cliente «Distribuidora Norte» registrado.')).toBeTruthy();
-    expect(screen.getByText('Distribuidora Norte')).toBeTruthy();
+    expect(await screen.findByText('El cliente «Distribuidora Norte» se registró correctamente.')).toBeTruthy();
+    expect(await screen.findByText('Distribuidora Norte')).toBeTruthy();
     expect(screen.getByText('Inactivo')).toBeTruthy();
-    expect(client.listCustomers).toHaveBeenCalledOnce();
+    expect(client.listCustomersPage).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Empresas que contratan el servicio · 1 de 2 activas.')).toBeTruthy();
   });
 
   it('keeps the form open and gives actionable feedback when creation fails', async () => {
-    const user = userEvent.setup();
+    const user = setupUser();
     const client = makeClient({ createCustomer: vi.fn().mockRejectedValue(new Error('Código duplicado')) });
 
     render(<CustomerCatalogPage client={client} />);
@@ -117,6 +163,6 @@ describe('CustomerCatalogPage', () => {
     expect(await screen.findByText('No se pudo registrar el cliente. Verifica los datos e inténtalo de nuevo.')).toBeTruthy();
     expect(screen.getByRole('form', { name: 'Nuevo cliente' })).toBeTruthy();
     expect(screen.getByLabelText('Código del cliente')).toHaveProperty('value', 'NORTE-02');
-    expect(client.listCustomers).toHaveBeenCalledOnce();
+    expect(client.listCustomersPage).toHaveBeenCalledOnce();
   });
 });

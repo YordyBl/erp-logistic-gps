@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
 import { RoutePlanningTypeOrmStore } from '../../../../infrastructure/dispatch/RoutePlanningTypeOrmStore.js';
+import { TrackingSnapshotTypeOrmQuery } from '../../../../infrastructure/dispatch/TrackingSnapshotTypeOrmQuery.js';
 import { DeliveryOrderTypeOrmRepository } from '../../../delivery-orders/infrastructure/persistence/DeliveryOrderTypeOrmRepository.js';
 import { DeliveryOrder } from '../../../delivery-orders/domain/entities/DeliveryOrder.js';
 import { Recipient } from '../../../delivery-orders/domain/value-objects/Recipient.js';
@@ -11,7 +12,8 @@ import { DeliveryAddress } from '../../../delivery-orders/domain/value-objects/D
 import { Package } from '../../../delivery-orders/domain/value-objects/Package.js';
 import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
 import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
-import type { PlannedRoute } from '../../application/ports/RoutePlanningStore.js';
+import type { PlannedRoute, RoutePlanDraft } from '../../application/ports/RoutePlanningStore.js';
+import { DeliveryRouteConflictError } from '../../domain/errors/DeliveryRouteError.js';
 import { probeIntegrationDatabase } from '../../../delivery-orders/infrastructure/persistence/test-database.js';
 
 const CREATED_AT = '2026-10-27T15:00:00.000Z';
@@ -37,16 +39,22 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
   afterAll(async () => {
     if (!source?.isInitialized) return;
     if (organizationIds.length > 0) {
-      for (const table of ['delivery_stop_orders', 'delivery_order_status_history',
+      for (const table of ['delivery_attempts', 'delivery_route_status_history', 'driver_accounts',
+        'delivery_stop_orders', 'delivery_order_status_history',
         'delivery_orders', 'delivery_stops', 'delivery_routes', 'drivers', 'vehicles']) {
         await source.query(`DELETE FROM "${table}" WHERE "organization_id" = ANY($1::uuid[])`,
           [organizationIds]);
       }
       await source.query('DELETE FROM customers WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
+      await source.query('DELETE FROM users WHERE organization_id = ANY($1::uuid[])', [organizationIds]);
       await source.query('DELETE FROM organizations WHERE id = ANY($1::uuid[])', [organizationIds]);
     }
     await source.destroy();
   });
+
+  interface OrderLocation { readonly addressLine: string; readonly latitude: number; readonly longitude: number }
+  const DEFAULT_LOCATION: OrderLocation = { addressLine: 'Av. Arequipa 1234', latitude: -12.084, longitude: -77.035 };
+  const orderLocations = new Map<string, OrderLocation>();
 
   async function seed() {
     const organizationId = randomUUID();
@@ -70,29 +78,41 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
       (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
       VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
     [vehicleId, organizationId, `R${vehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
-    const makeOrder = async (code: string) => {
+    const makeOrder = async (code: string, location: OrderLocation | null = DEFAULT_LOCATION) => {
       const order = DeliveryOrder.create({
         id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
-        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
+        deliveryAddress: DeliveryAddress.create(location === null
+          ? { addressLine: 'Av. Arequipa 1234', district: 'Lince' }
+          : { ...location, district: 'Lince' }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })],
         createdAt: CREATED_AT,
       });
       await orders.save(order);
+      if (location !== null) orderLocations.set(order.id, location);
       return order.id;
     };
     return { organizationId, driverId, vehicleId, makeOrder };
   }
 
+  /** One stop per order, as the planner sends it: the store copies each order's location. */
   function plannedRoute(organizationId: string, driverId: string, vehicleId: string,
-    orderIds: string[]): PlannedRoute {
+    orderIds: string[]): RoutePlanDraft {
     return {
       id: randomUUID(), organizationId, driverId, vehicleId,
       publicCode: `ROUTE-${randomUUID().slice(0, 8).toUpperCase()}`,
       plannedDate: '2026-10-27', status: 'planned', createdAt: CREATED_AT,
-      stops: [{ id: randomUUID(), sequence: 1, addressLine: 'Av. Arequipa 1234',
-        latitude: null, longitude: null, orderIds }],
+      stops: orderIds.map((orderId, index) => ({ id: randomUUID(), sequence: index + 1, orderId })),
     };
+  }
+
+  /** The route the store must return and persist for a draft: stops carry their order's location. */
+  function located(draft: RoutePlanDraft): PlannedRoute {
+    return { ...draft, stops: draft.stops.map(({ orderId, ...stop }) => {
+      const location = orderLocations.get(orderId);
+      if (location === undefined) throw new Error('order location not seeded');
+      return { ...stop, ...location, orderIds: [orderId] };
+    }) };
   }
 
   it('commits ordered links and both audited order transitions; rejects active reuse', async () => {
@@ -101,8 +121,8 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const second = await makeOrder('ORDER-ROUTE-2');
     const route = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
     const actor = randomUUID();
-    await expect(store.plan(route, actor)).resolves.toEqual(route);
-    await expect(store.findById(organizationId, route.id)).resolves.toEqual(route);
+    await expect(store.plan(route, actor)).resolves.toEqual(located(route));
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(located(route));
     await expect(store.findById(randomUUID(), route.id)).resolves.toBeNull();
     for (const id of [first, second]) {
       expect((await orders.findById(id))?.status).toBe('assigned');
@@ -121,23 +141,42 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     expect(await orders.findStatusHistory(organizationId, third)).toEqual([]);
   });
 
-  it('persists resolved stop coordinates for later route geometry and GPS simulation', async () => {
+  it('copies each locked order location into its own stop, in sequence order', async () => {
     const { organizationId, driverId, vehicleId, makeOrder } = await seed();
-    const first = await makeOrder('ORDER-COORDINATE-1');
-    const second = await makeOrder('ORDER-COORDINATE-2');
-    const base = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
-    const route: PlannedRoute = {
-      ...base,
-      stops: [
-        { ...base.stops[0]!, sequence: 1, latitude: -11.974070, longitude: -77.081446, orderIds: [first] },
-        { ...base.stops[0]!, id: randomUUID(), sequence: 2, latitude: -12.046400, longitude: -77.042800,
-          addressLine: 'Plaza Mayor', orderIds: [second] },
-      ],
-    };
+    const first = await makeOrder('ORDER-COORDINATE-1',
+      { addressLine: 'Av. Jose Larco 345', latitude: -12.1219, longitude: -77.03 });
+    const second = await makeOrder('ORDER-COORDINATE-2',
+      { addressLine: 'Plaza Mayor de Lima', latitude: -12.0464, longitude: -77.0428 });
+    const route = plannedRoute(organizationId, driverId, vehicleId, [first, second]);
 
-    await store.plan(route, randomUUID());
+    const planned = await store.plan(route, randomUUID());
 
-    await expect(store.findById(organizationId, route.id)).resolves.toEqual(route);
+    expect(planned.stops).toEqual([
+      { id: route.stops[0]!.id, sequence: 1, addressLine: 'Av. Jose Larco 345',
+        latitude: -12.1219, longitude: -77.03, orderIds: [first] },
+      { id: route.stops[1]!.id, sequence: 2, addressLine: 'Plaza Mayor de Lima',
+        latitude: -12.0464, longitude: -77.0428, orderIds: [second] },
+    ]);
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(planned);
+    // A later order edit does not move the planned stop: the stop is a snapshot.
+    await source.query(`UPDATE delivery_orders SET delivery_address_line='Otra direccion 1',
+      latitude=-12.2, longitude=-77.1 WHERE id=$1`, [first]);
+    await expect(store.findById(organizationId, route.id)).resolves.toEqual(planned);
+  });
+
+  it('rejects planning an order without coordinates and writes nothing', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const locatedOrder = await makeOrder('ORDER-LOCATED-1');
+    const legacy = await makeOrder('ORDER-UNLOCATED-1', null);
+    const route = plannedRoute(organizationId, driverId, vehicleId, [locatedOrder, legacy]);
+
+    await expect(store.plan(route, randomUUID())).rejects.toBeInstanceOf(DeliveryRouteConflictError);
+
+    await expect(store.findById(organizationId, route.id)).resolves.toBeNull();
+    for (const id of [locatedOrder, legacy]) {
+      expect((await orders.findById(id))?.status).toBe('created');
+      expect(await orders.findStatusHistory(organizationId, id)).toEqual([]);
+    }
   });
 
   it('redispatches a returned order atomically without losing its prior route or audit', async () => {
@@ -156,7 +195,7 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
     const second = plannedRoute(organizationId, driverId, vehicleId, [id]);
     // The original route is no longer reserving its resources after execution.
     await source.query(`UPDATE delivery_routes SET status='completed' WHERE id=$1`, [first.id]);
-    await expect(store.plan(second, actor)).resolves.toEqual(second);
+    await expect(store.plan(second, actor)).resolves.toEqual(located(second));
     expect((await orders.findById(id))?.activeRouteId).toBe(second.id);
     expect((await orders.findById(id))?.status).toBe('assigned');
     const history = await orders.findStatusHistory(organizationId, id);
@@ -343,5 +382,161 @@ describe.skipIf(databaseUrl === null)('Route planning transaction (PostgreSQL)',
       .resolves.toMatchObject({ driverId, vehicleId });
     await expect(store.reassign(randomUUID(), secondRoute.id, { driverId }))
       .rejects.toThrow();
+  });
+
+  function simulatedRoute(organizationId: string, driverId: string, vehicleId: string,
+    orderIds: string[]): RoutePlanDraft {
+    const base = plannedRoute(organizationId, driverId, vehicleId, orderIds);
+    return { ...base, simulatedCompletionEnabled: true,
+      origin: { addressLine: 'Núcleo de investigación', latitude: -11.97407, longitude: -77.081446 } };
+  }
+
+  it('starts a simulated route at planning with audited transitions by the planning actor', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const id = await makeOrder('SIM-PLAN-1');
+    const route = simulatedRoute(organizationId, driverId, vehicleId, [id]);
+    const actor = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DISPATCHER','active',now())`,
+    [actor, organizationId, `${actor}@example.test`]);
+
+    const planned = await store.plan(route, actor);
+
+    expect(planned).toMatchObject({ id: route.id, status: 'in_progress',
+      startedAt: expect.any(String), simulatedCompletionEnabled: true });
+    const [row] = await source.query<{ status: string; started_at: Date | null;
+      simulation_actor_user_id: string | null }[]>(
+      'SELECT status, started_at, simulation_actor_user_id FROM delivery_routes WHERE id=$1', [route.id]);
+    expect(row).toMatchObject({ status: 'in_progress', simulation_actor_user_id: actor });
+    expect(row?.started_at?.toISOString()).toBe(planned.startedAt);
+    expect((await orders.findById(id))?.status).toBe('in_transit');
+    const history = await orders.findStatusHistory(organizationId, id);
+    expect(history.map((event) => [event.fromStatus, event.toStatus, event.actorUserId])).toEqual([
+      ['created', 'planned', actor], ['planned', 'assigned', actor], ['assigned', 'in_transit', actor]]);
+    const attempts = await source.query<{ status: string; route_id: string; driver_id: string }[]>(
+      'SELECT status, route_id, driver_id FROM delivery_attempts WHERE order_id=$1', [id]);
+    expect(attempts).toEqual([{ status: 'in_progress', route_id: route.id, driver_id: driverId }]);
+    const routeHistory = await source.query<{ from_status: string; to_status: string; actor_user_id: string }[]>(
+      'SELECT from_status, to_status, actor_user_id FROM delivery_route_status_history WHERE route_id=$1',
+      [route.id]);
+    expect(routeHistory).toEqual([{ from_status: 'planned', to_status: 'in_progress', actor_user_id: actor }]);
+    await expect(store.findById(organizationId, route.id)).resolves.toMatchObject({
+      status: 'in_progress', startedAt: planned.startedAt, simulatedCompletionEnabled: true });
+  });
+
+  it('keeps ordinary planning unstarted and without a simulation actor', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const route = plannedRoute(organizationId, driverId, vehicleId, [await makeOrder('ORDINARY-PLAN-1')]);
+
+    await expect(store.plan(route, randomUUID())).resolves.toEqual(located(route));
+
+    const [row] = await source.query<{ status: string; simulation_actor_user_id: string | null }[]>(
+      'SELECT status, simulation_actor_user_id FROM delivery_routes WHERE id=$1', [route.id]);
+    expect(row).toEqual({ status: 'planned', simulation_actor_user_id: null });
+  });
+
+  it('rejects a simulated route for a driver linked to an account with no writes', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const userId = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DRIVER','active',now())`,
+    [userId, organizationId, `${userId}@example.test`]);
+    await source.query('INSERT INTO driver_accounts (driver_id, organization_id, user_id) VALUES ($1,$2,$3)',
+      [driverId, organizationId, userId]);
+    const id = await makeOrder('SIM-LINKED-1');
+    const route = simulatedRoute(organizationId, driverId, vehicleId, [id]);
+
+    await expect(store.plan(route, randomUUID())).rejects.toMatchObject({
+      message: 'Simulated routes require a driver without a linked account' });
+
+    expect(await store.findById(organizationId, route.id)).toBeNull();
+    expect((await orders.findById(id))?.status).toBe('created');
+  });
+
+  it('generates increasing RUT- route codes from the database sequence', async () => {
+    const first = await store.nextPublicCode();
+    const second = await store.nextPublicCode();
+
+    expect(first).toMatch(/^RUT-\d{8}$/);
+    expect(Number(second.slice(4))).toBeGreaterThan(Number(first.slice(4)));
+  });
+
+  it('lists only active drivers without a linked account as simulation candidates', async () => {
+    const { organizationId, driverId } = await seed();
+    const linkedId = randomUUID();
+    const inactiveId = randomUUID();
+    for (const [id, status] of [[linkedId, 'active'], [inactiveId, 'inactive']] as const) {
+      await source.query(`INSERT INTO drivers
+        (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+        VALUES ($1,$2,'Other Driver',$3,'+51 911 222 334',$4,$5,$6,$6)`,
+      [id, organizationId, `DNI-${id.slice(0, 8).toUpperCase()}`, `L-${id.slice(0, 8).toUpperCase()}`,
+        status, CREATED_AT]);
+    }
+    const userId = randomUUID();
+    await source.query(`INSERT INTO users
+      (id, organization_id, email, password_hash, role, status, created_at)
+      VALUES ($1,$2,$3,'test-only-hash','DRIVER','active',now())`,
+    [userId, organizationId, `${userId}@example.test`]);
+    await source.query('INSERT INTO driver_accounts (driver_id, organization_id, user_id) VALUES ($1,$2,$3)',
+      [linkedId, organizationId, userId]);
+
+    await expect(store.listSimulationEligibleDriverIds(organizationId)).resolves.toEqual([driverId]);
+    await expect(store.listSimulationEligibleDriverIds(randomUUID())).resolves.toEqual([]);
+  });
+
+  it('builds the tracking snapshot from live routes only', async () => {
+    const { organizationId, driverId, vehicleId, makeOrder } = await seed();
+    const addCrew = async () => {
+      const crewDriverId = randomUUID();
+      const crewVehicleId = randomUUID();
+      await source.query(`INSERT INTO drivers
+        (id, organization_id, full_name, document_number, phone, license_number, status, created_at, updated_at)
+        VALUES ($1,$2,'Crew Driver',$3,'+51 911 222 335',$4,'active',$5,$5)`,
+      [crewDriverId, organizationId, `DNI-${crewDriverId.slice(0, 8).toUpperCase()}`,
+        `L-${crewDriverId.slice(0, 8).toUpperCase()}`, CREATED_AT]);
+      await source.query(`INSERT INTO vehicles
+        (id, organization_id, plate, type, capacity_kg, status, created_at, updated_at)
+        VALUES ($1,$2,$3,'van',800,'active',$4,$4)`,
+      [crewVehicleId, organizationId, `S${crewVehicleId.slice(0, 6).toUpperCase()}`, CREATED_AT]);
+      return { crewDriverId, crewVehicleId };
+    };
+    const actor = randomUUID();
+    const planOn = async (plannedDate: string, crew: { crewDriverId: string; crewVehicleId: string }) => {
+      const draft = { ...plannedRoute(organizationId, crew.crewDriverId, crew.crewVehicleId,
+        [await makeOrder(`ORDER-${randomUUID().slice(0, 8)}`), await makeOrder(`ORDER-${randomUUID().slice(0, 8)}`)]),
+      plannedDate };
+      await store.plan(draft, actor);
+      return draft;
+    };
+
+    const completed = await planOn('2026-10-28', { crewDriverId: driverId, crewVehicleId: vehicleId });
+    await source.query(`UPDATE delivery_routes SET status='completed', started_at=$2, completed_at=$2
+      WHERE id=$1`, [completed.id, CREATED_AT]);
+    // A route of another day stays out of the 2026-10-28 snapshot.
+    await planOn('2026-10-27', await addCrew());
+    const running = await planOn('2026-10-20', await addCrew());
+    await source.query(`UPDATE delivery_routes SET status='in_progress', started_at=$2 WHERE id=$1`,
+      [running.id, CREATED_AT]);
+    const upcoming = await planOn('2026-10-28', await addCrew());
+
+
+    const query = vi.fn((sql: string, parameters?: unknown[]) => source.query(sql, parameters));
+    const snapshot = await new TrackingSnapshotTypeOrmQuery({ query } as unknown as Pick<DataSource, 'query'>)
+      .load(organizationId, '2026-10-28');
+    expect(query).toHaveBeenCalledTimes(4);
+    expect(snapshot.routes.map((route) => route.id)).toEqual([running.id, upcoming.id]);
+    const upcomingListed = await store.findById(organizationId, upcoming.id);
+    expect(snapshot.routes[1]).toEqual({
+      id: upcoming.id, publicCode: upcoming.publicCode, plannedDate: '2026-10-28', status: 'planned',
+      driverId: upcoming.driverId, vehicleId: upcoming.vehicleId, stops: upcomingListed?.stops,
+    });
+    const snapshotOrderIds = [running, upcoming].flatMap((route) => route.stops.map((stop) => stop.orderId));
+    expect(snapshot.orders.map((order) => order.id).sort()).toEqual([...snapshotOrderIds].sort());
+    expect(snapshot.orders.every((order) => order.status === 'assigned' && order.publicCode.startsWith('ORDER-')))
+      .toBe(true);
+    await expect(new TrackingSnapshotTypeOrmQuery(source).load(randomUUID(), '2026-10-28'))
+      .resolves.toEqual({ routes: [], orders: [] });
   });
 });

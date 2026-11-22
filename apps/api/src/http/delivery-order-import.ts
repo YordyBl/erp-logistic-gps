@@ -24,8 +24,9 @@ export const DELIVERY_ORDER_IMPORT_HEADERS = [
   'packageWeightKg',
 ] as const;
 
+// Coordinates are required: every order must be placed on the map.
 const REQUIRED_HEADERS = DELIVERY_ORDER_IMPORT_HEADERS.filter(
-  (header) => !['latitude', 'longitude', 'packageWeightKg'].includes(header),
+  (header) => header !== 'packageWeightKg',
 );
 const MAX_IMPORT_ROWS = 5_000;
 const MAX_IMPORT_COLUMNS = DELIVERY_ORDER_IMPORT_HEADERS.length;

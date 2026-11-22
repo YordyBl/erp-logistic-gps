@@ -39,6 +39,18 @@ transition leaves both unchanged; a stale save cannot restore a cancelled order.
 `confirm-delivery` and `report-delivery-incident` still belong to the future
 `delivery-execution` module.
 
+## Operator actions by status
+
+Only `ADMIN` and `DISPATCHER` reach these actions; `DRIVER` has no access to the
+order catalog. There is no physical delete: cancellation keeps the order and its
+audit history.
+
+| Status | Edit details | Cancel |
+|---|---|---|
+| `created` | Yes: recipient, delivery address/coordinates and packages. Customer and time window are fixed. A package sent without `code` is new and gets a generated `PKG-` code. | Yes |
+| `planned`, `assigned` | No (the route already copied the location) | Yes |
+| `in_transit`, `delivered`, `returned`, `cancelled` | No | No |
+
 ## Ratified incident rule
 
 > Any registered delivery incident marks the attempt as failed and returns the order to the

@@ -53,7 +53,7 @@ milestones.
 | A dispatcher creates an order with two parcels | `CreateDeliveryOrderUseCase` | Order stored in `created` status and `DeliveryOrderCreated` published |
 | The same organization repeats a public code | `CreateDeliveryOrderUseCase` | Invariant error; nothing stored or published |
 | A dispatcher reads an order from their organization | `GetDeliveryOrderUseCase` | Order DTO returned |
-| An authenticated caller lists orders from their organization | `ListDeliveryOrdersUseCase` | Tenant-scoped order DTOs returned |
+| An authenticated caller lists one page of their organization's orders | `ListDeliveryOrdersPageUseCase` | Tenant-scoped order DTOs with the total and facet counts |
 | A dispatcher edits recipient, address or packages before planning | `EditDeliveryOrderUseCase` | Order details updated without changing its status history |
 | A dispatcher cancels an order before transit | `CancelDeliveryOrderUseCase` | Order retained with an audited status transition |
 | A user from another organization guesses an order id | `GetDeliveryOrderUseCase` | Forbidden error, no order data returned |
@@ -75,7 +75,7 @@ delivery-orders/
 │   └── use-cases/
 │       ├── create-delivery-order/{CreateDeliveryOrderCommand,CreateDeliveryOrderUseCase,CreateDeliveryOrderResult}.ts
 │       ├── get-delivery-order/{GetDeliveryOrderQuery,GetDeliveryOrderUseCase,GetDeliveryOrderResult}.ts
-│       ├── list-delivery-orders/ListDeliveryOrdersUseCase.ts
+│       ├── list-delivery-orders/ListDeliveryOrdersPageUseCase.ts
 │       ├── edit-delivery-order/EditDeliveryOrderUseCase.ts
 │       └── cancel-delivery-order/CancelDeliveryOrderUseCase.ts
 ├── composition/composition-root.ts

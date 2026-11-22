@@ -1,34 +1,77 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { ApiClient } from './client.js';
+import { ApiClient, buildQuery, type Page, type PageParams } from './client.js';
 
 describe('ApiClient dispatch planning', () => {
-  it('uses the authenticated route list, create and reassignment contracts', async () => {
+  it('uses the authenticated route page, create and reassignment contracts', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(JSON.stringify({ data: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     );
     const client = new ApiClient({ fetcher, baseUrl: 'http://localhost:3000/api/v1' });
     client.setAccessToken('access-token');
 
-    await client.listDispatchRoutes();
+    await client.listDispatchRoutesPage({ page: 2, pageSize: 20, status: ['planned', 'in_progress'], ids: [], q: '' });
     await client.createDispatchRoute({
       publicCode: 'ROUTE-001', plannedDate: '2026-11-02', driverId: 'driver-1', vehicleId: 'vehicle-1',
-      stops: [{ sequence: 1, addressLine: 'Av. Arequipa 100', orderIds: ['order-1', 'order-2'] }],
+      stops: [{ sequence: 1, orderId: 'order-1' }, { sequence: 2, orderId: 'order-2' }],
     });
     await client.reassignDispatchRoute('route/1', { driverId: 'driver-2' });
 
     const [listUrl, listInit] = fetcher.mock.calls[0] ?? [];
-    expect(listUrl).toBe('http://localhost:3000/api/v1/delivery-routes');
+    expect(listUrl).toBe('http://localhost:3000/api/v1/delivery-routes?page=2&pageSize=20&status=planned%2Cin_progress');
     expect(listInit?.method).toBeUndefined();
     expect(new Headers(listInit?.headers).get('Authorization')).toBe('Bearer access-token');
     const [createUrl, createInit] = fetcher.mock.calls[1] ?? [];
     expect(createUrl).toBe('http://localhost:3000/api/v1/delivery-routes');
     expect(createInit?.method).toBe('POST');
-    expect(JSON.parse(String(createInit?.body))).toMatchObject({ stops: [{ orderIds: ['order-1', 'order-2'] }] });
+    expect(JSON.parse(String(createInit?.body))).toMatchObject({ stops: [{ sequence: 1, orderId: 'order-1' }, { sequence: 2, orderId: 'order-2' }] });
     const [reassignUrl, reassignInit] = fetcher.mock.calls[2] ?? [];
     expect(reassignUrl).toBe('http://localhost:3000/api/v1/delivery-routes/route%2F1');
     expect(reassignInit?.method).toBe('PATCH');
     expect(JSON.parse(String(reassignInit?.body))).toEqual({ driverId: 'driver-2' });
+  });
+
+  it('reads vehicle route stats, with the server default when months is omitted', async () => {
+    const stats = [{ vehicleId: 'vehicle-1', routes: 1, completed: 1, stops: 2, orders: 3, lastRouteDay: '2026-11-06',
+      monthly: [{ month: '2026-11', routes: 1 }] }];
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({ data: stats }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    await expect(client.getVehicleRouteStats()).resolves.toEqual(stats);
+    await client.getVehicleRouteStats(12);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/vehicles/route-stats', '/api/v1/vehicles/route-stats?months=12',
+    ]);
+  });
+});
+
+describe('ApiClient session restore', () => {
+  const session = { accessToken: 'token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+
+  it('shares one refresh between concurrent callers because the cookie rotates', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response(JSON.stringify({ data: session }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    );
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    const [first, second] = await Promise.all([client.restoreSession(), client.restoreSession()]);
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(first).toEqual(second);
+  });
+
+  it('skips the refresh request when this browser never signed in', async () => {
+    vi.stubGlobal('window', { localStorage: { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() } });
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+
+    await expect(client.restoreSession()).resolves.toBeNull();
+
+    expect(fetcher).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });
 
@@ -165,25 +208,28 @@ describe('ApiClient delivery-order import', () => {
 });
 
 describe('ApiClient customer and order management', () => {
-  it('lists and creates customers within the authenticated API context', async () => {
+  it('lists a customer page and creates customers within the authenticated API context', async () => {
     const customer = {
       id: 'customer-1', organizationId: 'org-1', publicCode: 'CUS-001',
       name: 'Lima Supply', contactName: 'Ana Torres', contactEmail: 'ana@example.test',
       contactPhone: '+51 900 000 001', status: 'active', createdAt: '2026-11-02T10:00:00.000Z',
     };
+    const meta = { page: 1, pageSize: 20, total: 1, counts: { status: { active: 1, inactive: 0 } } };
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [customer] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [customer], meta }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: customer }), { status: 201 }));
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
     client.setAccessToken('access-token');
 
-    await expect(client.listCustomers()).resolves.toEqual([customer]);
+    await expect(client.listCustomersPage({ status: ['active'], q: 'lima', pageSize: 20, ids: [] }))
+      .resolves.toEqual({ data: [customer], meta });
     await expect(client.createCustomer({
       publicCode: 'CUS-001', name: 'Lima Supply', contactName: 'Ana Torres',
       contactEmail: 'ana@example.test', contactPhone: '+51 900 000 001',
     })).resolves.toEqual(customer);
 
-    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/api/v1/customers', '/api/v1/customers']);
+    expect(fetcher.mock.calls.map(([url]) => url))
+      .toEqual(['/api/v1/customers?status=active&q=lima&pageSize=20', '/api/v1/customers']);
     const [, request] = fetcher.mock.calls[1] ?? [];
     expect(JSON.parse(String(request?.body))).toEqual({
       publicCode: 'CUS-001', name: 'Lima Supply', contactName: 'Ana Torres',
@@ -202,7 +248,9 @@ describe('ApiClient customer and order management', () => {
       createdAt: '2026-11-02T10:00:00.000Z', updatedAt: '2026-11-02T10:00:00.000Z',
     };
     const fetcher = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [order] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: [order], meta: { page: 1, pageSize: 10, total: 1, counts: { status: { created: 1 } } },
+      }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: order }), { status: 201 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { ...order, status: 'cancelled' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [
@@ -211,10 +259,11 @@ describe('ApiClient customer and order management', () => {
     const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
     client.setAccessToken('access-token');
 
-    await expect(client.listDeliveryOrders()).resolves.toEqual([order]);
+    await expect(client.listDeliveryOrdersPage({ page: 1, pageSize: 10, q: 'lince', status: ['created', 'returned'] }))
+      .resolves.toMatchObject({ data: [order], meta: { total: 1, counts: { status: { created: 1 } } } });
     await expect(client.createDeliveryOrder({
       customerId: 'customer-1', timeWindow: 'AM', publicCode: 'ORD-001', recipient: order.recipient,
-      deliveryAddress: { addressLine: 'Av. Lima 123', district: 'Lince' },
+      deliveryAddress: { addressLine: 'Av. Lima 123', district: 'Lince', latitude: -12.084, longitude: -77.035 },
       packages: [{ code: 'BOX-1', description: 'Caja' }],
     })).resolves.toEqual(order);
     await expect(client.cancelDeliveryOrder('order-1')).resolves.toMatchObject({ status: 'cancelled' });
@@ -223,9 +272,24 @@ describe('ApiClient customer and order management', () => {
     ]);
 
     expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
-      '/api/v1/delivery-orders', '/api/v1/delivery-orders', '/api/v1/delivery-orders/order-1/cancel',
-      '/api/v1/delivery-orders/order-1/history',
+      '/api/v1/delivery-orders?page=1&pageSize=10&q=lince&status=created%2Creturned', '/api/v1/delivery-orders',
+      '/api/v1/delivery-orders/order-1/cancel', '/api/v1/delivery-orders/order-1/history',
     ]);
+  });
+
+  it('reads one page of the evidence vault with its query and keeps the meta', async () => {
+    const item = { id: 'evidence-1', order: { id: 'order-1', publicCode: 'ORD-001' } };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify({
+      data: [item], meta: { page: 2, pageSize: 8, total: 9 },
+    }), { status: 200 }));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    const controller = new AbortController();
+
+    await expect(client.listEvidencePage({ page: 2, pageSize: 8, q: 'ORD-001' }, controller.signal))
+      .resolves.toEqual({ data: [item], meta: { page: 2, pageSize: 8, total: 9 } });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/delivery-evidence?page=2&pageSize=8&q=ORD-001');
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 });
 
@@ -290,5 +354,81 @@ describe('ApiClient vehicle management', () => {
       plate: 'abc-123', type: 'Van', capacityKg: 1200,
     });
     expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toEqual({ capacityKg: null, status: 'inactive' });
+  });
+});
+
+describe('buildQuery', () => {
+  it('skips empty values and joins lists with commas', () => {
+    expect(buildQuery({
+      page: 2, pageSize: 20, q: 'ana maría', sort: 'createdAt:desc', status: ['created', 'planned'],
+      ids: [], customerId: undefined, district: '', archived: null,
+    })).toBe('?page=2&pageSize=20&q=ana+mar%C3%ADa&sort=createdAt%3Adesc&status=created%2Cplanned');
+  });
+
+  it('returns an empty string when nothing remains', () => {
+    expect(buildQuery({ q: '', status: [] })).toBe('');
+  });
+});
+
+describe('ApiClient paginated lists', () => {
+  const page: Page<{ readonly id: string }> = {
+    data: [{ id: 'order-1' }],
+    meta: { page: 1, pageSize: 20, total: 41, counts: { status: { created: 41 } } },
+  };
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  // `requestPage` es privado: los métodos de cada listado lo usarán en las fases siguientes.
+  const requestPage = (client: ApiClient, path: string, params: PageParams, signal?: AbortSignal) =>
+    client['requestPage']<{ readonly id: string }>(path, params, signal);
+
+  it('sends the query and keeps the meta that requestData drops', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(json(page));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('access-token');
+    const controller = new AbortController();
+
+    await expect(requestPage(client, '/delivery-orders', { page: 1, pageSize: 20, status: ['created'] }, controller.signal))
+      .resolves.toEqual(page);
+
+    const [url, request] = fetcher.mock.calls[0] ?? [];
+    expect(url).toBe('/api/v1/delivery-orders?page=1&pageSize=20&status=created');
+    expect(request?.signal).toBe(controller.signal);
+    expect(new Headers(request?.headers).get('Authorization')).toBe('Bearer access-token');
+  });
+
+  it('retries with the same signal after refreshing an expired session', async () => {
+    const session = { accessToken: 'fresh-token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ error: { code: 'UNAUTHORIZED', message: 'expired' } }, 401))
+      .mockResolvedValueOnce(json({ data: session }))
+      .mockResolvedValueOnce(json(page));
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('stale-token');
+    const controller = new AbortController();
+
+    await expect(requestPage(client, '/customers', { q: 'ana' }, controller.signal)).resolves.toEqual(page);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/v1/customers?q=ana', '/api/v1/auth/refresh', '/api/v1/customers?q=ana',
+    ]);
+    const retry = fetcher.mock.calls[2]?.[1];
+    expect(retry?.signal).toBe(controller.signal);
+    expect(new Headers(retry?.headers).get('Authorization')).toBe('Bearer fresh-token');
+  });
+
+  it('does not retry a request cancelled while the session was refreshing', async () => {
+    const controller = new AbortController();
+    const session = { accessToken: 'fresh-token', accessTokenExpiresAt: '', refreshTokenExpiresAt: '', user: {} };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(json({ error: { code: 'UNAUTHORIZED', message: 'expired' } }, 401))
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return json({ data: session });
+      });
+    const client = new ApiClient({ fetcher, baseUrl: '/api/v1' });
+    client.setAccessToken('stale-token');
+
+    await expect(requestPage(client, '/customers', {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

@@ -11,10 +11,11 @@ interface ValhallaResponse {
     readonly distance?: unknown;
     readonly duration?: unknown;
     readonly geometry?: unknown;
+    readonly legs?: readonly { readonly distance?: unknown }[];
   }[];
   readonly trip?: {
     readonly summary?: { readonly length?: unknown; readonly time?: unknown };
-    readonly legs?: readonly { readonly shape?: unknown }[];
+    readonly legs?: readonly { readonly shape?: unknown; readonly summary?: { readonly length?: unknown } }[];
   };
 }
 
@@ -60,7 +61,7 @@ export class ValhallaRouteGeometryProvider implements RouteGeometryProvider {
         signal: controller.signal,
       });
       if (!response.ok) return null;
-      return parseGeometry(await response.json() as ValhallaResponse);
+      return parseGeometry(await response.json() as ValhallaResponse, locations.length - 1);
     } catch {
       // Planned geometry is optional; GPS ingestion and order progress continue.
       return null;
@@ -70,7 +71,7 @@ export class ValhallaRouteGeometryProvider implements RouteGeometryProvider {
   }
 }
 
-function parseGeometry(response: ValhallaResponse): RouteGeometry | null {
+function parseGeometry(response: ValhallaResponse, expectedLegs: number): RouteGeometry | null {
   const osrmRoute = response.routes?.[0];
   if (osrmRoute !== undefined) {
     const distanceMeters = osrmRoute.distance;
@@ -79,7 +80,10 @@ function parseGeometry(response: ValhallaResponse): RouteGeometry | null {
     if (typeof distanceMeters !== 'number' || !Number.isFinite(distanceMeters) || distanceMeters <= 0 ||
         typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0 ||
         coordinates === null || coordinates.length < 2) return null;
-    return { coordinates, distanceMeters, durationSeconds };
+    const legDistancesMeters = validLegDistances(
+      osrmRoute.legs?.map((leg) => leg.distance), expectedLegs);
+    return { coordinates, distanceMeters, durationSeconds,
+      ...(legDistancesMeters === undefined ? {} : { legDistancesMeters }) };
   }
 
   const summary = response.trip?.summary;
@@ -106,7 +110,22 @@ function parseGeometry(response: ValhallaResponse): RouteGeometry | null {
     });
   });
   if (coordinates.length < 2) return null;
-  return { coordinates, distanceMeters: lengthKilometers * 1_000, durationSeconds };
+  const legDistancesMeters = validLegDistances(legs.map((leg) =>
+    typeof leg.summary?.length === 'number' ? leg.summary.length * 1_000 : undefined), expectedLegs);
+  return { coordinates, distanceMeters: lengthKilometers * 1_000, durationSeconds,
+    ...(legDistancesMeters === undefined ? {} : { legDistancesMeters }) };
+}
+
+/** Leg distances are kept only when every leg between the requested locations is valid. */
+function validLegDistances(values: readonly unknown[] | undefined,
+  expectedLegs: number): number[] | undefined {
+  if (values === undefined || values.length !== expectedLegs) return undefined;
+  const distances: number[] = [];
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+    distances.push(value);
+  }
+  return distances.some((distance) => distance > 0) ? distances : undefined;
 }
 
 function parseGeoJsonLineString(value: unknown): { latitude: number; longitude: number }[] | null {

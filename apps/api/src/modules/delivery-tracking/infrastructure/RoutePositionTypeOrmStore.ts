@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { DataSource } from 'typeorm';
 
+import type { TrailPoint } from '../application/GetRouteTrackUseCase.js';
 import type { PositionSource, RoutePositionContext, RoutePosition } from '../application/ports/PositionProvider.js';
 
 export interface RoutePositionStore {
   findActiveRoutes(): Promise<readonly RoutePositionContext[]>;
   findLatestForRoutes(organizationId: string, routeIds: readonly string[]): Promise<readonly RoutePosition[]>;
+  /** The latest `limit` positions of one route, oldest first. */
+  findTrail(organizationId: string, routeId: string, limit: number): Promise<readonly TrailPoint[]>;
   record(position: RoutePosition): Promise<boolean>;
   pruneReceivedBefore(cutoff: string): Promise<number>;
 }
@@ -14,7 +17,7 @@ interface ActiveRouteRow {
   organizationId: string;
   routeId: string;
   driverId: string;
-  driverUserId: string;
+  simulationActorUserId: string;
   simulatedCompletionEnabled: boolean;
   startedAt: Date;
   originAddressLine: string | null;
@@ -42,17 +45,17 @@ export class RoutePositionTypeOrmStore implements RoutePositionStore {
   async findActiveRoutes(): Promise<readonly RoutePositionContext[]> {
     const rows = await this.dataSource.query<ActiveRouteRow[]>(`
       SELECT r.organization_id AS "organizationId", r.id AS "routeId",
-        r.driver_id AS "driverId", accounts.user_id AS "driverUserId",
+        r.driver_id AS "driverId", r.simulation_actor_user_id AS "simulationActorUserId",
         r.simulated_completion_enabled AS "simulatedCompletionEnabled", r.started_at AS "startedAt",
         r.origin_address_line AS "originAddressLine", r.origin_latitude AS "originLatitude",
         r.origin_longitude AS "originLongitude",
         s.latitude AS "latitude", s.longitude AS "longitude", s.sequence AS "sequence"
       FROM delivery_routes r
-      JOIN driver_accounts accounts ON accounts.organization_id=r.organization_id
-        AND accounts.driver_id=r.driver_id
       JOIN delivery_stops s ON s.organization_id=r.organization_id AND s.route_id=r.id
       WHERE r.status='in_progress' AND r.started_at IS NOT NULL
-        AND r.simulated_completion_enabled=true
+        AND r.simulated_completion_enabled=true AND r.simulation_actor_user_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM driver_accounts accounts
+          WHERE accounts.organization_id=r.organization_id AND accounts.driver_id=r.driver_id)
         AND EXISTS (SELECT 1 FROM delivery_attempts a
           WHERE a.organization_id=r.organization_id AND a.route_id=r.id
             AND a.driver_id=r.driver_id AND a.status='in_progress')
@@ -62,7 +65,7 @@ export class RoutePositionTypeOrmStore implements RoutePositionStore {
       organizationId: string;
       routeId: string;
       driverId: string;
-      driverUserId: string;
+      simulationActorUserId: string;
       simulatedCompletionEnabled: boolean;
       startedAt: string;
       origin?: { addressLine: string; latitude: number; longitude: number };
@@ -76,7 +79,7 @@ export class RoutePositionTypeOrmStore implements RoutePositionStore {
           organizationId: row.organizationId,
           routeId: row.routeId,
           driverId: row.driverId,
-          driverUserId: row.driverUserId,
+          simulationActorUserId: row.simulationActorUserId,
           simulatedCompletionEnabled: row.simulatedCompletionEnabled,
           startedAt: row.startedAt.toISOString(),
           stops: [],
@@ -96,6 +99,24 @@ export class RoutePositionTypeOrmStore implements RoutePositionStore {
       ...route,
       stops: route.stops,
       ...(route.origin === undefined ? {} : { origin: route.origin }),
+    }));
+  }
+
+  async findTrail(organizationId: string, routeId: string, limit: number): Promise<readonly TrailPoint[]> {
+    // Newest `limit` rows through the (organization, route, recorded_at DESC) index, then oldest first.
+    const rows = await this.dataSource.query<{ latitude: string | number; longitude: string | number; recordedAt: Date | string }[]>(`
+      SELECT latitude, longitude, "recordedAt" FROM (
+        SELECT latitude, longitude, recorded_at AS "recordedAt"
+        FROM route_positions
+        WHERE organization_id=$1 AND route_id=$2
+        ORDER BY recorded_at DESC
+        LIMIT $3
+      ) recent
+      ORDER BY "recordedAt" ASC`, [organizationId, routeId, limit]);
+    return rows.map((row) => ({
+      latitude: Number(row.latitude),
+      longitude: Number(row.longitude),
+      recordedAt: new Date(row.recordedAt).toISOString(),
     }));
   }
 

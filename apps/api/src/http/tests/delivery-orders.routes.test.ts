@@ -42,6 +42,19 @@ describe('POST /api/v1/delivery-orders/resolve-map-link', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ data: { latitude: -12.1, longitude: -77.02 } });
   });
+
+  it('explains why a link could not be resolved', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/resolve-map-link')
+      .set(bearer(token))
+      .send({ url: 'https://www.google.com/search?q=-12.1,-77.02' });
+
+    expect(response.status).toBe(422);
+    expect(response.body.error).toMatchObject({
+      code: 'GOOGLE_MAPS_LINK_UNRESOLVED', details: { reason: 'unsupported_host' },
+    });
+  });
 });
 
 const IMPORT_HEADERS = [
@@ -97,6 +110,18 @@ async function createOrder(
 
   expect(response.status).toBe(201);
   return response.body.data.id as string;
+}
+
+function listOrders(app: Express, token: string, query: Record<string, string> = {}) {
+  return request(app).get('/api/v1/delivery-orders').query(query).set(bearer(token));
+}
+
+/** `meta.counts.status` lists every status, with 0 for the ones not given. */
+function statusCounts(counts: Record<string, number>): Record<string, number> {
+  return {
+    created: 0, planned: 0, assigned: 0, in_transit: 0, delivered: 0, returned: 0, cancelled: 0,
+    ...counts,
+  };
 }
 
 describe('POST /api/v1/delivery-orders', () => {
@@ -302,6 +327,9 @@ describe('POST /api/v1/delivery-orders', () => {
       async nextCodes() {
         return { publicCode: 'ORD-00000001', packageCodes: ['PKG-00000001'] };
       },
+      async nextPackageCodes() {
+        return [];
+      },
       async save() {
         saveCalls += 1;
         throw new DeliveryOrderInvariantError(
@@ -318,8 +346,8 @@ describe('POST /api/v1/delivery-orders', () => {
       async findByPublicCode() {
         return null;
       },
-      async list() {
-        return [];
+      async listPage() {
+        return { items: [], total: 0 };
       },
       async editDetails() {
         throw new Error('Unexpected edit');
@@ -386,6 +414,25 @@ describe('POST /api/v1/delivery-orders/import', () => {
     expect(orders.body.data).toEqual([]);
   });
 
+  it('rejects an imported order without coordinates and keeps the located one', async () => {
+    const { app, token } = await buildSeededApp();
+    const response = await request(app)
+      .post('/api/v1/delivery-orders/import')
+      .set(bearer(token))
+      .set('Content-Type', 'text/csv')
+      .send(importCsvRows([
+        ['TEST-CUSTOMER', 'AM', 'IMP-NOLOC', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-LOC', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-2', 'Caja', ''],
+      ]));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.importedOrders.map((order: { publicCode: string }) => order.publicCode)).toEqual(['IMP-LOC']);
+    expect(response.body.data.rejectedOrders).toEqual([expect.objectContaining({ publicCode: 'IMP-NOLOC' })]);
+    expect(response.body.data.rejectedOrders[0].issues).toContainEqual(
+      expect.objectContaining({ field: 'deliveryAddress.latitude' }),
+    );
+  });
+
   it('imports valid order groups and rejects every row of a group with an invalid package', async () => {
     const { app, token } = await buildSeededApp();
     const response = await request(app)
@@ -393,10 +440,10 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', '2'],
-        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-2', '', ''],
-        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-3', 'Sobre', ''],
-        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '', '', 'PKG-4', 'Caja', '1'],
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', '2'],
+        ['TEST-CUSTOMER', 'AM', 'IMP-1', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-2', '', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-3', 'Sobre', ''],
+        ['TEST-CUSTOMER', 'PM', 'IMP-2', 'Luis Soto', '+51 987 654 322', 'Jr. Los Olivos 55', 'Miraflores', '-12.1211', '-77.0297', 'PKG-4', 'Caja', '1'],
       ]));
 
     expect(response.status).toBe(200);
@@ -417,7 +464,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
     worksheet.addRow(IMPORT_HEADERS);
     worksheet.addRow([
       'TEST-CUSTOMER', 'PM', 'IMP-XLSX', 'Ana Torres', '+51 987 654 321',
-      'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-XLSX', 'Caja', 1.5,
+      'Av. Javier Prado 100', 'San Borja', -12.0975, -77.0023, 'PKG-XLSX', 'Caja', 1.5,
     ]);
     const upload = Buffer.from(await workbook.xlsx.writeBuffer());
     const response = await request(app)
@@ -464,7 +511,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['FOREIGN-CUSTOMER', 'AM', 'IMP-FOREIGN', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['FOREIGN-CUSTOMER', 'AM', 'IMP-FOREIGN', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', ''],
       ]));
 
     expect(response.status).toBe(200);
@@ -486,7 +533,7 @@ describe('POST /api/v1/delivery-orders/import', () => {
       .set(bearer(token))
       .set('Content-Type', 'text/csv')
       .send(importCsvRows([
-        ['TEST-CUSTOMER', 'AM', 'IMP-INACTIVE', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '', '', 'PKG-1', 'Caja', ''],
+        ['TEST-CUSTOMER', 'AM', 'IMP-INACTIVE', 'Ana Torres', '+51 987 654 321', 'Av. Javier Prado 100', 'San Borja', '-12.0975', '-77.0023', 'PKG-1', 'Caja', ''],
       ]));
 
     expect(response.status).toBe(200);
@@ -774,23 +821,148 @@ describe('GET /api/v1/delivery-orders?publicCode=...', () => {
     expect(response.status).toBe(200);
     const first = await request(app).get(`/api/v1/delivery-orders/${firstId}`).set(bearer(token));
     const second = await request(app).get(`/api/v1/delivery-orders/${secondId}`).set(bearer(token));
+    // Default sort is createdAt:desc with id:desc as the tiebreak (same instant here).
     const sorted = [first.body.data, second.body.data].sort(
-      (left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+      (left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
     );
-    expect(response.body).toEqual({ data: sorted });
-    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual(sorted.map((order) => order.id));
+    expect(response.body).toEqual({
+      data: sorted,
+      meta: {
+        page: 1, pageSize: 20, total: 2,
+        counts: { status: statusCounts({ created: 2 }), timeWindow: { AM: 2, PM: 0 } },
+      },
+    });
+    expect(response.body.data.map((order: { id: string }) => order.id)).toEqual([secondId, firstId]);
 
     const foreignList = await request(app).get('/api/v1/delivery-orders').set(bearer(otherToken));
     expect(foreignList.status).toBe(200);
     expect(foreignList.body.data).toHaveLength(1);
     expect(foreignList.body.data[0].organizationId).toBe(OTHER_ORGANIZATION_ID);
+    expect(foreignList.body.meta.total).toBe(1);
+    expect(foreignList.body.meta.counts.status.created).toBe(1);
+
+    // A foreign id never leaks through the `ids` filter.
+    const foreignIds = await listOrders(app, otherToken, { ids: `${firstId},${secondId}` });
+    expect(foreignIds.body.data).toEqual([]);
+    expect(foreignIds.body.meta.total).toBe(0);
+  });
+
+  it('pages and sorts by the whitelisted fields with a stable order', async () => {
+    const { app, token } = await buildSeededApp();
+    const bruno = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0003', recipient: { name: 'Bruno Díaz', phone: '+51 911 111 111' },
+      deliveryAddress: { addressLine: 'Jr. Lampa 100', district: 'Cercado de Lima', latitude: -12.05, longitude: -77.03 },
+    }));
+    const ana = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0001', recipient: { name: 'Ana Torres', phone: '+51 922 222 222' },
+      deliveryAddress: { addressLine: 'Av. Larco 200', district: 'Miraflores', latitude: -12.12, longitude: -77.03 },
+    }));
+    const carla = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0002', recipient: { name: 'Carla Ríos', phone: '+51 933 333 333' },
+      deliveryAddress: { addressLine: 'Av. Brasil 300', district: 'Jesús María', latitude: -12.07, longitude: -77.05 },
+    }));
+    const ids = async (query: Record<string, string>) => {
+      const response = await listOrders(app, token, query);
+      expect(response.status).toBe(200);
+      return response.body.data.map((order: { id: string }) => order.id);
+    };
+
+    await expect(ids({})).resolves.toEqual([carla, ana, bruno]);
+    await expect(ids({ sort: 'createdAt:asc' })).resolves.toEqual([bruno, ana, carla]);
+    await expect(ids({ sort: 'publicCode:asc' })).resolves.toEqual([ana, carla, bruno]);
+    await expect(ids({ sort: 'recipientName' })).resolves.toEqual([ana, bruno, carla]);
+    await expect(ids({ sort: 'district:desc' })).resolves.toEqual([ana, carla, bruno]);
+
+    const middle = await listOrders(app, token, { sort: 'recipientName:asc', page: '2', pageSize: '1' });
+    expect(middle.body.data.map((order: { id: string }) => order.id)).toEqual([bruno]);
+    expect(middle.body.meta).toMatchObject({ page: 2, pageSize: 1, total: 3 });
+    expect(middle.body.data[0].packages.map((item: { code: string }) => item.code)).toEqual(['PKG-001', 'PKG-002']);
+
+    const beyond = await listOrders(app, token, { page: '5', pageSize: '2' });
+    expect(beyond.body.data).toEqual([]);
+    expect(beyond.body.meta).toMatchObject({ page: 5, pageSize: 2, total: 3 });
+  });
+
+  it('filters by status, time window, customer, ids and search text with facet counts', async () => {
+    const { app, token } = await buildSeededApp();
+    const morning = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0001' }));
+    const evening = await createOrder(app, token, validOrderBody({
+      publicCode: 'ord-2026-0002', timeWindow: 'PM',
+      recipient: { name: 'Luis Paz', phone: '+51 955 555 555' },
+      deliveryAddress: { addressLine: 'Calle 50% Descuento 12', district: 'Surco', latitude: -12.14, longitude: -76.99 },
+    }));
+    const cancelled = await createOrder(app, token, validOrderBody({ publicCode: 'ord-2026-0003' }));
+    const cancel = await request(app).post(`/api/v1/delivery-orders/${cancelled}/cancel`).set(bearer(token)).send({});
+    expect(cancel.status).toBe(200);
+    const ids = (response: request.Response) => response.body.data.map((order: { id: string }) => order.id);
+
+    const byStatus = await listOrders(app, token, { status: 'cancelled' });
+    expect(ids(byStatus)).toEqual([cancelled]);
+    // Facets ignore their own filter but apply the rest.
+    expect(byStatus.body.meta).toEqual({
+      page: 1, pageSize: 20, total: 1,
+      counts: { status: statusCounts({ created: 2, cancelled: 1 }), timeWindow: { AM: 1, PM: 0 } },
+    });
+
+    const severalStatuses = await listOrders(app, token, { status: 'created, cancelled' });
+    expect(ids(severalStatuses)).toEqual([cancelled, evening, morning]);
+
+    const byWindow = await listOrders(app, token, { timeWindow: 'PM' });
+    expect(ids(byWindow)).toEqual([evening]);
+    expect(byWindow.body.meta.counts).toEqual({
+      status: statusCounts({ created: 1 }), timeWindow: { AM: 2, PM: 1 },
+    });
+
+    const byIds = await listOrders(app, token, { ids: `${morning},${cancelled}` });
+    expect(ids(byIds)).toEqual([cancelled, morning]);
+    const byCustomer = await listOrders(app, token, { customerId: CUSTOMER_ID });
+    expect(byCustomer.body.meta.total).toBe(3);
+    const otherCustomer = await listOrders(app, token, { customerId: OTHER_CUSTOMER_ID });
+    expect(otherCustomer.body.meta.total).toBe(0);
+
+    // `q` searches code, recipient name and phone, address and district, case-insensitively.
+    expect(ids(await listOrders(app, token, { q: 'ord-2026-0002' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: 'luis' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '955 555' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: 'surco' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '  JAVIER prado ' }))).toEqual([cancelled, morning]);
+    // LIKE wildcards are literal characters.
+    expect(ids(await listOrders(app, token, { q: '50%' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '%' }))).toEqual([evening]);
+    expect(ids(await listOrders(app, token, { q: '_' }))).toEqual([]);
+    const searched = await listOrders(app, token, { q: 'javier', status: 'created' });
+    expect(ids(searched)).toEqual([morning]);
+    expect(searched.body.meta.counts.status).toEqual(statusCounts({ created: 1, cancelled: 1 }));
+  });
+
+  it.each([
+    ['an unknown sort field', { sort: 'customer:asc' }],
+    ['an unknown sort direction', { sort: 'createdAt:up' }],
+    ['a page size above 100', { pageSize: '101' }],
+    ['a zero page size', { pageSize: '0' }],
+    ['a non-numeric page', { page: 'two' }],
+    ['an unknown status', { status: 'lost' }],
+    ['an unknown time window', { timeWindow: 'NOON' }],
+    ['a malformed id', { ids: 'not-a-uuid' }],
+    ['a malformed customer id', { customerId: 'not-a-uuid' }],
+    ['an unknown parameter', { limit: '5' }],
+    ['a publicCode combined with paging', { publicCode: 'ORD-2026-0001', page: '1' }],
+  ])('returns 400 for %s', async (_label, query) => {
+    const { app, token } = await buildSeededApp();
+    const response = await listOrders(app, token, query);
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
+    expect(response.body.error.message).toBe('List delivery orders query is invalid');
   });
 
   it('returns an empty list for a new organization and rejects unrecognized filters', async () => {
     const { app, token } = await buildSeededApp();
     const empty = await request(app).get('/api/v1/delivery-orders').set(bearer(token));
     expect(empty.status).toBe(200);
-    expect(empty.body).toEqual({ data: [] });
+    expect(empty.body).toEqual({
+      data: [],
+      meta: { page: 1, pageSize: 20, total: 0, counts: { status: statusCounts({}), timeWindow: { AM: 0, PM: 0 } } },
+    });
 
     const invalid = await request(app)
       .get('/api/v1/delivery-orders').query({ unknown: 'value' }).set(bearer(token));
@@ -881,7 +1053,7 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     const original = await request(app).get(`/api/v1/delivery-orders/${id}`).set(bearer(token));
     const changes = {
       recipient: { name: 'New Recipient', phone: '+51 999 888 777' },
-      deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince' },
+      deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince', latitude: -12.0840, longitude: -77.0350 },
       packages: [{ code: 'NEW-001', description: 'Replacement parcel' }],
     };
     const changed = await request(app).patch(`/api/v1/delivery-orders/${id}`)
@@ -890,7 +1062,7 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(changed.body.data).toMatchObject({
       id, organizationId: ORGANIZATION_ID, publicCode: original.body.data.publicCode,
       status: 'created', recipient: changes.recipient,
-      deliveryAddress: { ...changes.deliveryAddress, latitude: null, longitude: null },
+      deliveryAddress: changes.deliveryAddress,
       packages: [{ ...changes.packages[0], weightKg: null }],
       createdAt: original.body.data.createdAt,
     });
@@ -903,6 +1075,14 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(recipientOnly.body.data).toEqual({ ...changed.body.data,
       recipient: { name: 'Final Recipient', phone: '+51 999 888 777' },
     });
+    const added = await request(app).patch(`/api/v1/delivery-orders/${id}`).set(bearer(token)).send({
+      packages: [{ code: 'NEW-001', description: 'Replacement parcel' }, { description: 'Added parcel', weightKg: 1.5 }],
+    });
+    expect(added.status).toBe(200);
+    expect(added.body.data.packages).toEqual([
+      { code: 'NEW-001', description: 'Replacement parcel', weightKg: null },
+      { code: expect.stringMatching(/^PKG-\d{8}$/), description: 'Added parcel', weightKg: 1.5 },
+    ]);
     const history = await request(app).get(`/api/v1/delivery-orders/${id}/history`).set(bearer(token));
     expect(history.status).toBe(200);
     expect(history.body).toEqual({ data: [] });
@@ -922,6 +1102,10 @@ describe('PATCH /api/v1/delivery-orders/:orderId', () => {
     expect(invalid.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
     const empty = await request(app).patch(route).set(bearer(token)).send({});
     expect(empty.status).toBe(400);
+    const unlocated = await request(app).patch(route).set(bearer(token))
+      .send({ deliveryAddress: { addressLine: 'Av. Arequipa 987', district: 'Lince' } });
+    expect(unlocated.status).toBe(400);
+    expect(unlocated.body.error.code).toBe('DELIVERY_ORDER_INVALID_INPUT');
     const missingToken = await request(app).patch(route).send({ recipient: { name: 'No Token', phone: '+51 987 654 321' } });
     expect(missingToken.status).toBe(401);
     const after = await request(app).get(route).set(bearer(token));

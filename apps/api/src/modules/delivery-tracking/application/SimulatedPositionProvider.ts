@@ -47,8 +47,31 @@ export class SimulatedPositionProvider implements PositionProvider {
       source: 'simulated',
       recordedAt: new Date(instant).toISOString(),
       receivedAt: this.clock.now(),
+      reachedStopCount: stopProgressFractions(route, geometry)
+        .filter((fraction) => fraction <= progress).length,
     };
   }
+}
+
+/**
+ * The share of the route travelled when each stop is reached, in stop order.
+ * Leg distances locate intermediate stops, so an accelerated sample that skips
+ * several stops still reports all of them. Without usable leg distances, only
+ * the end of the route is known, and every stop is reached there.
+ */
+function stopProgressFractions(route: RoutePositionContext, geometry: RouteGeometry): number[] {
+  const hasOrigin = route.origin !== undefined;
+  const legs = geometry.legDistancesMeters;
+  const total = legs?.reduce((sum, distance) => sum + distance, 0) ?? 0;
+  if (legs === undefined || legs.length !== route.stops.length + (hasOrigin ? 1 : 0) - 1 || total <= 0) {
+    return route.stops.map(() => 1);
+  }
+  let travelled = 0;
+  const legEnds = legs.map((distance, index) => {
+    travelled += distance;
+    return index === legs.length - 1 ? 1 : travelled / total;
+  });
+  return hasOrigin ? legEnds : [0, ...legEnds];
 }
 
 function isUsableGeometry(geometry: RouteGeometry | null): geometry is RouteGeometry {

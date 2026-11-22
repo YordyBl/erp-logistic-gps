@@ -4,6 +4,8 @@ import type { DataSource } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDataSource } from '../../../../infrastructure/database/data-source.js';
+import type { CustomerPageCriteria } from '../../application/ports/CustomerRepository.js';
+import { InMemoryCustomerRepository } from '../../composition/composition-root.js';
 import { Customer } from '../../domain/entities/Customer.js';
 import { CustomerInvariantError } from '../../domain/errors/CustomerError.js';
 import { probeCustomersDatabase } from '../../tests/support/test-database.js';
@@ -118,6 +120,82 @@ describe.skipIf(databaseUrl === null)('customers persistence (PostgreSQL)', () =
 
     const listed = await store.list(organizationId);
     expect(listed.map((item) => item.id)).toEqual([customer.id]);
+  });
+
+  it('pages, filters, searches and counts like the in-memory adapter', async () => {
+    const ownerId = await newOrganization();
+    const foreignId = await newOrganization();
+    const store = required(repository, 'repository');
+    const memory = new InMemoryCustomerRepository();
+    const variant = (organizationId: string, publicCode: string, overrides: {
+      readonly name: string; readonly contactName: string; readonly contactEmail: string;
+      readonly contactPhone: string; readonly createdAt: string; readonly status?: 'active' | 'inactive';
+    }) => Customer.create({ id: randomUUID(), organizationId, publicCode, ...overrides });
+    const customers = [
+      variant(ownerId, 'PAGE-DELTA', {
+        name: 'Delta Courier', contactName: 'Diego Paz', contactEmail: 'ops@delta.pe',
+        contactPhone: '+51 911 111 111', createdAt: '2026-10-27T15:00:00.000Z',
+      }),
+      variant(ownerId, 'PAGE-ALPHA', {
+        name: 'Alpha Retail', contactName: 'Ana Quispe', contactEmail: 'ventas@alpha.pe',
+        contactPhone: '+51 922 222 222', createdAt: '2026-10-27T16:00:00.000Z',
+      }),
+      variant(ownerId, 'PAGE-CHARLIE', {
+        name: 'Charlie Foods', contactName: 'Carla Ríos', contactEmail: 'compras@charlie_foods.pe',
+        contactPhone: '+51 933 333 333', createdAt: '2026-10-27T16:00:00.000Z', status: 'inactive',
+      }),
+      variant(ownerId, 'PAGE-BRAVO', {
+        name: 'Bravo 100% Market', contactName: 'Bruno Díaz', contactEmail: 'hola@bravo.pe',
+        contactPhone: '+51 944 444 444', createdAt: '2026-10-27T17:00:00.000Z',
+      }),
+      variant(foreignId, 'PAGE-ALPHA', {
+        name: 'Alpha Foránea', contactName: 'Ana Otra', contactEmail: 'ventas@alpha.pe',
+        contactPhone: '+51 955 555 555', createdAt: '2026-10-27T18:00:00.000Z',
+      }),
+    ];
+    for (const customer of customers) {
+      await store.save(customer);
+      await memory.save(customer);
+    }
+
+    const base = { page: 1, pageSize: 20, sort: { field: 'name', direction: 'asc' } } as const;
+    const scenarios: CustomerPageCriteria[] = [
+      base,
+      { ...base, page: 2, pageSize: 3 },
+      { ...base, sort: { field: 'name', direction: 'desc' } },
+      { ...base, sort: { field: 'createdAt', direction: 'asc' } },
+      { ...base, sort: { field: 'createdAt', direction: 'desc' } },
+      { ...base, status: ['inactive'] },
+      { ...base, status: ['active', 'inactive'] },
+      { ...base, q: 'ALPHA' },
+      { ...base, q: 'page-bravo' },
+      { ...base, q: 'diego' },
+      { ...base, q: '933 333' },
+      { ...base, q: '100%' },
+      { ...base, q: '_' },
+      { ...base, q: 'alpha', status: ['inactive'] },
+      { ...base, ids: [customers[0]!.id, customers[4]!.id] },
+      { ...base, page: 9 },
+    ];
+    for (const criteria of scenarios) {
+      const [stored, inMemory] = await Promise.all([
+        store.listPage(ownerId, criteria),
+        memory.listPage(ownerId, criteria),
+      ]);
+      expect(stored, JSON.stringify(criteria)).toEqual(inMemory);
+    }
+
+    const firstPage = await store.listPage(ownerId, { ...base, pageSize: 2 });
+    expect(firstPage.items.map((customer) => customer.publicCode)).toEqual(['PAGE-ALPHA', 'PAGE-BRAVO']);
+    expect(firstPage.total).toBe(4);
+    expect(firstPage.counts).toEqual({ status: { active: 3, inactive: 1 } });
+    // createdAt desc, then id desc between the two 16:00 customers.
+    const newest = await store.listPage(ownerId, { ...base, sort: { field: 'createdAt', direction: 'desc' } });
+    const tied = [customers[1]!.id, customers[2]!.id].sort().reverse();
+    expect(newest.items.map((customer) => customer.id).slice(1, 3)).toEqual(tied);
+    const searched = await store.listPage(ownerId, { ...base, q: 'alpha', status: ['inactive'] });
+    expect(searched.items).toEqual([]);
+    expect(searched.counts).toEqual({ status: { active: 1, inactive: 0 } });
   });
 
   it('enforces unique public code per organization and allows it across tenants', async () => {

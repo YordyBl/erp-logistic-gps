@@ -234,6 +234,124 @@ describe('GET /api/v1/customers', () => {
     expect(response.status).toBe(401);
     expect(response.body.error.code).toBe('AUTH_TOKEN_MISSING');
   });
+
+  /** Four own customers (one inactive) and one in the other organization. */
+  async function seedCatalog() {
+    const actors = await seedActors();
+    const create = async (token: string, overrides: Record<string, unknown>) => {
+      const response = await createCustomer(actors.testApp, token, validCustomerBody(overrides));
+      expect(response.status).toBe(201);
+      return response.body.data as { id: string; name: string };
+    };
+    const delta = await create(actors.adminToken, {
+      publicCode: 'CUS-DELTA', name: 'Delta Courier', contactName: 'Diego Paz',
+      contactEmail: 'ops@delta.pe', contactPhone: '+51 911 111 111',
+    });
+    const alpha = await create(actors.adminToken, {
+      publicCode: 'CUS-ALPHA', name: 'Alpha Retail', contactName: 'Ana Quispe',
+      contactEmail: 'ventas@alpha.pe', contactPhone: '+51 922 222 222',
+    });
+    const charlie = await create(actors.dispatcherToken, {
+      publicCode: 'CUS-CHARLIE', name: 'Charlie Foods', contactName: 'Carla Ríos',
+      contactEmail: 'compras@charlie_foods.pe', contactPhone: '+51 933 333 333', status: 'inactive',
+    });
+    const bravo = await create(actors.adminToken, {
+      publicCode: 'CUS-BRAVO', name: 'Bravo 100% Market', contactName: 'Bruno Díaz',
+      contactEmail: 'hola@bravo.pe', contactPhone: '+51 944 444 444',
+    });
+    const foreign = await create(actors.otherAdminToken, {
+      publicCode: 'CUS-ALPHA', name: 'Alpha Foránea', contactName: 'Ana Otra',
+    });
+    return { ...actors, delta, alpha, charlie, bravo, foreign };
+  }
+
+  it('returns the first page by name with meta and status counts, scoped to the organization', async () => {
+    const { testApp, adminToken, dispatcherToken, alpha, bravo, charlie, delta } = await seedCatalog();
+
+    const response = await request(testApp.app).get(CUSTOMERS_PATH).set(bearer(dispatcherToken));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.map((customer: { id: string }) => customer.id))
+      .toEqual([alpha.id, bravo.id, charlie.id, delta.id]);
+    expect(response.body.data[0]).toMatchObject({
+      organizationId: ORGANIZATION_ID, publicCode: 'CUS-ALPHA', name: 'Alpha Retail', status: 'active',
+    });
+    expect(response.body.meta).toEqual({
+      page: 1, pageSize: 20, total: 4, counts: { status: { active: 3, inactive: 1 } },
+    });
+
+    const admin = await request(testApp.app).get(CUSTOMERS_PATH).set(bearer(adminToken));
+    expect(admin.body.meta.total).toBe(4);
+  });
+
+  it('pages, sorts, filters by status and ids, and searches every contact field', async () => {
+    const { testApp, adminToken, otherAdminToken, alpha, bravo, charlie, delta, foreign } = await seedCatalog();
+    const list = (query: Record<string, string>) =>
+      request(testApp.app).get(CUSTOMERS_PATH).query(query).set(bearer(adminToken));
+    const ids = async (query: Record<string, string>) =>
+      (await list(query)).body.data.map((customer: { id: string }) => customer.id);
+
+    await expect(ids({ sort: 'name:desc' })).resolves.toEqual([delta.id, charlie.id, bravo.id, alpha.id]);
+    await expect(ids({ sort: 'createdAt:asc' })).resolves.toEqual([delta.id, alpha.id, charlie.id, bravo.id]);
+    await expect(ids({ sort: 'createdAt:desc' })).resolves.toEqual([bravo.id, charlie.id, alpha.id, delta.id]);
+
+    const second = await list({ page: '2', pageSize: '3' });
+    expect(second.body.data.map((customer: { id: string }) => customer.id)).toEqual([delta.id]);
+    expect(second.body.meta).toEqual({
+      page: 2, pageSize: 3, total: 4, counts: { status: { active: 3, inactive: 1 } },
+    });
+    const beyond = await list({ page: '9' });
+    expect(beyond.body.data).toEqual([]);
+    expect(beyond.body.meta.total).toBe(4);
+
+    // The status facet ignores its own filter.
+    const inactive = await list({ status: 'inactive' });
+    expect(inactive.body.data.map((customer: { id: string }) => customer.id)).toEqual([charlie.id]);
+    expect(inactive.body.meta).toMatchObject({ total: 1, counts: { status: { active: 3, inactive: 1 } } });
+    await expect(ids({ status: 'active,inactive' })).resolves.toHaveLength(4);
+
+    await expect(ids({ q: 'charlie' })).resolves.toEqual([charlie.id]);
+    await expect(ids({ q: 'cus-bravo' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: 'DIEGO' })).resolves.toEqual([delta.id]);
+    await expect(ids({ q: 'ventas@' })).resolves.toEqual([alpha.id]);
+    await expect(ids({ q: '933 333' })).resolves.toEqual([charlie.id]);
+    // Wildcards match literally.
+    await expect(ids({ q: '100%' })).resolves.toEqual([bravo.id]);
+    await expect(ids({ q: '_' })).resolves.toEqual([charlie.id]);
+    await expect(ids({ q: '   ' })).resolves.toHaveLength(4);
+
+    const searched = await list({ q: 'alpha', status: 'inactive' });
+    expect(searched.body.data).toEqual([]);
+    expect(searched.body.meta).toMatchObject({ total: 0, counts: { status: { active: 1, inactive: 0 } } });
+
+    // Another organization's id is never returned, even when asked for.
+    await expect(ids({ ids: `${alpha.id},${foreign.id},${bravo.id}` })).resolves.toEqual([alpha.id, bravo.id]);
+    const other = await request(testApp.app).get(CUSTOMERS_PATH).set(bearer(otherAdminToken));
+    expect(other.body.data.map((customer: { id: string }) => customer.id)).toEqual([foreign.id]);
+    expect(other.body.meta.counts.status).toEqual({ active: 1, inactive: 0 });
+  });
+
+  it.each([
+    ['an unknown sort field', { sort: 'publicCode:asc' }],
+    ['an unknown sort direction', { sort: 'name:up' }],
+    ['a page size above 100', { pageSize: '101' }],
+    ['a zero page', { page: '0' }],
+    ['a non-numeric page', { page: 'two' }],
+    ['an unknown status', { status: 'archived' }],
+    ['a malformed id', { ids: 'not-a-uuid' }],
+    ['an organizationId parameter', { organizationId: OTHER_ORGANIZATION_ID }],
+    ['an unknown parameter', { limit: '5' }],
+  ])('returns 400 with issue details for %s', async (_label, query) => {
+    const { testApp, adminToken } = await seedActors();
+
+    const response = await request(testApp.app).get(CUSTOMERS_PATH).query(query).set(bearer(adminToken));
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatchObject({
+      code: 'CUSTOMER_INVALID_INPUT', message: 'List customers query is invalid',
+    });
+    expect(response.body.error.details.issues.length).toBeGreaterThan(0);
+  });
 });
 
 describe('GET /api/v1/customers/:customerId', () => {

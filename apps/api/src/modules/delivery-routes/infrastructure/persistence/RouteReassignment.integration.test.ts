@@ -11,7 +11,7 @@ import { DeliveryAddress } from '../../../delivery-orders/domain/value-objects/D
 import { Package } from '../../../delivery-orders/domain/value-objects/Package.js';
 import { Organization } from '../../../identity-and-access/domain/entities/Organization.js';
 import { OrganizationTypeOrmRepository } from '../../../identity-and-access/infrastructure/persistence/OrganizationTypeOrmRepository.js';
-import type { PlannedRoute } from '../../application/ports/RoutePlanningStore.js';
+import type { RoutePlanDraft } from '../../application/ports/RoutePlanningStore.js';
 import { probeIntegrationDatabase } from '../../../delivery-orders/infrastructure/persistence/test-database.js';
 
 const CREATED_AT = '2026-10-27T15:00:00.000Z';
@@ -73,7 +73,8 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
       const order = DeliveryOrder.create({
         id: randomUUID(), organizationId, customerId, publicCode: code, timeWindow: 'AM',
         recipient: Recipient.create({ name: 'Ana Torres', phone: '+51 987 654 321' }),
-        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince' }),
+        deliveryAddress: DeliveryAddress.create({ addressLine: 'Av. Arequipa 1234', district: 'Lince',
+          latitude: -12.084, longitude: -77.035 }),
         packages: [Package.create({ code: 'PKG-001', description: 'Parcel' })],
         createdAt: CREATED_AT });
       await orders.save(order);
@@ -102,13 +103,12 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
   }
 
   function plannedRoute(organizationId: string, driverId: string, vehicleId: string,
-    orderIds: string[]): PlannedRoute {
+    orderIds: string[]): RoutePlanDraft {
     return {
       id: randomUUID(), organizationId, driverId, vehicleId,
       publicCode: `ROUTE-${randomUUID().slice(0, 8).toUpperCase()}`,
       plannedDate: '2026-10-27', status: 'planned', createdAt: CREATED_AT,
-      stops: [{ id: randomUUID(), sequence: 1, addressLine: 'Av. Arequipa 1234',
-        latitude: null, longitude: null, orderIds }] };
+      stops: orderIds.map((orderId, index) => ({ id: randomUUID(), sequence: index + 1, orderId })) };
   }
 
   async function snapshot(organizationId: string) {
@@ -130,12 +130,12 @@ describe.skipIf(databaseUrl === null)('Route reassignment transaction (PostgreSQ
     const firstOrderId = await makeOrder('REASSIGN-SNAP-1');
     const secondOrderId = await makeOrder('REASSIGN-SNAP-2');
     const route = plannedRoute(organizationId, driverId, vehicleId, [firstOrderId, secondOrderId]);
-    await store.plan(route, randomUUID());
+    const planned = await store.plan(route, randomUUID());
     const before = await snapshot(organizationId);
     const updated = await store.reassign(organizationId, route.id,
       { driverId: alternateDriverId, vehicleId: alternateVehicleId });
     expect(updated).toMatchObject({ id: route.id, driverId: alternateDriverId,
-      vehicleId: alternateVehicleId, status: 'planned', stops: route.stops });
+      vehicleId: alternateVehicleId, status: 'planned', stops: planned.stops });
     expect(await snapshot(organizationId)).toEqual(before);
     await expect(store.findById(organizationId, route.id)).resolves
       .toMatchObject({ driverId: alternateDriverId, vehicleId: alternateVehicleId });

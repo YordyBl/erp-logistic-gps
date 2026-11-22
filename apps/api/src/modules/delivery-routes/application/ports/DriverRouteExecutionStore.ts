@@ -31,6 +31,11 @@ export interface DriverRouteExecutionStore {
       } }>;
   complete?(organizationId: string, routeId: string, actorUserId: string,
     occurredAt: string): Promise<DriverRouteView>;
-  completeSimulated?(organizationId: string, routeId: string, driverId: string,
-    actorUserId: string, occurredAt: string): Promise<DriverRouteView>;
+  /**
+   * Delivers the in-transit orders of the first `reachedStopCount` stops of a
+   * simulated route and completes the route once every order is terminal.
+   * Idempotent: already-terminal orders and completed routes are left as they are.
+   */
+  completeSimulatedStops?(organizationId: string, routeId: string, actorUserId: string,
+    reachedStopCount: number, occurredAt: string): Promise<DriverRouteView>;
 }

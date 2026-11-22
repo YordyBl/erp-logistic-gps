@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   DownloadDeliveryEvidenceUseCase,
+  ListEvidenceVaultUseCase,
   UploadDeliveryEvidenceUseCase,
 } from '../application/use-cases/DeliveryEvidenceUseCases.js';
 import type {
@@ -67,6 +68,7 @@ function storeDouble(): DeliveryEvidenceStore & {
     markAvailable: complete,
     listForOrder: vi.fn(async () => []),
     findForDownload: vi.fn(async () => reservation('available')),
+    listVaultPage: vi.fn(async () => ({ items: [], total: 0 })),
   };
 }
 
@@ -147,5 +149,38 @@ describe('delivery evidence use cases', () => {
     await expect(useCase.execute({
       organizationId: ORG, evidenceId: EVIDENCE, actorUserId: DRIVER,
     })).rejects.toBeInstanceOf(DeliveryEvidenceUnavailableError);
+  });
+});
+
+describe('ListEvidenceVaultUseCase', () => {
+  it('maps vault items to the evidence DTO plus the compact order', async () => {
+    const store = storeDouble();
+    const item = {
+      ...evidence(),
+      order: { id: ORDER, publicCode: 'ORD-00000001', status: 'returned' as const, recipientName: 'Ana', district: 'Lince' },
+    };
+    vi.mocked(store.listVaultPage).mockResolvedValue({ items: [item], total: 7 });
+    const useCase = new ListEvidenceVaultUseCase(store);
+
+    const page = await useCase.execute({ organizationId: ORG, criteria: { page: 2, pageSize: 1, q: 'ORD' } });
+
+    expect(store.listVaultPage).toHaveBeenCalledWith(ORG, { page: 2, pageSize: 1, q: 'ORD' });
+    expect(page.total).toBe(7);
+    expect(page.items).toEqual([{
+      id: EVIDENCE, orderId: ORDER, attemptId: ATTEMPT, incidentId: null, mimeType: 'image/jpeg',
+      byteSize: JPEG.length, checksum: 'a'.repeat(64), uploadedBy: DRIVER, status: 'available',
+      createdAt: AT, availableAt: AT,
+      order: { id: ORDER, publicCode: 'ORD-00000001', status: 'returned', recipientName: 'Ana', district: 'Lince' },
+    }]);
+    expect(page.items[0]).not.toHaveProperty('organizationId');
+  });
+
+  it('rejects a malformed organization before reading the store', async () => {
+    const store = storeDouble();
+    const useCase = new ListEvidenceVaultUseCase(store);
+
+    await expect(useCase.execute({ organizationId: 'org', criteria: { page: 1, pageSize: 8 } }))
+      .rejects.toBeInstanceOf(DeliveryEvidenceValidationError);
+    expect(store.listVaultPage).not.toHaveBeenCalled();
   });
 });

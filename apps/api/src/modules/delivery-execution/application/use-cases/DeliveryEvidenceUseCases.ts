@@ -10,10 +10,13 @@ import {
   EvidenceImageValidationError,
   prepareEvidenceImage,
 } from '../../domain/EvidenceImage.js';
+import type { PageResult } from '../../../../http/pagination.js';
 import type {
   DeliveryEvidence,
   DeliveryEvidenceStore,
   EvidenceMimeType,
+  EvidenceVaultCriteria,
+  EvidenceVaultOrder,
 } from '../ports/DeliveryEvidenceStore.js';
 import type { EvidenceObjectStorage } from '../ports/EvidenceObjectStorage.js';
 
@@ -152,6 +155,42 @@ export class ListDeliveryEvidenceUseCase {
       input.actorUserId,
     );
     return { evidence: records.map(toDto) };
+  }
+}
+
+export interface EvidenceVaultItemDto extends DeliveryEvidenceDto {
+  readonly order: EvidenceVaultOrder;
+}
+
+/**
+ * One page of the organization's evidence vault (`GET /delivery-evidence`):
+ * the same metadata as the per-order list plus a compact order, newest first.
+ * The criteria are already validated by the HTTP query schema.
+ */
+export class ListEvidenceVaultUseCase {
+  constructor(private readonly store: DeliveryEvidenceStore) {}
+
+  async execute(input: {
+    readonly organizationId: string;
+    readonly criteria: EvidenceVaultCriteria;
+  }): Promise<PageResult<EvidenceVaultItemDto>> {
+    if (!uuidSchema.safeParse(input.organizationId).success) {
+      throw new DeliveryEvidenceValidationError('List evidence vault query is invalid');
+    }
+    const page = await this.store.listVaultPage(input.organizationId, input.criteria);
+    return {
+      ...page,
+      items: page.items.map((item) => ({
+        ...toDto(item),
+        order: {
+          id: item.order.id,
+          publicCode: item.order.publicCode,
+          status: item.order.status,
+          recipientName: item.order.recipientName,
+          district: item.order.district,
+        },
+      })),
+    };
   }
 }
 

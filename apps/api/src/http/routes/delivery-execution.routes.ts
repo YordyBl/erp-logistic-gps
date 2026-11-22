@@ -1,9 +1,12 @@
 import { Router, raw, type RequestHandler } from 'express';
 import { z } from 'zod';
 
+import type { EvidenceVaultCriteria } from '../../modules/delivery-execution/application/ports/DeliveryEvidenceStore.js';
 import type { DeliveryExecutionModule } from '../../modules/delivery-execution/composition/composition-root.js';
 import { DeliveryEvidenceValidationError } from '../../modules/delivery-execution/domain/errors/DeliveryExecutionError.js';
 import { MAX_EVIDENCE_IMAGE_BYTES } from '../../modules/delivery-execution/domain/EvidenceImage.js';
+import { pageQueryShape, toPageResponse } from '../pagination.js';
+import { parseDeliveryEvidenceOrThrow } from '../validation.js';
 import { requireRole } from '../middleware/require-role.js';
 import { getAuthenticatedUser } from '../request-context.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
@@ -11,6 +14,24 @@ import { requireOrganizationId } from '../middleware/organization-resolver.js';
 const evidenceParamsSchema = z.strictObject({ orderId: z.uuid() });
 const downloadParamsSchema = z.strictObject({ evidenceId: z.uuid() });
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+/**
+ * Evidence vault query (`GET /delivery-evidence`). The order is fixed newest
+ * first, so `sort` only accepts that order (`createdAt:desc`) or nothing.
+ * Unknown parameters are rejected; absent filters stay absent in the criteria.
+ */
+const listEvidenceVaultQuerySchema = z
+  .strictObject({
+    ...pageQueryShape,
+    sort: z.literal('createdAt:desc', { error: 'sort must be createdAt:desc' }).optional(),
+    orderId: z.uuid().optional(),
+  })
+  .transform(({ page, pageSize, q, orderId }): EvidenceVaultCriteria => ({
+    page,
+    pageSize,
+    ...(q === undefined ? {} : { q }),
+    ...(orderId === undefined ? {} : { orderId }),
+  }));
 
 export function createDeliveryExecutionRouter(
   module: DeliveryExecutionModule,
@@ -59,6 +80,19 @@ export function createDeliveryExecutionRouter(
       });
       response.status(200).json({ data: result.evidence });
     });
+
+  router.get('/delivery-evidence', requireRole('ADMIN', 'DISPATCHER'), async (request, response) => {
+    const criteria = parseDeliveryEvidenceOrThrow(
+      listEvidenceVaultQuerySchema,
+      request.query,
+      'List evidence vault query is invalid',
+    );
+    const result = await module.listEvidenceVault.execute({
+      organizationId: requireOrganizationId(response),
+      criteria,
+    });
+    response.status(200).json(toPageResponse(result, criteria.page, criteria.pageSize));
+  });
 
   router.get('/evidence/:evidenceId/download', requireRole('ADMIN', 'DISPATCHER', 'DRIVER'),
     async (request, response) => {

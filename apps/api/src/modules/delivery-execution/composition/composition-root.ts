@@ -6,6 +6,7 @@ import type { EvidenceObjectStorage } from '../application/ports/EvidenceObjectS
 import {
   DownloadDeliveryEvidenceUseCase,
   ListDeliveryEvidenceUseCase,
+  ListEvidenceVaultUseCase,
   UploadDeliveryEvidenceUseCase,
 } from '../application/use-cases/DeliveryEvidenceUseCases.js';
 
@@ -23,6 +24,7 @@ export function createDeliveryExecutionModule(options: DeliveryExecutionModuleOp
       options.clock ?? new SystemClock(),
     ),
     listEvidence: new ListDeliveryEvidenceUseCase(options.store),
+    listEvidenceVault: new ListEvidenceVaultUseCase(options.store),
     downloadEvidence: new DownloadDeliveryEvidenceUseCase(options.store, options.objectStorage),
   };
 }

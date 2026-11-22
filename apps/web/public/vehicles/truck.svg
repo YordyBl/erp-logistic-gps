@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" role="img" aria-label="Camión">
+  <ellipse cx="160" cy="160" rx="140" ry="9" fill="#0f172a" opacity="0.08"/>
+  <rect x="18" y="30" width="190" height="104" rx="8" fill="#ffffff" stroke="#c9d6cf" stroke-width="2"/>
+  <path d="M34 50h158M34 70h158M34 90h158M34 110h158" stroke="#e3ebe6" stroke-width="2"/>
+  <rect x="18" y="122" width="190" height="16" rx="4" fill="#0c7a4b"/>
+  <path d="M214 62h50a10 10 0 0 1 8 4l26 34a10 10 0 0 1 2 6v28a8 8 0 0 1-8 8h-78z" fill="#0c7a4b"/>
+  <path d="M232 72h30l22 30h-52z" fill="#cfe6f5" stroke="#9cc3dd" stroke-width="2" stroke-linejoin="round"/>
+  <rect x="236" y="112" width="16" height="4" rx="2" fill="#ffffff" opacity="0.8"/>
+  <rect x="292" y="118" width="9" height="9" rx="2" fill="#f5c451"/>
+  <circle cx="62" cy="144" r="20" fill="#1f2937"/><circle cx="62" cy="144" r="9" fill="#d1d5db"/><circle cx="62" cy="144" r="3" fill="#6b7280"/>
+  <circle cx="160" cy="144" r="20" fill="#1f2937"/><circle cx="160" cy="144" r="9" fill="#d1d5db"/><circle cx="160" cy="144" r="3" fill="#6b7280"/>
+  <circle cx="262" cy="144" r="20" fill="#1f2937"/><circle cx="262" cy="144" r="9" fill="#d1d5db"/><circle cx="262" cy="144" r="3" fill="#6b7280"/>
+</svg>

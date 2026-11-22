@@ -42,14 +42,33 @@ export interface CreateDeliveryOrderInput {
     readonly addressLine: string;
     readonly district: string;
     readonly googleMapsUrl?: string;
-    readonly latitude?: number;
-    readonly longitude?: number;
+    /** Required: route stops copy the order's coordinates. */
+    readonly latitude: number;
+    readonly longitude: number;
   };
   readonly packages: readonly {
     readonly code?: string;
     readonly description: string;
     readonly weightKg?: number;
   }[];
+}
+
+/**
+ * Details an order accepts while it is still `created`. Customer and time window
+ * are fixed; a package without `code` is new and gets a generated code.
+ */
+export interface EditDeliveryOrderInput {
+  readonly recipient?: CreateDeliveryOrderInput['recipient'];
+  readonly deliveryAddress?: CreateDeliveryOrderInput['deliveryAddress'];
+  readonly packages?: CreateDeliveryOrderInput['packages'];
+}
+
+/** Path a route already drove (GPS positions) and the path still ahead, for the control tower map. */
+export interface RouteTrack {
+  readonly traveled: readonly { readonly latitude: number; readonly longitude: number; readonly recordedAt: string }[];
+  readonly pending: readonly { readonly latitude: number; readonly longitude: number }[];
+  /** `roads` when a routing engine drew `pending`; `straight` when it joins the stops directly. */
+  readonly pendingSource: 'roads' | 'straight';
 }
 
 export interface DeliveryOrderImportIssue {
@@ -157,6 +176,8 @@ export interface DeliveryOrder {
   readonly deliveryAddress: {
     readonly addressLine: string;
     readonly district: string;
+    /** The API always sends it (null when absent); optional so partial fixtures stay valid. */
+    readonly googleMapsUrl?: string | null;
     readonly latitude: number | null;
     readonly longitude: number | null;
   };
@@ -196,6 +217,8 @@ export interface DispatchRoute {
   readonly driverId: string;
   readonly vehicleId: string;
   readonly status: 'planned' | 'in_progress' | 'completed';
+  /** Present and true only for development simulations. */
+  readonly simulatedCompletionEnabled?: boolean;
   readonly createdAt: string;
   readonly startedAt?: string;
   readonly completedAt?: string;
@@ -207,6 +230,25 @@ export interface DispatchRoute {
     readonly longitude: number | null;
     readonly orderIds: readonly string[];
   }[];
+}
+
+/** Actividad de rutas de un vehículo (`GET /vehicles/route-stats`); las rutas canceladas no cuentan. */
+export interface VehicleRouteStats {
+  readonly vehicleId: string;
+  readonly routes: number;
+  readonly completed: number;
+  readonly stops: number;
+  readonly orders: number;
+  /** Día planificado (`YYYY-MM-DD`) de la ruta más reciente, o `null` si nunca salió. */
+  readonly lastRouteDay: string | null;
+  /** Rutas por mes planificado (`YYYY-MM`), del más antiguo al mes actual en Lima. */
+  readonly monthly: readonly { readonly month: string; readonly routes: number }[];
+}
+
+/** Whether route simulation is available (development only) and which drivers it may use. */
+export interface RouteSimulationAvailability {
+  readonly enabled: boolean;
+  readonly eligibleDriverIds: readonly string[];
 }
 
 export interface DispatchDashboardSummary {
@@ -242,17 +284,19 @@ export interface DispatchDashboardSummary {
 }
 
 export interface CreateDispatchRouteInput {
-  readonly publicCode: string;
+  /** Optional: the API generates `RUT-00000001` codes when it is omitted. */
+  readonly publicCode?: string;
   readonly plannedDate: string;
   readonly driverId: string;
   readonly vehicleId: string;
+  /** Start of a simulated route: a Google Maps link, or coordinates already resolved from it. */
+  readonly origin?: { readonly addressLine: string; readonly googleMapsUrl: string }
+    | { readonly addressLine: string; readonly latitude: number; readonly longitude: number };
+  readonly simulatedCompletionEnabled?: boolean;
+  /** One stop per order; the API copies each order's address and coordinates into its stop. */
   readonly stops: readonly {
     readonly sequence: number;
-    readonly addressLine: string;
-    readonly googleMapsUrl?: string;
-    readonly latitude?: number;
-    readonly longitude?: number;
-    readonly orderIds: readonly string[];
+    readonly orderId: string;
   }[];
 }
 
@@ -270,8 +314,62 @@ export interface DeliveryEvidence {
   readonly availableAt: string | null;
 }
 
+/** Foto de la bóveda: la evidencia más un resumen del pedido al que pertenece. */
+export interface EvidenceVaultItem extends DeliveryEvidence {
+  readonly order: {
+    readonly id: string;
+    readonly publicCode: string;
+    readonly status: 'delivered' | 'returned';
+    readonly recipientName: string;
+    readonly district: string;
+  };
+}
+
 interface ApiEnvelope<T> {
   readonly data: T;
+}
+
+/** Valor de un parámetro de consulta: las listas viajan separadas por comas (`status=a,b`). */
+export type QueryValue = string | number | boolean | readonly (string | number)[] | null | undefined;
+
+/**
+ * Parámetros de un listado paginado en el servidor. `sort` va como `campo:asc|desc`; el resto son
+ * los filtros propios de cada recurso (`status`, `ids`, `customerId`...).
+ */
+export interface PageParams {
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly q?: string;
+  readonly sort?: string;
+  readonly [filter: string]: QueryValue;
+}
+
+/** Una página de un listado: las filas y el total del servidor, con conteos por faceta si los hay. */
+export interface Page<T> {
+  readonly data: readonly T[];
+  readonly meta: {
+    readonly page: number;
+    readonly pageSize: number;
+    readonly total: number;
+    /** Conteos por faceta y valor, por ejemplo `{ status: { created: 12 } }`. */
+    readonly counts?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+  };
+}
+
+/**
+ * Arma la query (`?a=1&b=x,y`) omitiendo valores vacíos: `undefined`, `null`, `''` y listas sin
+ * elementos. Devuelve `''` si no queda ningún parámetro.
+ */
+export function buildQuery(params: Readonly<Record<string, QueryValue>>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    const text = Array.isArray(value) ? value.join(',') : String(value);
+    if (text === '') continue;
+    search.append(key, text);
+  }
+  const query = search.toString();
+  return query === '' ? '' : `?${query}`;
 }
 
 export class ApiError extends Error {
@@ -279,14 +377,41 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly code: string | undefined,
+    /** Structured, client-safe context from the API (`error.details`), when present. */
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
+/**
+ * Marca sin datos sensibles: la cookie de refresco es httpOnly y no se puede leer, así que
+ * este indicador evita un 401 seguro en cada visita de quien nunca inició sesión.
+ */
+const SESSION_HINT_KEY = 'erp-logistic.has-session';
+
+function hasSessionHint(): boolean {
+  try {
+    return window.localStorage.getItem(SESSION_HINT_KEY) === '1';
+  } catch {
+    // Sin almacenamiento disponible se consulta la cookie: es el comportamiento seguro.
+    return true;
+  }
+}
+
+function rememberSessionHint(active: boolean): void {
+  try {
+    if (active) window.localStorage.setItem(SESSION_HINT_KEY, '1');
+    else window.localStorage.removeItem(SESSION_HINT_KEY);
+  } catch {
+    // La marca solo evita una petición; sin ella la sesión sigue funcionando.
+  }
+}
+
 export class ApiClient {
   private accessToken: string | null = null;
+  private sessionRestore: Promise<AuthSession | null> | null = null;
 
   constructor(
     private readonly options: {
@@ -305,10 +430,24 @@ export class ApiClient {
       body: JSON.stringify({ email, password }),
     }, false);
     this.accessToken = session.accessToken;
+    rememberSessionHint(true);
     return session;
   }
 
-  async restoreSession(): Promise<AuthSession | null> {
+  /**
+   * El refresco rota la cookie: dos peticiones simultáneas harían que la segunda reciba 401 y
+   * cierre una sesión válida. Por eso quienes lleguen mientras hay una en curso la comparten.
+   */
+  restoreSession(): Promise<AuthSession | null> {
+    return hasSessionHint() ? this.refreshOnce() : Promise.resolve(null);
+  }
+
+  private refreshOnce(): Promise<AuthSession | null> {
+    this.sessionRestore ??= this.refreshSession().finally(() => { this.sessionRestore = null; });
+    return this.sessionRestore;
+  }
+
+  private async refreshSession(): Promise<AuthSession | null> {
     try {
       const session = await this.requestData<AuthSession>('/auth/refresh', {
         method: 'POST',
@@ -317,7 +456,10 @@ export class ApiClient {
       return session;
     } catch (error) {
       this.accessToken = null;
-      if (error instanceof ApiError && error.status === 401) return null;
+      if (error instanceof ApiError && error.status === 401) {
+        rememberSessionHint(false);
+        return null;
+      }
       throw error;
     }
   }
@@ -327,6 +469,7 @@ export class ApiClient {
       await this.send('/auth/logout', { method: 'POST' }, false);
     } finally {
       this.accessToken = null;
+      rememberSessionHint(false);
     }
   }
 
@@ -334,8 +477,19 @@ export class ApiClient {
     return this.requestData('/delivery-routes/mine');
   }
 
-  async listDispatchRoutes(): Promise<readonly DispatchRoute[]> {
-    return this.requestData('/delivery-routes');
+  /**
+   * Una página de rutas con sus paradas. Filtros: `status`, `ids`, `driverId`, `vehicleId`,
+   * `plannedFrom`/`plannedTo` (`YYYY-MM-DD`, inclusivos); `q` busca en el código, el conductor y la
+   * placa; orden por `publicCode`, `plannedDate` (por defecto `plannedDate:desc`) o `status`.
+   * `meta.counts` trae `status`.
+   */
+  listDispatchRoutesPage(params: PageParams, signal?: AbortSignal): Promise<Page<DispatchRoute>> {
+    return this.requestPage('/delivery-routes', params, signal);
+  }
+
+  /** Totales y serie mensual de rutas por vehículo, agregados en el servidor (1 a 12 meses, por defecto 6). */
+  async getVehicleRouteStats(months?: number): Promise<readonly VehicleRouteStats[]> {
+    return this.requestData(`/vehicles/route-stats${buildQuery({ months })}`);
   }
 
   async getDispatchDashboardSummary(): Promise<DispatchDashboardSummary> {
@@ -344,6 +498,14 @@ export class ApiClient {
 
   async createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }> {
     return this.requestData('/tracking/ticket', { method: 'POST', body: '{}' });
+  }
+
+  async getRouteTrack(routeId: string): Promise<RouteTrack> {
+    return this.requestData(`/tracking/routes/${encodeURIComponent(routeId)}/track`);
+  }
+
+  async getRouteSimulation(): Promise<RouteSimulationAvailability> {
+    return this.requestData('/delivery-routes/simulation');
   }
 
   async createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute> {
@@ -399,6 +561,14 @@ export class ApiClient {
     return this.requestData(`/delivery-orders/${encodeURIComponent(orderId)}/evidence`);
   }
 
+  /**
+   * Una página de la bóveda: fotos disponibles de pedidos entregados o devueltos, de la más nueva a
+   * la más antigua (orden fijo). `q` busca por código de pedido o destinatario; filtro `orderId`.
+   */
+  listEvidencePage(params: PageParams, signal?: AbortSignal): Promise<Page<EvidenceVaultItem>> {
+    return this.requestPage('/delivery-evidence', params, signal);
+  }
+
   async downloadEvidence(evidenceId: string): Promise<Blob> {
     const response = await this.send(
       `/evidence/${encodeURIComponent(evidenceId)}/download`,
@@ -443,16 +613,26 @@ export class ApiClient {
     return this.requestData(`/delivery-orders?publicCode=${encodeURIComponent(publicCode.trim())}`);
   }
 
-  async listCustomers(): Promise<readonly Customer[]> {
-    return this.requestData('/customers');
+  /**
+   * Una página del catálogo de clientes. Filtros: `status` e `ids`; `q` busca en nombre, código y
+   * datos de contacto; orden por `name` (por defecto, ascendente) o `createdAt`. `meta.counts` trae
+   * `status`.
+   */
+  listCustomersPage(params: PageParams, signal?: AbortSignal): Promise<Page<Customer>> {
+    return this.requestPage('/customers', params, signal);
   }
 
   async createCustomer(input: CreateCustomerInput): Promise<Customer> {
     return this.requestData('/customers', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async listDeliveryOrders(): Promise<readonly DeliveryOrder[]> {
-    return this.requestData('/delivery-orders');
+  /**
+   * Una página de pedidos. Filtros: `status`, `timeWindow`, `customerId`, `ids`; orden por
+   * `publicCode`, `createdAt`, `recipientName` o `district`. `meta.counts` trae `status` y
+   * `timeWindow`.
+   */
+  listDeliveryOrdersPage(params: PageParams, signal?: AbortSignal): Promise<Page<DeliveryOrder>> {
+    return this.requestPage('/delivery-orders', params, signal);
   }
 
   async createDeliveryOrder(input: CreateDeliveryOrderInput): Promise<DeliveryOrder> {
@@ -483,6 +663,12 @@ export class ApiClient {
   async downloadDeliveryOrderImportTemplate(): Promise<Blob> {
     const response = await this.send('/delivery-orders/import/template', { method: 'GET' });
     return response.blob();
+  }
+
+  async editDeliveryOrder(orderId: string, changes: EditDeliveryOrderInput): Promise<DeliveryOrder> {
+    return this.requestData(`/delivery-orders/${encodeURIComponent(orderId)}`, {
+      method: 'PATCH', body: JSON.stringify(changes),
+    });
   }
 
   async cancelDeliveryOrder(orderId: string): Promise<DeliveryOrder> {
@@ -544,6 +730,16 @@ export class ApiClient {
     return envelope.data;
   }
 
+  /**
+   * Pide una página de un listado y conserva `meta`, que `requestData` descarta. `signal` cancela
+   * la petición, también el reintento tras refrescar la sesión.
+   */
+  private async requestPage<T>(path: string, params: PageParams, signal?: AbortSignal): Promise<Page<T>> {
+    const response = await this.send(`${path}${buildQuery(params)}`, signal === undefined ? {} : { signal });
+    return await response.json() as Page<T>;
+  }
+
+  /** `init.signal` llega a la petición y a su reintento tras el 401: cancelar corta ambos. */
   private async send(path: string, init: RequestInit, allowRefresh = true): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set('Accept', 'application/json');
@@ -561,8 +757,10 @@ export class ApiClient {
 
     if (response.status === 401 && allowRefresh && this.accessToken !== null &&
         !path.startsWith('/auth/')) {
-      const session = await this.restoreSession();
+      const session = await this.refreshOnce();
       if (session === null) throw await this.toApiError(response);
+      // Si se canceló mientras se refrescaba la sesión, no se repite la petición.
+      init.signal?.throwIfAborted();
       return this.send(path, init, false);
     }
 
@@ -581,13 +779,13 @@ export class ApiClient {
       ? (body as { readonly error?: unknown; readonly message?: unknown })
       : undefined;
     const nested = typeof error?.error === 'object' && error.error !== null
-      ? error.error as { readonly code?: unknown; readonly message?: unknown }
+      ? error.error as { readonly code?: unknown; readonly message?: unknown; readonly details?: unknown }
       : undefined;
     const message = typeof nested?.message === 'string' ? nested.message
       : typeof error?.message === 'string' ? error.message
         : 'No se pudo completar la solicitud. Inténtalo de nuevo.';
     const code = typeof nested?.code === 'string' ? nested.code : undefined;
-    return new ApiError(message, response.status, code);
+    return new ApiError(message, response.status, code, nested?.details);
   }
 }
 

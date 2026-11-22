@@ -7,20 +7,20 @@ import { Recipient } from '../../../domain/value-objects/Recipient.js';
 import { toDeliveryOrderDto } from '../../dto/DeliveryOrderDto.js';
 import type { Clock } from '../../ports/Clock.js';
 import type { DeliveryOrderRepository } from '../../ports/DeliveryOrderRepository.js';
-import { deliveryOrderPackageSchema } from '../create-delivery-order/CreateDeliveryOrderCommand.js';
+import { deliveryAddressSchema, deliveryOrderPackageSchema } from '../create-delivery-order/CreateDeliveryOrderCommand.js';
 
 export const editOrderBodySchema = z.strictObject({
   recipient: z.strictObject({ name: z.string().trim().min(1).max(120), phone: z.string().trim().min(6).max(20).regex(/^\+?[0-9][0-9 ()-]*$/) }).optional(),
-  deliveryAddress: z.strictObject({
-    addressLine: z.string().trim().min(5).max(200), district: z.string().trim().min(2).max(80),
-    googleMapsUrl: z.string().trim().url().max(2048).optional(),
-    latitude: z.number().finite().min(-90).max(90).optional(), longitude: z.number().finite().min(-180).max(180).optional(),
-  }).refine((value) => (value.latitude === undefined) === (value.longitude === undefined), {
-    message: 'latitude and longitude must be provided together', path: ['latitude'],
-  }).optional(),
-  packages: z.array(deliveryOrderPackageSchema).min(1).max(100).optional(),
+  // The address is replaced as a whole, so an edit can never drop the coordinates.
+  deliveryAddress: deliveryAddressSchema.optional(),
+  // Existing packages keep their code; a package without one is new and gets a generated code.
+  packages: z.array(deliveryOrderPackageSchema.extend({
+    code: deliveryOrderPackageSchema.shape.code.optional(),
+  })).min(1).max(100).optional(),
 })
   .refine((value) => Object.keys(value).length > 0, 'At least one detail must be provided');
+
+type EditPackageInput = NonNullable<z.infer<typeof editOrderBodySchema>['packages']>[number];
 
 const editOrderCommandSchema = z.strictObject({
   organizationId: z.uuid(),
@@ -41,11 +41,17 @@ export class EditDeliveryOrderUseCase {
       });
     }
     const { organizationId, orderId, changes } = parsed.data;
+    const packages = changes.packages === undefined ? undefined : await this.withCodes(changes.packages);
     const order = await this.repository.editDetails(organizationId, orderId, {
       ...(changes.recipient === undefined ? {} : { recipient: Recipient.create(changes.recipient) }),
       ...(changes.deliveryAddress === undefined ? {} : { deliveryAddress: DeliveryAddress.create(changes.deliveryAddress) }),
-      ...(changes.packages === undefined ? {} : { packages: changes.packages.map((item) => Package.create(item)) }),
+      ...(packages === undefined ? {} : { packages }),
     }, this.clock.now());
     return { order: toDeliveryOrderDto(order) };
+  }
+
+  private async withCodes(items: readonly EditPackageInput[]): Promise<Package[]> {
+    const generated = [...await this.repository.nextPackageCodes(items.filter((item) => item.code === undefined).length)];
+    return items.map((item) => Package.create({ ...item, code: item.code ?? generated.shift()! }));
   }
 }

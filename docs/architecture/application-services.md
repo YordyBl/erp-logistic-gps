@@ -10,7 +10,7 @@ This page maps the API's application modules to their responsibilities and prima
 | `customers` | Organization-scoped customer directory used by delivery orders. | Create, retrieve, and list customers. |
 | `delivery-orders` | Order and package lifecycle, address and coordinates, cancellation, and status history. | Create, retrieve, list, edit, and cancel orders. |
 | `delivery-routes` | Route planning and dispatch assignment, plus the driver's route execution state transitions. | Plan, retrieve, list, and reassign routes; execute driver route actions. |
-| `delivery-execution` | Delivery evidence lifecycle and its storage boundary. | Upload, list, and download delivery evidence. |
+| `delivery-execution` | Delivery evidence lifecycle and its storage boundary. | Upload, list, and download delivery evidence; page the organization's evidence vault. |
 | `delivery-tracking` | Authenticated live snapshots and organization-scoped route, order, and position updates. | Issue a short-lived tracking ticket; connect to the tracking WebSocket; publish updates. |
 | `drivers` | Driver profiles and links between driver profiles and user accounts. | Create, retrieve, list, update, and bind driver accounts. |
 | `vehicles` | Organization-scoped vehicle fleet catalog. | Create, retrieve, list, and update vehicles. |

@@ -1,7 +1,20 @@
+import { Check, ImageIcon, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { ApiError, type ApiClient, type DeliveryEvidence, type DeliveryOrder } from '../api/client.js';
+import { SelectField } from '../components/FormFields.js';
+import { Alert, AlertDescription } from '../components/ui/alert.js';
+import { Badge } from '../components/ui/badge.js';
+import { Button } from '../components/ui/button.js';
+import {
+  Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '../components/ui/dialog.js';
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../components/ui/field.js';
+import { Input } from '../components/ui/input.js';
+import { Textarea } from '../components/ui/textarea.js';
+import { useFocusReturn } from '../hooks/use-focus-return.js';
 import { MAX_EVIDENCE_FILES, validateEvidenceFiles } from './evidence.js';
+import { INCIDENT_CATEGORIES } from './incidentCategories.js';
 
 type Outcome = 'delivery' | 'incident';
 
@@ -19,15 +32,7 @@ interface OutcomeDialogProps {
   readonly onClose: () => void;
 }
 
-const INCIDENT_CATEGORIES = [
-  ['recipient_absent', 'Destinatario ausente'],
-  ['incorrect_address', 'Dirección incorrecta'],
-  ['delivery_refused', 'Entrega rechazada'],
-  ['damaged_package', 'Paquete dañado'],
-  ['access_restricted', 'Acceso restringido'],
-  ['vehicle_issue', 'Problema con el vehículo'],
-  ['other', 'Otro'],
-] as const;
+const CATEGORY_OPTIONS = INCIDENT_CATEGORIES.map(([value, label]) => ({ value, label }));
 
 export function OutcomeDialog({ order, client, outcome, onComplete, onClose }: OutcomeDialogProps) {
   const [pending, setPending] = useState<readonly PendingPhoto[]>([]);
@@ -40,6 +45,7 @@ export function OutcomeDialog({ order, client, outcome, onComplete, onClose }: O
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const pendingRef = useRef(pending);
+  const { onCloseAutoFocus } = useFocusReturn(document.activeElement);
 
   useEffect(() => { pendingRef.current = pending; }, [pending]);
   useEffect(() => () => {
@@ -70,6 +76,11 @@ export function OutcomeDialog({ order, client, outcome, onComplete, onClose }: O
     }))]);
   }
 
+  function removePhoto(photo: PendingPhoto): void {
+    if (photo.previewUrl !== '') URL.revokeObjectURL(photo.previewUrl);
+    setPending((current) => current.filter((item) => item.idempotencyKey !== photo.idempotencyKey));
+  }
+
   async function savePhotos(): Promise<void> {
     setBusy(true);
     setError(null);
@@ -78,15 +89,14 @@ export function OutcomeDialog({ order, client, outcome, onComplete, onClose }: O
       for (const photo of pending) {
         const saved = await client.uploadEvidence(order.id, photo.file, photo.idempotencyKey);
         setUploaded((current) => [...current, saved]);
-        setPending((current) => current.filter((item) => item.idempotencyKey !== photo.idempotencyKey));
-        if (photo.previewUrl !== '') URL.revokeObjectURL(photo.previewUrl);
+        removePhoto(photo);
       }
       setMessage('Fotos guardadas.');
     } catch (cause) {
-      const message = cause instanceof ApiError
+      const detail = cause instanceof ApiError
         ? cause.message
         : 'No se pudo guardar la foto. La entrega sigue pendiente; reintenta la carga.';
-      setError(`No se pudo guardar la foto. ${message}`);
+      setError(`No se pudo guardar la foto. ${detail}`);
     } finally {
       setBusy(false);
     }
@@ -126,123 +136,100 @@ export function OutcomeDialog({ order, client, outcome, onComplete, onClose }: O
   const incidentDescriptionValid = description.trim().length >= 3 && description.trim().length <= 1000;
   const canSubmit = uploaded.length >= 1 && uploaded.length <= MAX_EVIDENCE_FILES &&
     (isDelivery || incidentDescriptionValid) && !busy;
-
-  const dialogRef = useRef<HTMLDialogElement>(null);
-  const closeCallback = useRef(onClose);
-  useEffect(() => { closeCallback.current = onClose; }, [onClose]);
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (dialog === null) return;
-    const handleCancel = (event: Event) => {
-      event.preventDefault();
-      closeCallback.current();
-    };
-    if (typeof dialog.showModal === 'function') dialog.showModal();
-    else dialog.setAttribute('open', '');
-    dialog.addEventListener('cancel', handleCancel);
-    return () => {
-      dialog.removeEventListener('cancel', handleCancel);
-      if (dialog.open && typeof dialog.close === 'function') dialog.close();
-    };
-  }, []);
+  const title = isDelivery ? 'Confirmar entrega' : 'Reportar incidencia';
 
   return (
-    <dialog ref={dialogRef} className="outcome-dialog" aria-labelledby="outcome-title" aria-modal="true">
-      <div className="dialog-heading">
-        <div>
-          <p className="section-label">Pedido {order.publicCode}</p>
-          <h2 id="outcome-title">{isDelivery ? 'Confirmar entrega' : 'Reportar incidencia'}</h2>
-        </div>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="Cerrar">
-          <span aria-hidden="true">×</span>
-        </button>
-      </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-lg" showCloseButton={false} onCloseAutoFocus={onCloseAutoFocus}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>Pedido {order.publicCode}</DialogDescription>
+        </DialogHeader>
+        <DialogClose asChild>
+          <Button variant="ghost" size="icon-sm" className="absolute top-2 right-2" aria-label="Cerrar"><X aria-hidden="true" /></Button>
+        </DialogClose>
 
-      <div className="dialog-content">
-        {isDelivery ? (
-          <>
-            <label className="field-label" htmlFor="receiver-name">Recibido por <span>(opcional)</span></label>
-            <input id="receiver-name" className="text-input" maxLength={120} value={receiverName}
-              onChange={(event) => setReceiverName(event.target.value)} placeholder="Nombre de quien recibe" />
-            <label className="field-label" htmlFor="delivery-notes">Observación <span>(opcional)</span></label>
-            <textarea id="delivery-notes" className="text-input text-area" maxLength={500} value={notes}
-              onChange={(event) => setNotes(event.target.value)} placeholder="Añade un detalle útil para la operación" />
-          </>
-        ) : (
-          <>
-            <label className="field-label" htmlFor="incident-category">Categoría</label>
-            <select id="incident-category" className="text-input" value={category}
-              onChange={(event) => setCategory(event.target.value as typeof category)}>
-              {INCIDENT_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <label className="field-label" htmlFor="incident-description">Descripción</label>
-            <textarea id="incident-description" className="text-input text-area" minLength={3} maxLength={1000}
-              value={description} onChange={(event) => setDescription(event.target.value)}
-              placeholder="Describe qué ocurrió y qué necesita saber el operador" />
-          </>
-        )}
-
-        <section className="photo-section" aria-labelledby="photo-title">
-          <div className="photo-heading">
-            <div>
-              <h3 id="photo-title">Evidencia fotográfica</h3>
-              <p>1–2 fotos · JPEG, PNG o WebP · hasta 5 MB cada una</p>
-            </div>
-            <span className="photo-count">{uploaded.length + pending.length}/2</span>
-          </div>
-          <label className="upload-zone" htmlFor="evidence-files">
-            <span className="upload-mark" aria-hidden="true">＋</span>
-            <span><strong>Elegir fotos</strong><small>Usa la cámara o selecciona desde el dispositivo</small></span>
-          </label>
-          <input id="evidence-files" className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp"
-            capture="environment" multiple aria-label={isDelivery ? 'Fotos de la entrega' : 'Fotos de la incidencia'}
-            onChange={(event) => {
-              addPhotos(event.currentTarget.files);
-              event.currentTarget.value = '';
-            }} />
-
-          {(pending.length > 0 || uploaded.length > 0) && (
-            <ul className="photo-list">
-              {uploaded.map((photo) => (
-                <li className="photo-row photo-row-saved" key={photo.id}>
-                  <span className="photo-file-icon" aria-hidden="true">✓</span>
-                  <span className="photo-file-name">Foto guardada</span>
-                  <span className="status-pill status-success">Disponible</span>
-                </li>
-              ))}
-              {pending.map((photo) => (
-                <li className="photo-row" key={photo.idempotencyKey}>
-                  {photo.previewUrl === '' ? <span className="photo-file-icon" aria-hidden="true">▧</span>
-                    : <img className="photo-thumb" src={photo.previewUrl} alt={`Vista previa de ${photo.file.name}`} />}
-                  <span className="photo-file-name">{photo.file.name}</span>
-                  <button className="text-button" type="button" disabled={busy}
-                    onClick={() => {
-                      if (photo.previewUrl !== '') URL.revokeObjectURL(photo.previewUrl);
-                      setPending((current) => current.filter((item) => item.idempotencyKey !== photo.idempotencyKey));
-                    }}>Quitar</button>
-                </li>
-              ))}
-            </ul>
+        <FieldGroup>
+          {isDelivery ? (
+            <>
+              <Field>
+                <FieldLabel htmlFor="receiver-name">Recibido por (opcional)</FieldLabel>
+                <Input id="receiver-name" maxLength={120} value={receiverName} placeholder="Nombre de quien recibe"
+                  onChange={(event) => setReceiverName(event.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="delivery-notes">Observación (opcional)</FieldLabel>
+                <Textarea id="delivery-notes" maxLength={500} value={notes} placeholder="Añade un detalle útil para la operación"
+                  onChange={(event) => setNotes(event.target.value)} />
+              </Field>
+            </>
+          ) : (
+            <>
+              <SelectField id="incident-category" label="Categoría" placeholder="Selecciona una categoría"
+                value={category} options={CATEGORY_OPTIONS} onChange={setCategory} />
+              <Field>
+                <FieldLabel htmlFor="incident-description">Descripción</FieldLabel>
+                <Textarea id="incident-description" minLength={3} maxLength={1000} value={description}
+                  placeholder="Describe qué ocurrió y qué necesita saber el operador"
+                  onChange={(event) => setDescription(event.target.value)} />
+              </Field>
+            </>
           )}
 
-          {pending.length > 0 && (
-            <button className="button button-secondary button-full" type="button" onClick={() => void savePhotos()} disabled={busy}>
-              {busy ? 'Guardando fotos…' : error !== null ? 'Reintentar carga' : 'Guardar fotos'}
-            </button>
-          )}
-          {message !== null && <p className="inline-success" role="status">{message}</p>}
-          {error !== null && <p className="inline-error" role="alert">{error}</p>}
-        </section>
-      </div>
+          <FieldSet>
+            <FieldLegend>Evidencia fotográfica · {uploaded.length + pending.length}/2</FieldLegend>
+            <FieldDescription>1–2 fotos · JPEG, PNG o WebP · hasta 5 MB cada una</FieldDescription>
+            <Field>
+              <FieldLabel htmlFor="evidence-files">Elegir fotos</FieldLabel>
+              {/* El navegador solo abre la cámara o el explorador desde un input de archivo. */}
+              <Input id="evidence-files" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple
+                aria-label={isDelivery ? 'Fotos de la entrega' : 'Fotos de la incidencia'}
+                onChange={(event) => {
+                  addPhotos(event.currentTarget.files);
+                  event.currentTarget.value = '';
+                }} />
+              <FieldDescription>Usa la cámara o selecciona desde el dispositivo</FieldDescription>
+            </Field>
 
-      <div className="dialog-actions">
-        <button className="button button-quiet" type="button" onClick={onClose} disabled={busy}>Cancelar</button>
-        <button className={`button ${isDelivery ? 'button-primary' : 'button-danger'}`} type="button"
-          onClick={() => void submitOutcome()} disabled={!canSubmit}>
-          {busy ? 'Guardando…' : isDelivery ? 'Confirmar entrega' : 'Registrar incidencia'}
-        </button>
-      </div>
-      <p className="dialog-footnote">La evidencia guardada no se elimina al cerrar esta ventana.</p>
-    </dialog>
+            {(pending.length > 0 || uploaded.length > 0) && (
+              <ul className="flex flex-col gap-2">
+                {uploaded.map((photo) => (
+                  <li key={photo.id} className="flex items-center gap-2 text-sm">
+                    <Check className="size-4 shrink-0" aria-hidden="true" />
+                    <span className="min-w-0 flex-1 truncate">Foto guardada</span>
+                    <Badge variant="success">Disponible</Badge>
+                  </li>
+                ))}
+                {pending.map((photo) => (
+                  <li key={photo.idempotencyKey} className="flex items-center gap-2 text-sm">
+                    {photo.previewUrl === ''
+                      ? <ImageIcon className="size-4 shrink-0" aria-hidden="true" />
+                      : <img className="size-8 shrink-0 rounded-md object-cover" src={photo.previewUrl} alt={`Vista previa de ${photo.file.name}`} />}
+                    <span className="min-w-0 flex-1 truncate">{photo.file.name}</span>
+                    <Button type="button" variant="ghost" disabled={busy} onClick={() => removePhoto(photo)}>Quitar</Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {pending.length > 0 && (
+              <Button type="button" variant="outline" onClick={() => void savePhotos()} disabled={busy}>
+                {busy ? 'Guardando fotos…' : error !== null ? 'Reintentar carga' : 'Guardar fotos'}
+              </Button>
+            )}
+            {message !== null && <Alert role="status"><AlertDescription>{message}</AlertDescription></Alert>}
+            {error !== null && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
+          </FieldSet>
+        </FieldGroup>
+
+        <p className="text-sm text-muted-foreground">La evidencia guardada no se elimina al cerrar esta ventana.</p>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>Cancelar</Button>
+          <Button type="button" variant={isDelivery ? 'default' : 'destructive'} onClick={() => void submitOutcome()} disabled={!canSubmit}>
+            {busy ? 'Guardando…' : isDelivery ? 'Confirmar entrega' : 'Registrar incidencia'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

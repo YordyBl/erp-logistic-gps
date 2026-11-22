@@ -11,14 +11,20 @@ export interface RoutePosition {
   readonly source: PositionSource;
   readonly recordedAt: string;
   readonly receivedAt: string;
+  /**
+   * Simulation only: how many stops, in sequence order, the simulated vehicle
+   * has passed at `recordedAt`. Never persisted and never set by real devices.
+   */
+  readonly reachedStopCount?: number;
 }
 
 export interface RoutePositionContext {
   readonly organizationId: string;
   readonly routeId: string;
   readonly driverId: string;
-  readonly driverUserId?: string;
   readonly simulatedCompletionEnabled?: boolean;
+  /** Dispatcher who planned the simulated route; the audited actor of simulated outcomes. */
+  readonly simulationActorUserId?: string;
   readonly startedAt: string;
   readonly origin?: { readonly latitude: number; readonly longitude: number };
   readonly stops: readonly {
@@ -35,6 +41,8 @@ export interface RouteGeometry {
   }[];
   readonly distanceMeters: number;
   readonly durationSeconds: number;
+  /** Distance of each leg between consecutive route locations, in travel order, when known. */
+  readonly legDistancesMeters?: readonly number[];
 }
 
 export interface RouteGeometryProvider {

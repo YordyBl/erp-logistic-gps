@@ -112,7 +112,9 @@ export interface TestAppOptions {
   readonly cookieSecure?: boolean;
   readonly loginRateLimit?: LoginRateLimitConfig;
   readonly trackingHub?: AppDependencies['trackingHub'];
+  readonly routeTrack?: AppDependencies['routeTrack'];
   readonly deliveryExecution?: AppDependencies['deliveryExecution'];
+  readonly vehicleRouteStats?: AppDependencies['vehicleRouteStats'];
 }
 
 export interface SeedTestUserOptions {
@@ -180,7 +182,7 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
   const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
     ? (() => {
       const store = new InMemoryRoutePlanningStore(module.repository,
-        drivers.accountBindings, identity.users, drivers.getDriver);
+        drivers.accountBindings, identity.users, drivers.getDriver, vehicles.getVehicle);
       return createDeliveryRoutesModule({
         store, executionStore: store,
         getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
@@ -193,6 +195,8 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     deliveryOrders: module,
     ...(deliveryRoutes === undefined ? {} : { deliveryRoutes }),
     ...(options.deliveryExecution === undefined ? {} : { deliveryExecution: options.deliveryExecution }),
+    ...(options.routeTrack === undefined ? {} : { routeTrack: options.routeTrack }),
+    ...(options.vehicleRouteStats === undefined ? {} : { vehicleRouteStats: options.vehicleRouteStats }),
     auth: {
       login: identity.login,
       refreshSession: identity.refreshSession,
@@ -294,10 +298,11 @@ export function createFailingRepository(
 
   return {
     nextCodes: fail,
+    nextPackageCodes: fail,
     save: fail,
     findById: fail,
     findByPublicCode: fail,
-    list: fail,
+    listPage: fail,
     editDetails: fail,
     cancel: fail,
     findStatusHistory: fail,

@@ -1,18 +1,25 @@
 import express, { type RequestHandler, Router } from 'express';
 import { z } from 'zod';
 
-import type { DeliveryOrderRepository } from '../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
+import {
+  DELIVERY_ORDER_SORT_FIELDS,
+  type DeliveryOrderPageCriteria,
+  type DeliveryOrderRepository,
+} from '../../modules/delivery-orders/application/ports/DeliveryOrderRepository.js';
+import { DELIVERY_ORDER_STATUSES } from '../../modules/delivery-orders/domain/policies/DeliveryOrderStatusPolicy.js';
+import { csvEnum, csvUuid, pageQueryShape, sortSchema, toPageResponse } from '../pagination.js';
 import type { GetCustomerUseCase } from '../../modules/customers/application/use-cases/get-customer/GetCustomerUseCase.js';
 import type { ListCustomersUseCase } from '../../modules/customers/application/use-cases/list-customers/ListCustomersUseCase.js';
 import type { CancelDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/cancel-delivery-order/CancelDeliveryOrderUseCase.js';
 import { createDeliveryOrderCommandSchema } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderCommand.js';
+import { mapLinkFailureReason } from '../../modules/delivery-routes/application/ports/MapLinkResolver.js';
 import { GoogleMapsLinkResolver } from '../../modules/delivery-routes/infrastructure/GoogleMapsLinkResolver.js';
 import type { CreateDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/create-delivery-order/CreateDeliveryOrderUseCase.js';
 import { getDeliveryOrderQuerySchema } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderQuery.js';
 import type { GetDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/get-delivery-order/GetDeliveryOrderUseCase.js';
-import type { ListDeliveryOrdersUseCase } from '../../modules/delivery-orders/application/use-cases/list-delivery-orders/ListDeliveryOrdersUseCase.js';
+import type { ListDeliveryOrdersPageUseCase } from '../../modules/delivery-orders/application/use-cases/list-delivery-orders/ListDeliveryOrdersPageUseCase.js';
 import { editOrderBodySchema, type EditDeliveryOrderUseCase } from '../../modules/delivery-orders/application/use-cases/edit-delivery-order/EditDeliveryOrderUseCase.js';
-import { PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
+import { DELIVERY_TIME_WINDOWS, PUBLIC_CODE_PATTERN } from '../../modules/delivery-orders/domain/entities/DeliveryOrder.js';
 import { HttpError } from '../errors.js';
 import { requireOrganizationId } from '../middleware/organization-resolver.js';
 import { requireRole } from '../middleware/require-role.js';
@@ -43,7 +50,7 @@ const IMPORT_BODY_LIMIT = '5mb';
 export interface DeliveryOrdersHttpPorts {
   readonly createDeliveryOrder: CreateDeliveryOrderUseCase;
   readonly getDeliveryOrder: GetDeliveryOrderUseCase;
-  readonly listDeliveryOrders: ListDeliveryOrdersUseCase;
+  readonly listDeliveryOrdersPage: ListDeliveryOrdersPageUseCase;
   readonly editDeliveryOrder: EditDeliveryOrderUseCase;
   readonly cancelDeliveryOrder: CancelDeliveryOrderUseCase;
   readonly repository: DeliveryOrderRepository;
@@ -70,6 +77,31 @@ const publicCodeQuerySchema = z.strictObject({
     ),
 });
 
+/**
+ * Paginated catalog query (`GET /delivery-orders` without `publicCode`).
+ * Unknown parameters are rejected; `exactOptionalPropertyTypes` needs the
+ * undefined-stripping below so absent filters stay absent in the criteria.
+ */
+const listOrdersPageQuerySchema = z
+  .strictObject({
+    ...pageQueryShape,
+    sort: sortSchema(DELIVERY_ORDER_SORT_FIELDS, { field: 'createdAt', direction: 'desc' }),
+    status: csvEnum(DELIVERY_ORDER_STATUSES).optional(),
+    timeWindow: csvEnum(DELIVERY_TIME_WINDOWS).optional(),
+    customerId: z.uuid().optional(),
+    ids: csvUuid().optional(),
+  })
+  .transform(({ page, pageSize, sort, q, status, timeWindow, customerId, ids }): DeliveryOrderPageCriteria => ({
+    page,
+    pageSize,
+    sort,
+    ...(q === undefined ? {} : { q }),
+    ...(status === undefined ? {} : { status }),
+    ...(timeWindow === undefined ? {} : { timeWindow }),
+    ...(customerId === undefined ? {} : { customerId }),
+    ...(ids === undefined ? {} : { ids }),
+  }));
+
 export function createDeliveryOrdersRouter(
   ports: DeliveryOrdersHttpPorts,
   authenticate: RequestHandler,
@@ -87,8 +119,10 @@ export function createDeliveryOrdersRouter(
     try {
       const coordinates = await mapLinkResolver.resolve(body.url);
       response.status(200).json({ data: coordinates });
-    } catch {
-      throw new HttpError(422, 'GOOGLE_MAPS_LINK_UNRESOLVED', 'The Google Maps link could not be resolved to coordinates.');
+    } catch (error) {
+      // The reason is a fixed failure class; the remote response and redirects stay private.
+      throw new HttpError(422, 'GOOGLE_MAPS_LINK_UNRESOLVED', 'The Google Maps link could not be resolved to coordinates.',
+        { reason: mapLinkFailureReason(error) });
     }
   });
 
@@ -161,9 +195,15 @@ export function createDeliveryOrdersRouter(
 
   router.get('/', async (request, response) => {
     const organizationId = requireOrganizationId(response);
-    if (Object.keys(request.query).length === 0) {
-      const result = await ports.listDeliveryOrders.execute({ organizationId });
-      response.status(200).json({ data: result.orders });
+    // `publicCode` keeps its single-order lookup (an object, not a page).
+    if (!Object.hasOwn(request.query, 'publicCode')) {
+      const criteria = parseOrThrow(
+        listOrdersPageQuerySchema,
+        request.query,
+        'List delivery orders query is invalid',
+      );
+      const result = await ports.listDeliveryOrdersPage.execute({ organizationId, criteria });
+      response.status(200).json(toPageResponse(result, criteria.page, criteria.pageSize));
       return;
     }
     const query = parseOrThrow(

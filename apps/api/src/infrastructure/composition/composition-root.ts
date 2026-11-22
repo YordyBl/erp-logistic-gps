@@ -20,6 +20,7 @@ import { createDeliveryRoutesModule } from '../../modules/delivery-routes/compos
 import { RoutePlanningTypeOrmStore } from '../dispatch/RoutePlanningTypeOrmStore.js';
 import { DriverRouteTypeOrmStore } from '../dispatch/DriverRouteTypeOrmStore.js';
 import { DispatchDashboardTypeOrmQuery } from '../dispatch/DispatchDashboardTypeOrmQuery.js';
+import { VehicleRouteStatsTypeOrmQuery } from '../dispatch/VehicleRouteStatsTypeOrmQuery.js';
 import {
   createDriversModuleFromDataSource,
   type DriversModule,
@@ -42,9 +43,10 @@ export interface ComposedApiModules {
   readonly drivers: DriversModule;
   readonly vehicles: VehiclesModule;
   readonly dispatchDashboard: DispatchDashboardTypeOrmQuery;
+  readonly vehicleRouteStats: VehicleRouteStatsTypeOrmQuery;
   readonly dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'auth' | 'catalogs'
   >;
 }
 
@@ -65,6 +67,7 @@ export async function composeApiModules(
   dataSource: DataSource,
   authConfig: AuthConfig,
   evidenceStorageConfig?: S3EvidenceObjectStorageConfig,
+  options: { readonly routeSimulationEnabled?: boolean } = {},
 ): Promise<ComposedApiModules> {
   const [deliveryOrders, identity, customers, drivers, vehicles] =
     await Promise.all([
@@ -84,16 +87,19 @@ export async function composeApiModules(
     store: new RoutePlanningTypeOrmStore(dataSource),
     executionStore: new DriverRouteTypeOrmStore(dataSource),
     getDriver: drivers.getDriver, getVehicle: vehicles.getVehicle,
+    simulationEnabled: options.routeSimulationEnabled ?? false,
   });
   const dispatchDashboard = new DispatchDashboardTypeOrmQuery(dataSource);
+  const vehicleRouteStats = new VehicleRouteStatsTypeOrmQuery(dataSource);
 
   const dependencies: Pick<
     AppDependencies,
-    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'auth' | 'catalogs'
+    'deliveryOrders' | 'deliveryRoutes' | 'deliveryExecution' | 'dispatchDashboard' | 'vehicleRouteStats' | 'auth' | 'catalogs'
   > = {
     deliveryOrders,
     deliveryRoutes,
     dispatchDashboard,
+    vehicleRouteStats,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
     auth: {
       ...(authConfig.loginOrganizationId === undefined ? {} : { loginOrganizationId: authConfig.loginOrganizationId }),
@@ -115,6 +121,6 @@ export async function composeApiModules(
   return {
     deliveryOrders, deliveryRoutes,
     ...(deliveryExecution === undefined ? {} : { deliveryExecution }),
-    identity, customers, drivers, vehicles, dispatchDashboard, dependencies,
+    identity, customers, drivers, vehicles, dispatchDashboard, vehicleRouteStats, dependencies,
   };
 }

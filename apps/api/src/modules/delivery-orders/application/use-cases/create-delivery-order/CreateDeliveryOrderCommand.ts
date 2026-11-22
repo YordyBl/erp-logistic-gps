@@ -16,18 +16,19 @@ const recipientSchema = z.strictObject({
     ),
 });
 
-const deliveryAddressSchema = z
-  .strictObject({
-    addressLine: z.string().trim().min(5).max(200),
-    district: z.string().trim().min(2).max(80),
-    googleMapsUrl: z.string().trim().url().max(2048).optional(),
-    latitude: z.number().finite().min(-90).max(90).optional(),
-    longitude: z.number().finite().min(-180).max(180).optional(),
-  })
-  .refine((value) => (value.latitude === undefined) === (value.longitude === undefined), {
-    message: 'latitude and longitude must be provided together',
-    path: ['latitude'],
-  });
+/**
+ * Every order must be placed on the map: route stops copy the order's
+ * coordinates, so an unlocated order could never be routed or tracked. The
+ * Google Maps link is only a reference; clients resolve it to coordinates
+ * (`POST /delivery-orders/resolve-map-link`) before submitting.
+ */
+export const deliveryAddressSchema = z.strictObject({
+  addressLine: z.string().trim().min(5).max(200),
+  district: z.string().trim().min(2).max(80),
+  googleMapsUrl: z.string().trim().url().max(2048).optional(),
+  latitude: z.number().finite().min(-90).max(90),
+  longitude: z.number().finite().min(-180).max(180),
+});
 
 export const deliveryOrderPackageSchema = z.strictObject({
   code: z

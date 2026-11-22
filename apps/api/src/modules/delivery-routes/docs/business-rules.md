@@ -2,7 +2,8 @@
 
 1. Only ADMIN or DISPATCHER may create a route. Organization and actor come
    from a verified JWT, never request data.
-2. A route has a unique readable code per organization, a planned date, one
+2. A route has a unique readable code per organization (generated as
+   `RUT-00000001` unless the caller supplies one), a planned date, one
    active driver, one active vehicle, and at least one stop. Stop sequences are
    unique positive integers. Each stop has an address and at least one order;
    coordinates must appear together when provided.

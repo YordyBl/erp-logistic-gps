@@ -1,26 +1,72 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import type { ColumnDef } from '@tanstack/react-table';
+import { ArrowDown, ArrowLeftRight, ArrowUp, ExternalLink, Eye, Plus, RefreshCw, Route, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import type {
-  DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver, Vehicle,
+  CreateDispatchRouteInput, DeliveryOrder, DeliveryOrderStatusHistory, DispatchRoute, Driver, Page, PageParams,
+  RouteSimulationAvailability, Vehicle,
 } from '../api/client.js';
+import { fetchByIds } from '../api/fetchByIds.js';
+import { RowActions, SortableHeader, TableProgress } from '../components/data-table/columnHelpers.js';
+import { DataTable, type DataTableFilter } from '../components/data-table/DataTable.js';
+import { DocumentSheet, DocumentTitle, FormSheet } from '../components/FormSheet.js';
+import { DateField, SelectField, TextField } from '../components/FormFields.js';
+import { IconChip } from '../components/IconChip.js';
+import { MapLink } from '../components/MapLink.js';
+import { ErrorNotice, LoadingRows, SuccessNotice } from '../components/Notices.js';
+import { PageHeader } from '../components/PageHeader.js';
+import { Avatar, AvatarFallback } from '../components/ui/avatar.js';
+import { Badge } from '../components/ui/badge.js';
+import { Button } from '../components/ui/button.js';
+import { Checkbox } from '../components/ui/checkbox.js';
+import { DropdownMenuItem } from '../components/ui/dropdown-menu.js';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from '../components/ui/field.js';
+import { Input } from '../components/ui/input.js';
+import { Separator } from '../components/ui/separator.js';
+import { SearchInput } from '../components/SearchInput.js';
+import { ORDER_STATUS_LABELS, ROUTE_BADGES, ROUTE_STATUS_LABELS } from '../delivery/orderStatus.js';
+import { useDebouncedValue } from '../hooks/use-debounced-value.js';
+import { useServerTable } from '../hooks/use-server-table.js';
+import { formatPlannedDate } from '../lib/dates.js';
+import { countLabel, formatDateTime, initials } from '../lib/format.js';
+import {
+  googleMapsPlaceUrl, googleMapsRouteUrl, mapLinkErrorMessage, mapLinkFailureMessage, type MapPoint,
+} from '../lib/googleMaps.js';
+import { routeOrderIds } from './routes/routeDetails.js';
+import { RouteTimeline } from './routes/RouteTimeline.js';
+import { summarizeRoute, type RouteProgress } from './routes/routeProgress.js';
+
+interface RouteRow {
+  readonly route: DispatchRoute;
+  readonly progress: RouteProgress;
+  readonly driver: string;
+  readonly plate: string;
+}
+
+const ROUTE_STATUS_FILTER: DataTableFilter = {
+  columnId: 'status',
+  title: 'Estado',
+  options: (['planned', 'in_progress', 'completed'] as const).map((status) => ({ value: status, label: ROUTE_STATUS_LABELS[status] })),
+};
+
+/** `columnId` ordenable de la tabla de rutas → campo de `sort` en `GET /delivery-routes`. */
+const ROUTE_SORT_FIELDS: Readonly<Record<string, string>> = { code: 'publicCode', status: 'status' };
+/** `columnId` de faceta → parámetro de `GET /delivery-routes` (y clave de `meta.counts`). */
+const ROUTE_FILTER_PARAMS: Readonly<Record<string, string>> = { status: 'status' };
+/** Pedidos elegibles que muestra el selector de paradas; si hay más, se pide refinar la búsqueda. */
+const PICKER_PAGE_SIZE = 50;
 
 interface DispatchClient {
-  listDispatchRoutes(): Promise<readonly DispatchRoute[]>;
-  listDeliveryOrders(): Promise<readonly DeliveryOrder[]>;
+  listDispatchRoutesPage(params: PageParams, signal?: AbortSignal): Promise<Page<DispatchRoute>>;
+  listDeliveryOrdersPage(params: PageParams, signal?: AbortSignal): Promise<Page<DeliveryOrder>>;
   listDrivers(): Promise<readonly Driver[]>;
   listVehicles(): Promise<readonly Vehicle[]>;
-  createDispatchRoute(input: {
-    readonly publicCode: string;
-    readonly plannedDate: string;
-    readonly driverId: string;
-    readonly vehicleId: string;
-    readonly stops: readonly {
-      readonly sequence: number;
-      readonly addressLine: string;
-      readonly googleMapsUrl?: string;
-      readonly orderIds: readonly string[];
-    }[];
-  }): Promise<DispatchRoute>;
+  createDispatchRoute(input: CreateDispatchRouteInput): Promise<DispatchRoute>;
+  /** Development-only availability; omitted or failing means simulation is unavailable. */
+  getRouteSimulation?(): Promise<RouteSimulationAvailability>;
+  /** Previews the coordinates of a Google Maps link before the route is created. */
+  resolveGoogleMapsLink?(url: string): Promise<{ readonly latitude: number; readonly longitude: number }>;
   reassignDispatchRoute(routeId: string, input: {
     readonly driverId?: string;
     readonly vehicleId?: string;
@@ -28,71 +74,201 @@ interface DispatchClient {
   listDeliveryOrderStatusHistory(orderId: string): Promise<readonly DeliveryOrderStatusHistory[]>;
 }
 
-interface StopDraft {
-  readonly addressLine: string;
-  readonly googleMapsUrl: string;
-  readonly orderIds: readonly string[];
+const SIMULATION_UNAVAILABLE: RouteSimulationAvailability = { enabled: false, eligibleDriverIds: [] };
+
+function driverOptions(drivers: readonly Driver[]) {
+  return drivers.map((driver) => ({ value: driver.id, label: driver.fullName }));
 }
 
-const newStop = (): StopDraft => ({ addressLine: '', googleMapsUrl: '', orderIds: [] });
+function vehicleOptions(vehicles: readonly Vehicle[]) {
+  return vehicles.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.plate} · ${vehicle.type}` }));
+}
 
 export function DispatchPlanningPage({ client }: { readonly client: DispatchClient }) {
-  const [routes, setRoutes] = useState<readonly DispatchRoute[]>([]);
-  const [orders, setOrders] = useState<readonly DeliveryOrder[]>([]);
+  const table = useServerTable<DispatchRoute>(
+    (params, signal) => client.listDispatchRoutesPage(params, signal),
+    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS },
+  );
+  const { rows: routes, meta, reload: reloadRoutes } = table;
+  // Pedidos de las paradas de la página visible, para su avance y su detalle.
+  const [routeOrders, setRouteOrders] = useState<ReadonlyMap<string, DeliveryOrder>>(new Map());
+  // Selector de paradas: pedidos creados o devueltos que coinciden con la búsqueda, una página.
+  const [pickerQuery, setPickerQuery] = useState('');
+  const pickerSearch = useDebouncedValue(pickerQuery.trim(), 300);
+  const [picker, setPicker] = useState<Page<DeliveryOrder> | null>(null);
+  const [pickerLoading, setPickerLoading] = useState(true);
+  const [pickerFailed, setPickerFailed] = useState(false);
+  const [pickerToken, setPickerToken] = useState(0);
+  // Total de pedidos por asignar sin búsqueda, para la cabecera.
+  const [eligibleTotal, setEligibleTotal] = useState<number | null>(null);
+  // Los pedidos elegidos se conservan aunque salgan de los resultados del selector.
+  const [selectedOrders, setSelectedOrders] = useState<ReadonlyMap<string, DeliveryOrder>>(new Map());
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
-  const [stops, setStops] = useState<readonly StopDraft[]>([newStop()]);
-  const [routeCode, setRouteCode] = useState('');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [detailRouteId, setDetailRouteId] = useState<string | null>(null);
+  const [reassignRouteId, setReassignRouteId] = useState<string | null>(null);
+  // One stop per order, in visiting order. Each stop takes its address and coordinates from the order.
+  const [stopOrderIds, setStopOrderIds] = useState<readonly string[]>([]);
   const [plannedDate, setPlannedDate] = useState('');
   const [driverId, setDriverId] = useState('');
   const [vehicleId, setVehicleId] = useState('');
+  const [simulation, setSimulation] = useState<RouteSimulationAvailability>(SIMULATION_UNAVAILABLE);
+  const [simulate, setSimulate] = useState(false);
+  const [originAddress, setOriginAddress] = useState('');
+  const [originMapsUrl, setOriginMapsUrl] = useState('');
+  // Coordinates the dispatcher saw for the origin link; they are what the route stores.
+  const [originPoint, setOriginPoint] = useState<MapPoint | null>(null);
+  const [resolvingOrigin, setResolvingOrigin] = useState(false);
+  const [originError, setOriginError] = useState<string | null>(null);
+  const [showMissing, setShowMissing] = useState(false);
   const [history, setHistory] = useState<Record<string, readonly DeliveryOrderStatusHistory[]>>({});
   const [historyLoadingId, setHistoryLoadingId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [catalogsLoading, setCatalogsLoading] = useState(true);
+  const [catalogsFailed, setCatalogsFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyRouteId, setBusyRouteId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Conductores y vehículos siguen siendo catálogos completos.
+  const loadCatalogs = useCallback(async () => {
+    setCatalogsLoading(true);
+    setCatalogsFailed(false);
     try {
-      const [loadedRoutes, loadedOrders, loadedDrivers, loadedVehicles] = await Promise.all([
-        client.listDispatchRoutes(), client.listDeliveryOrders(), client.listDrivers(), client.listVehicles(),
-      ]);
-      setRoutes(loadedRoutes);
-      setOrders(loadedOrders);
+      const [loadedDrivers, loadedVehicles] = await Promise.all([client.listDrivers(), client.listVehicles()]);
       setDrivers(loadedDrivers);
       setVehicles(loadedVehicles);
     } catch {
-      setError('No se pudo cargar la información de despacho. Comprueba la conexión e inténtalo de nuevo.');
+      setCatalogsFailed(true);
     } finally {
-      setLoading(false);
+      setCatalogsLoading(false);
     }
   }, [client]);
 
-  useEffect(() => { void loadData(); }, [loadData]);
+  useEffect(() => { void loadCatalogs(); }, [loadCatalogs]);
 
-  const eligibleOrders = orders.filter((order) => order.status === 'created' || order.status === 'returned');
+  const reloadPicker = useCallback(() => setPickerToken((token) => token + 1), []);
+  const refresh = () => {
+    setError(null);
+    reloadRoutes();
+    reloadPicker();
+    void loadCatalogs();
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setPickerLoading(true);
+    client.listDeliveryOrdersPage({
+      status: ['created', 'returned'], pageSize: PICKER_PAGE_SIZE, sort: 'createdAt:asc',
+      ...(pickerSearch === '' ? {} : { q: pickerSearch }),
+    }, controller.signal).then((page) => {
+      if (controller.signal.aborted) return;
+      setPicker(page);
+      setPickerFailed(false);
+      if (pickerSearch === '') setEligibleTotal(page.meta.total);
+      setPickerLoading(false);
+    }, () => {
+      if (controller.signal.aborted) return;
+      setPickerFailed(true);
+      setPickerLoading(false);
+    });
+    return () => controller.abort();
+  }, [client, pickerSearch, pickerToken]);
+
+  // Tras cada página de rutas se piden, por `ids`, solo los pedidos de sus paradas.
+  useEffect(() => {
+    const ids = routeOrderIds(routes);
+    if (ids.length === 0) return undefined;
+    const controller = new AbortController();
+    fetchByIds((params, signal) => client.listDeliveryOrdersPage(params, signal), ids, controller.signal).then((loaded) => {
+      if (!controller.signal.aborted) setRouteOrders(new Map(loaded.map((order) => [order.id, order])));
+    }, () => {
+      // Sin los pedidos, el avance queda en cero, pero las rutas se siguen viendo.
+    });
+    return () => controller.abort();
+  }, [client, routes]);
+
+  const loadFailed = table.error !== null || catalogsFailed;
+  const loadError = loadFailed ? 'No se pudo cargar la información de despacho. Comprueba la conexión e inténtalo de nuevo.' : null;
+  const eligibleOrders = picker?.data ?? [];
+
+  // Simulation availability is optional: a missing method or a failed request
+  // simply hides the controls instead of blocking regular planning.
+  useEffect(() => {
+    let cancelled = false;
+    const load = client.getRouteSimulation?.bind(client);
+    if (load === undefined) return undefined;
+    load()
+      .then((availability) => { if (!cancelled) setSimulation(availability); })
+      .catch(() => { if (!cancelled) setSimulation(SIMULATION_UNAVAILABLE); });
+    return () => { cancelled = true; };
+  }, [client]);
+
   const activeDrivers = drivers.filter((driver) => driver.status === 'active');
-  const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
-  const orderById = new Map(orders.map((order) => [order.id, order]));
-  const driverById = new Map(drivers.map((driver) => [driver.id, driver]));
-  const vehicleById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+  const simulating = simulation.enabled && simulate;
+  const selectableDrivers = simulating
+    ? activeDrivers.filter((driver) => simulation.eligibleDriverIds.includes(driver.id))
+    : activeDrivers;
 
-  function updateStop(index: number, update: (stop: StopDraft) => StopDraft) {
-    setStops((current) => current.map((stop, stopIndex) => stopIndex === index ? update(stop) : stop));
+  function toggleSimulation(checked: boolean) {
+    setSimulate(checked);
+    if (checked && driverId !== '' && !simulation.eligibleDriverIds.includes(driverId)) setDriverId('');
+  }
+  const activeVehicles = vehicles.filter((vehicle) => vehicle.status === 'active');
+  const orderById = selectedOrders;
+  // Stops in visiting order (and the previewed origin of a simulation) as one Google Maps route.
+  const plannedRouteLink = googleMapsRouteUrl([
+    ...(simulating && originPoint !== null ? [originPoint] : []),
+    ...stopOrderIds.flatMap((id) => {
+      const order = orderById.get(id);
+      const point = order === undefined ? null : orderPoint(order);
+      return point === null ? [] : [point];
+    }),
+  ]);
+
+  function toggleOrder(order: DeliveryOrder | string, checked: boolean) {
+    const orderId = typeof order === 'string' ? order : order.id;
+    setStopOrderIds((current) => checked
+      ? (current.includes(orderId) ? current : [...current, orderId])
+      : current.filter((id) => id !== orderId));
+    setSelectedOrders((current) => {
+      const next = new Map(current);
+      if (checked && typeof order !== 'string') next.set(orderId, order);
+      else if (!checked) next.delete(orderId);
+      return next;
+    });
   }
 
-  function toggleOrder(stopIndex: number, orderId: string, checked: boolean) {
-    setStops((current) => current.map((stop, index) => {
-      if (index !== stopIndex) return { ...stop, orderIds: stop.orderIds.filter((id) => id !== orderId) };
-      return {
-        ...stop,
-        orderIds: checked ? [...stop.orderIds, orderId] : stop.orderIds.filter((id) => id !== orderId),
-      };
-    }));
+  function changeOriginLink(value: string) {
+    setOriginMapsUrl(value);
+    // A preview belongs to the link it came from.
+    setOriginPoint(null);
+    setOriginError(null);
+  }
+
+  async function previewOrigin() {
+    if (client.resolveGoogleMapsLink === undefined) return;
+    setResolvingOrigin(true);
+    setOriginError(null);
+    try {
+      setOriginPoint(await client.resolveGoogleMapsLink(originMapsUrl.trim()));
+    } catch (cause) {
+      setOriginPoint(null);
+      setOriginError(mapLinkErrorMessage(cause));
+    } finally {
+      setResolvingOrigin(false);
+    }
+  }
+
+  function moveStop(index: number, offset: -1 | 1) {
+    setStopOrderIds((current) => {
+      const target = index + offset;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target]!, next[index]!];
+      return next;
+    });
   }
 
   async function showOrderHistory(orderId: string) {
@@ -111,30 +287,52 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     event.preventDefault();
     setError(null);
     setNotice(null);
-    if (stops.some((stop) => stop.orderIds.length === 0)) {
-      setError('Asigna al menos un pedido a cada parada antes de crear la ruta.');
+    if (plannedDate === '' || driverId === '' || vehicleId === '') {
+      setShowMissing(true);
+      return;
+    }
+    if (stopOrderIds.length === 0) {
+      setError('Selecciona al menos un pedido para la ruta.');
+      return;
+    }
+    if (simulating && (originAddress.trim() === '' || originMapsUrl.trim() === '')) {
+      setError('Indica la dirección y el enlace de Google Maps del origen de la simulación.');
       return;
     }
     setSaving(true);
     try {
       const created = await client.createDispatchRoute({
-        publicCode: routeCode.trim(), plannedDate, driverId, vehicleId,
-        stops: stops.map((stop, index) => ({
-          sequence: index + 1, addressLine: stop.addressLine.trim(), orderIds: stop.orderIds,
-          ...(stop.googleMapsUrl.trim() === '' ? {} : { googleMapsUrl: stop.googleMapsUrl.trim() }),
-        })),
+        plannedDate, driverId, vehicleId,
+        ...(simulating ? {
+          simulatedCompletionEnabled: true,
+          // Previewed coordinates are sent as-is so the route stores exactly what was shown.
+          origin: originPoint === null
+            ? { addressLine: originAddress.trim(), googleMapsUrl: originMapsUrl.trim() }
+            : { addressLine: originAddress.trim(), ...originPoint },
+        } : {}),
+        stops: stopOrderIds.map((orderId, index) => ({ sequence: index + 1, orderId })),
       });
-      setRoutes((current) => [...current, created]);
-      setOrders((current) => current.map((order) => stops.some((stop) => stop.orderIds.includes(order.id))
-        ? { ...order, status: 'assigned' } : order));
-      setRouteCode('');
+      // The new route and its orders' new status come from the server.
+      reloadRoutes();
+      reloadPicker();
       setPlannedDate('');
       setDriverId('');
       setVehicleId('');
-      setStops([newStop()]);
-      setNotice(`Ruta ${created.publicCode} creada.`);
+      setStopOrderIds([]);
+      setSelectedOrders(new Map());
+      setPickerQuery('');
+      setSimulate(false);
+      setOriginAddress('');
+      changeOriginLink('');
+      setShowMissing(false);
+      setCreateOpen(false);
+      setNotice(created.simulatedCompletionEnabled === true
+        ? `Ruta ${created.publicCode} creada. La simulación ya está en curso.`
+        : `Ruta ${created.publicCode} creada.`);
     } catch (cause) {
-      setError(cause instanceof Error ? `No se pudo crear la ruta. ${cause.message}` : 'No se pudo crear la ruta.');
+      const linkFailure = mapLinkFailureMessage(cause);
+      setError(linkFailure !== null ? `No se pudo crear la ruta. ${linkFailure}`
+        : cause instanceof Error ? `No se pudo crear la ruta. ${cause.message}` : 'No se pudo crear la ruta.');
     } finally {
       setSaving(false);
     }
@@ -153,7 +351,8 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     setError(null);
     try {
       const updated = await client.reassignDispatchRoute(route.id, changes);
-      setRoutes((current) => current.map((item) => item.id === updated.id ? updated : item));
+      reloadRoutes();
+      reloadPicker();
       setNotice(`Recursos de ${updated.publicCode} actualizados.`);
     } catch (cause) {
       setError(cause instanceof Error ? `No se pudo reasignar la ruta. ${cause.message}` : 'No se pudo reasignar la ruta.');
@@ -162,149 +361,391 @@ export function DispatchPlanningPage({ client }: { readonly client: DispatchClie
     }
   }
 
+  const routeRows = useMemo<readonly RouteRow[]>(() => routes.map((route) => ({
+    route,
+    progress: summarizeRoute(route, routeOrders),
+    driver: drivers.find((driver) => driver.id === route.driverId)?.fullName ?? 'Conductor no disponible',
+    plate: vehicles.find((vehicle) => vehicle.id === route.vehicleId)?.plate ?? 'Vehículo no disponible',
+  })), [drivers, routeOrders, routes, vehicles]);
+
+  const columns = useMemo<readonly ColumnDef<RouteRow, unknown>[]>(() => [
+    {
+      id: 'code',
+      accessorFn: (row) => row.route.publicCode,
+      header: ({ column }) => <SortableHeader column={column} title="Ruta" />,
+      enableHiding: false,
+      cell: ({ row }) => (
+        <span className="flex flex-col">
+          <span className="flex items-center gap-2">
+            <span className="font-medium tabular-nums">{row.original.route.publicCode}</span>
+            {row.original.route.simulatedCompletionEnabled === true && <Badge variant="outline">Simulada</Badge>}
+          </span>
+          <span className="text-xs text-muted-foreground">{formatPlannedDate(row.original.route.plannedDate)}</span>
+        </span>
+      ),
+    },
+    {
+      id: 'driver',
+      accessorFn: (row) => row.driver,
+      header: 'Conductor',
+      enableSorting: false,
+      meta: { title: 'Conductor', className: 'hidden md:table-cell' },
+      cell: ({ row }) => (
+        <span className="flex items-center gap-2">
+          <Avatar size="sm"><AvatarFallback>{initials(row.original.driver)}</AvatarFallback></Avatar>
+          {row.original.driver}
+        </span>
+      ),
+    },
+    {
+      id: 'plate',
+      accessorFn: (row) => row.plate,
+      header: 'Vehículo',
+      enableSorting: false,
+      meta: { title: 'Vehículo', className: 'hidden md:table-cell tabular-nums' },
+    },
+    {
+      id: 'stops',
+      accessorFn: (row) => row.route.stops.length,
+      header: 'Paradas',
+      enableSorting: false,
+      enableGlobalFilter: false,
+      meta: { title: 'Paradas', className: 'hidden md:table-cell tabular-nums' },
+    },
+    {
+      id: 'status',
+      accessorFn: (row) => row.route.status,
+      header: ({ column }) => <SortableHeader column={column} title="Estado" />,
+      filterFn: 'arrIncludesSome',
+      enableGlobalFilter: false,
+      meta: { title: 'Estado' },
+      cell: ({ row }) => <Badge variant={ROUTE_BADGES[row.original.route.status]}>{ROUTE_STATUS_LABELS[row.original.route.status]}</Badge>,
+    },
+    {
+      id: 'progress',
+      accessorFn: (row) => row.progress.percent,
+      header: 'Avance',
+      enableSorting: false,
+      enableGlobalFilter: false,
+      meta: { title: 'Avance' },
+      cell: ({ row }) => {
+        const { closed, total, percent } = row.original.progress;
+        return <TableProgress percent={percent} detail={`${closed} de ${total}`} label={`Avance de ${row.original.route.publicCode}`} />;
+      },
+    },
+    {
+      id: 'actions',
+      enableHiding: false,
+      enableSorting: false,
+      cell: ({ row }) => (
+        <RowActions label={`Acciones de ${row.original.route.publicCode}`}>
+          <DropdownMenuItem onSelect={() => setDetailRouteId(row.original.route.id)}><Eye aria-hidden="true" /> Ver detalle</DropdownMenuItem>
+          {row.original.route.status === 'planned' && (
+            <DropdownMenuItem onSelect={() => setReassignRouteId(row.original.route.id)}><ArrowLeftRight aria-hidden="true" /> Reasignar</DropdownMenuItem>
+          )}
+        </RowActions>
+      ),
+    },
+  ], []);
+
+  const detailRow = routeRows.find((row) => row.route.id === detailRouteId);
+  const reassignRoute_ = routes.find((route) => route.id === reassignRouteId);
+
+  function openCreate() {
+    setError(null);
+    setNotice(null);
+    setCreateOpen(true);
+  }
+
+  // Conteos del servidor: aplican la búsqueda, pero no el filtro de estado.
+  const statusCounts = meta?.counts?.status ?? {};
+  const routeCounts = {
+    inProgress: statusCounts.in_progress ?? 0,
+    planned: statusCounts.planned ?? 0,
+    completed: statusCounts.completed ?? 0,
+  };
+  const hasCriteria = table.state.globalFilter.trim() !== '' || table.state.columnFilters.length > 0;
+  const isEmpty = meta !== null && meta.total === 0 && !hasCriteria;
+  const eligibleCount = eligibleTotal ?? 0;
+  const pickerTotal = picker?.meta.total ?? 0;
+
   return (
-    <section className="dispatch-planning">
-      <header className="dispatch-planning__header">
-        <div>
-          <p className="order-management__context">OPERACIÓN · DESPACHO</p>
-          <h1>Planificación de rutas</h1>
-          <p>Organiza pedidos en paradas, asigna recursos y consulta el avance de las rutas.</p>
-        </div>
-      </header>
+    <section className="flex flex-col gap-6">
+      <PageHeader title="Planificación de rutas" description={meta !== null && eligibleTotal !== null && !loadFailed ? `${countLabel(eligibleCount, 'pedido', 'pedidos')} por asignar · ${countLabel(routeCounts.inProgress, 'ruta', 'rutas')} en curso · ${countLabel(routeCounts.planned, 'planificada', 'planificadas')} · ${countLabel(routeCounts.completed, 'finalizada', 'finalizadas')}.` : 'Organiza pedidos en paradas, asigna recursos y consulta el avance de las rutas.'}>
+        <Button type="button" variant="outline" onClick={refresh} disabled={table.loading}>
+          <RefreshCw data-icon="inline-start" aria-hidden="true" /> Actualizar
+        </Button>
+        <Button type="button" onClick={openCreate}><Plus data-icon="inline-start" aria-hidden="true" /> Nueva ruta</Button>
+      </PageHeader>
 
-      {error !== null && <p className="order-management__alert" role="alert">{error}</p>}
-      {notice !== null && <p className="order-management__success" role="status">{notice}</p>}
-
-      <section className="dispatch-planning__section" aria-labelledby="route-create-title">
-        <h2 id="route-create-title">Crear ruta manual</h2>
-        <form className="dispatch-planning__form" onSubmit={(event) => void createRoute(event)}>
-          <label>Código de ruta
-            <input required minLength={3} maxLength={32} value={routeCode} onChange={(event) => setRouteCode(event.target.value)} />
-          </label>
-          <label>Fecha planificada
-            <input required type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} />
-          </label>
-          <label>Conductor
-            <select required value={driverId} onChange={(event) => setDriverId(event.target.value)}>
-              <option value="">Selecciona un conductor</option>
-              {activeDrivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.fullName}</option>)}
-            </select>
-          </label>
-          <label>Vehículo
-            <select required value={vehicleId} onChange={(event) => setVehicleId(event.target.value)}>
-              <option value="">Selecciona un vehículo</option>
-              {activeVehicles.map((vehicle) => <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.type}</option>)}
-            </select>
-          </label>
-
-          <div className="dispatch-planning__stops">
-            {stops.map((stop, stopIndex) => {
-              const assignedElsewhere = new Set(stops.flatMap((item, index) => index === stopIndex ? [] : item.orderIds));
-              return (
-                <fieldset className="dispatch-planning__stop" key={stopIndex}>
-                  <legend>Parada {stopIndex + 1}</legend>
-                  <label>Dirección de parada {stopIndex + 1}
-                    <input required minLength={5} maxLength={200} value={stop.addressLine}
-                      onChange={(event) => updateStop(stopIndex, (current) => ({ ...current, addressLine: event.target.value }))} />
-                  </label>
-                  <label>Enlace de Google Maps de parada {stopIndex + 1} (opcional)
-                    <input type="url" maxLength={2048} placeholder="https://maps.app.goo.gl/..."
-                      value={stop.googleMapsUrl}
-                      onChange={(event) => updateStop(stopIndex, (current) => ({ ...current, googleMapsUrl: event.target.value }))} />
-                    <span className="dispatch-planning__field-help">Se resolverá al crear la ruta para obtener las coordenadas.</span>
-                  </label>
-                  <div className="dispatch-planning__orders">
-                    <span>Pedidos elegibles</span>
-                    {eligibleOrders.length === 0 && <p>No hay pedidos nuevos o devueltos disponibles.</p>}
-                    {eligibleOrders.map((order) => {
-                      const selected = stop.orderIds.includes(order.id);
-                      return <div className="dispatch-planning__order" key={order.id}>
-                        <label>
-                          <input type="checkbox" checked={selected} disabled={assignedElsewhere.has(order.id)}
-                            onChange={(event) => toggleOrder(stopIndex, order.id, event.target.checked)} />
-                          <span>{order.publicCode} · {order.deliveryAddress.addressLine}</span>
-                          {order.status === 'returned' && <strong>Devuelto · incidencia registrada</strong>}
-                        </label>
-                        {order.status === 'returned' && <button type="button" className="dispatch-planning__history-button"
-                          onClick={() => void showOrderHistory(order.id)} disabled={historyLoadingId === order.id}>
-                          {historyLoadingId === order.id ? 'Cargando historial…' : 'Ver historial'}
-                        </button>}
-                        {history[order.id]?.map((event, index) => <p className="dispatch-planning__history" key={`${event.occurredAt}-${index}`}>
-                          {event.toStatus === 'returned' && <strong>Incidencia reportada · </strong>}
-                          {event.fromStatus} → {event.toStatus} · {new Intl.DateTimeFormat('es-PE', {
-                            dateStyle: 'medium', timeStyle: 'short',
-                          }).format(new Date(event.occurredAt))}
-                        </p>)}
-                      </div>;
-                    })}
-                  </div>
-                  {stops.length > 1 && <button type="button" onClick={() => setStops((current) => current.filter((_, index) => index !== stopIndex))}>
-                    Eliminar parada {stopIndex + 1}
-                  </button>}
-                </fieldset>
-              );
-            })}
-          </div>
-          <div className="dispatch-planning__actions">
-            <button type="button" onClick={() => setStops((current) => [...current, newStop()])}>Añadir parada</button>
-            <button type="submit" disabled={saving || loading || activeDrivers.length === 0 || activeVehicles.length === 0}>
+      {!createOpen && (error ?? loadError) !== null && <ErrorNotice>{error ?? loadError}</ErrorNotice>}
+      {notice !== null && <SuccessNotice>{notice}</SuccessNotice>}
+      <FormSheet open={createOpen} onOpenChange={setCreateOpen} width="wide" paper title="Crear ruta manual"
+        description="Asigna conductor y vehículo, y elige los pedidos: cada pedido es una parada."
+        onSubmit={(event) => void createRoute(event)}
+        footer={(
+          <>
+            <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>Cancelar</Button>
+            <Button type="submit" disabled={saving || catalogsLoading || selectableDrivers.length === 0 || activeVehicles.length === 0}>
               {saving ? 'Creando ruta…' : 'Crear ruta'}
-            </button>
-          </div>
-        </form>
-      </section>
+            </Button>
+          </>
+        )}>
+            <DocumentTitle title="HOJA DE RUTA" aside={<IconChip icon={Route} tone="primary" />}>
+              <span>N°: <span className="text-foreground">se genera al crear</span></span>
+              <span>Paradas: <span className="text-foreground">{stopOrderIds.length}</span></span>
+              <span>Pedidos asignados: <span className="text-foreground">{stopOrderIds.length}</span></span>
+            </DocumentTitle>
+            {error !== null && <ErrorNotice>{error}</ErrorNotice>}
+            {simulation.enabled && (
+              <FieldSet>
+                <Field orientation="horizontal">
+                  <Checkbox id="route-simulate" checked={simulate} onCheckedChange={(checked) => toggleSimulation(checked === true)} />
+                  <FieldLabel htmlFor="route-simulate" className="font-normal">Simular ruta</FieldLabel>
+                </Field>
+                <FieldDescription>
+                  Solo en desarrollo. La ruta inicia al crearse, recorre la geometría de Valhalla desde el origen y cierra sola cada parada.
+                  Solo admite conductores sin cuenta vinculada.
+                </FieldDescription>
+                {simulate && (
+                  <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+                    <TextField id="route-origin-address" label="Dirección de origen" placeholder="Ej. Almacén central, Ate" maxLength={200}
+                      value={originAddress} onChange={(event) => setOriginAddress(event.target.value)} />
+                    <Field>
+                      <FieldLabel htmlFor="route-origin-maps">Enlace de Google Maps del origen</FieldLabel>
+                      <Input id="route-origin-maps" type="url" maxLength={2048} placeholder="https://maps.app.goo.gl/..." value={originMapsUrl}
+                        onChange={(event) => changeOriginLink(event.target.value)} />
+                    </Field>
+                    {client.resolveGoogleMapsLink !== undefined && (
+                      <div className="flex flex-col gap-2 sm:col-span-2">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <Button type="button" variant="outline" onClick={() => void previewOrigin()}
+                            disabled={resolvingOrigin || originMapsUrl.trim() === ''}>
+                            {resolvingOrigin ? 'Buscando ubicación…' : 'Obtener coordenadas del origen'}
+                          </Button>
+                          {originPoint !== null && (
+                            <>
+                              <span className="text-sm tabular-nums">Lat {originPoint.latitude} · Lng {originPoint.longitude}</span>
+                              <MapLink href={googleMapsPlaceUrl(originPoint)} label="Ver origen en Google Maps" />
+                            </>
+                          )}
+                        </div>
+                        {originError !== null && <ErrorNotice>{originError}</ErrorNotice>}
+                      </div>
+                    )}
+                  </FieldGroup>
+                )}
+              </FieldSet>
+            )}
+            <FieldGroup className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+              <DateField id="route-date" label="Fecha planificada" placeholder="Elige una fecha" value={plannedDate} onChange={setPlannedDate}
+                error={showMissing && plannedDate === '' ? 'Elige la fecha planificada.' : null} />
+              <SelectField id="route-driver" label="Conductor" placeholder="Selecciona un conductor" value={driverId}
+                options={driverOptions(selectableDrivers)} onChange={setDriverId}
+                error={showMissing && driverId === '' ? 'Selecciona un conductor.' : null} />
+              <SelectField id="route-vehicle" label="Vehículo" placeholder="Selecciona un vehículo" value={vehicleId}
+                options={vehicleOptions(activeVehicles)} onChange={setVehicleId}
+                error={showMissing && vehicleId === '' ? 'Selecciona un vehículo.' : null} />
+            </FieldGroup>
 
-      <section className="dispatch-planning__section" aria-labelledby="route-list-title">
-        <div className="dispatch-planning__list-heading">
-          <h2 id="route-list-title">Rutas y progreso</h2>
-          <button type="button" onClick={() => void loadData()} disabled={loading}>Actualizar</button>
-        </div>
-        {loading ? <p role="status">Cargando rutas…</p> : routes.length === 0
-          ? <p>No hay rutas para mostrar.</p>
-          : <div className="dispatch-planning__route-list">
-            {routes.map((route) => <article className="dispatch-planning__route" key={route.id}>
-              <header>
-                <div><h3>{route.publicCode}</h3><p>{route.plannedDate} · {route.status === 'in_progress' ? 'En curso'
-                  : route.status === 'completed' ? 'Completada' : 'Planificada'}</p></div>
-                <span>{route.stops.length} {route.stops.length === 1 ? 'parada' : 'paradas'}</span>
-              </header>
-              <ol>{route.stops.map((stop) => <li key={stop.id}>
-                {stop.addressLine} · {stop.orderIds.map((id) => {
-                  const order = orderById.get(id);
+            <FieldSet>
+              <FieldLegend>Paradas</FieldLegend>
+              <FieldDescription>
+                Cada pedido es una parada y usa la dirección y las coordenadas del pedido. Ordénalas en el orden de visita.
+              </FieldDescription>
+              {stopOrderIds.length === 0 && <FieldDescription>Aún no hay paradas. Marca los pedidos que irán en la ruta.</FieldDescription>}
+              {plannedRouteLink !== null && (
+                <div className="flex flex-col gap-1">
+                  <div>
+                    <Button asChild variant="outline">
+                      <a href={plannedRouteLink.url} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink data-icon="inline-start" aria-hidden="true" /> Ver ruta en Google Maps
+                      </a>
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    Abre el recorrido en el orden actual{simulating && originPoint !== null ? ', desde el origen' : ''}; Google Maps no lo reordena.
+                    En el móvil solo muestra hasta 3 paradas intermedias.
+                    {plannedRouteLink.omittedStops > 0 && ` Faltan ${plannedRouteLink.omittedStops} paradas al final: Google Maps admite hasta 11 puntos por enlace.`}
+                  </FieldDescription>
+                </div>
+              )}
+              <ol className="flex flex-col gap-2">
+                {stopOrderIds.map((orderId, index) => {
+                  const order = orderById.get(orderId);
+                  const position = index + 1;
+                  const point = order === undefined ? null : orderPoint(order);
+                  return (
+                    <li key={orderId} className="flex items-center gap-3 rounded-md border px-3 py-2">
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="font-medium tabular-nums">Parada {position} · {order?.publicCode ?? 'Pedido'}</span>
+                        <span className="truncate text-sm text-muted-foreground">
+                          {order === undefined ? 'Pedido no disponible' : `${order.deliveryAddress.addressLine}, ${order.deliveryAddress.district}`}
+                        </span>
+                      </span>
+                      {point !== null && <MapLink href={googleMapsPlaceUrl(point)} label={`Ver parada ${position} en Google Maps`} iconOnly />}
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Subir parada ${position}`}
+                        disabled={index === 0} onClick={() => moveStop(index, -1)}><ArrowUp aria-hidden="true" /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Bajar parada ${position}`}
+                        disabled={index === stopOrderIds.length - 1} onClick={() => moveStop(index, 1)}><ArrowDown aria-hidden="true" /></Button>
+                      <Button type="button" variant="ghost" size="icon-sm" aria-label={`Quitar parada ${position}`}
+                        onClick={() => toggleOrder(orderId, false)}><X aria-hidden="true" /></Button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </FieldSet>
+            <Separator />
+            <FieldSet>
+              <FieldLegend variant="label">Pedidos elegibles</FieldLegend>
+              <SearchInput value={pickerQuery} onChange={setPickerQuery} label="Buscar pedidos elegibles"
+                placeholder="Buscar código, destinatario, dirección o distrito" className="w-full"
+                busy={pickerLoading || pickerQuery.trim() !== pickerSearch} />
+              {pickerFailed && <ErrorNotice>No se pudieron cargar los pedidos elegibles. Inténtalo de nuevo.</ErrorNotice>}
+              {!pickerFailed && picker !== null && eligibleOrders.length === 0 && (
+                <FieldDescription>
+                  {pickerSearch === '' ? 'No hay pedidos creados o devueltos disponibles.' : 'Ningún pedido elegible coincide con la búsqueda.'}
+                </FieldDescription>
+              )}
+              {!pickerFailed && pickerTotal > eligibleOrders.length && (
+                <FieldDescription>
+                  Mostrando {eligibleOrders.length.toLocaleString('es-PE')} de {pickerTotal.toLocaleString('es-PE')}, refina la búsqueda.
+                </FieldDescription>
+              )}
+              <FieldGroup className="gap-3">
+                {eligibleOrders.map((order) => {
+                  const checkboxId = `route-order-${order.id}`;
+                  const point = orderPoint(order);
+                  return (
+                    <div key={order.id} className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                        <Field orientation="horizontal">
+                          <Checkbox id={checkboxId} checked={stopOrderIds.includes(order.id)}
+                            onCheckedChange={(checked) => toggleOrder(order, checked === true)} />
+                          <FieldLabel htmlFor={checkboxId} className="font-normal">{order.publicCode} · {order.deliveryAddress.addressLine}</FieldLabel>
+                        </Field>
+                        {point !== null && <MapLink href={googleMapsPlaceUrl(point)} label={`Ver ${order.publicCode} en Google Maps`} iconOnly />}
+                      </div>
+                      {order.status === 'returned' && (
+                        <div className="flex flex-wrap items-center gap-2 pl-6">
+                          <Badge variant="destructive">Devuelto · incidencia registrada</Badge>
+                          <Button type="button" variant="outline" onClick={() => void showOrderHistory(order.id)} disabled={historyLoadingId === order.id}>
+                            {historyLoadingId === order.id ? 'Cargando historial…' : 'Ver historial'}
+                          </Button>
+                        </div>
+                      )}
+                      {history[order.id]?.map((event, index) => (
+                        <p key={`${event.occurredAt}-${index}`} className="pl-6 text-sm text-muted-foreground">
+                          {event.toStatus === 'returned' && <strong>Incidencia reportada · </strong>}
+                          {event.fromStatus} → {event.toStatus} · {formatDateTime(event.occurredAt)}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                })}
+              </FieldGroup>
+            </FieldSet>
+      </FormSheet>
+
+      {meta === null && table.loading && <LoadingRows label="Cargando rutas…" />}
+      {isEmpty && !table.loading && !loadFailed && (
+        <Empty className="border">
+          <EmptyHeader>
+            <EmptyMedia variant="icon"><Route aria-hidden="true" /></EmptyMedia>
+            <EmptyTitle>No hay rutas para mostrar.</EmptyTitle>
+            <EmptyDescription>
+              {eligibleCount > 0
+                ? `Tienes ${eligibleCount.toLocaleString('es-PE')} ${eligibleCount === 1 ? 'pedido listo' : 'pedidos listos'} para agrupar en paradas.`
+                : 'Cuando haya pedidos nuevos, podrás agruparlos en paradas y asignarlos a un conductor.'}
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent><Button type="button" onClick={openCreate}>Crear primera ruta</Button></EmptyContent>
+        </Empty>
+      )}
+      {meta !== null && !isEmpty && (
+        <DataTable label="Rutas y progreso" columns={columns} data={routeRows} server={table.server}
+          searchPlaceholder="Buscar ruta, conductor o placa"
+          filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)} />
+      )}
+
+      <DocumentSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }}
+        title={detailRow?.route.publicCode ?? 'Ruta'} description="Paradas, pedidos y avance de la ruta."
+        {...(detailRow?.route.status === 'planned' ? {
+          footer: <Button type="button" variant="outline" onClick={() => { setReassignRouteId(detailRow.route.id); setDetailRouteId(null); }}><ArrowLeftRight data-icon="inline-start" aria-hidden="true" /> Reasignar</Button>,
+        } : {})}>
+        {detailRow !== undefined && (
+          <>
+            <DocumentTitle title="HOJA DE RUTA" aside={<Badge variant={ROUTE_BADGES[detailRow.route.status]}>{ROUTE_STATUS_LABELS[detailRow.route.status]}</Badge>}>
+              <span>N°: <span className="text-foreground">{detailRow.route.publicCode}</span></span>
+              <span>Fecha: <span className="text-foreground">{formatPlannedDate(detailRow.route.plannedDate)}</span></span>
+              <span>Conductor: <span className="text-foreground">{detailRow.driver}</span></span>
+              <span>Vehículo: <span className="text-foreground">{detailRow.plate}</span></span>
+            </DocumentTitle>
+            <TableProgress percent={detailRow.progress.percent} label={`Avance de ${detailRow.route.publicCode}`}
+              detail={`${detailRow.progress.closed} de ${detailRow.progress.total} ${detailRow.progress.total === 1 ? 'pedido cerrado' : 'pedidos cerrados'}`} />
+            <div className="text-xs">
+              <RouteTimeline stops={detailRow.route.stops.map((stop, index) => ({
+                id: stop.id,
+                addressLine: stop.addressLine,
+                state: detailRow.progress.stopStates[index] ?? 'pending',
+                detail: stop.orderIds.map((id) => {
+                  const order = routeOrders.get(id);
                   return order === undefined ? 'Pedido' : `${order.publicCode} (${orderStatusLabel(order.status)})`;
-                }).join(', ')}
-              </li>)}</ol>
-              <p>Conductor: {driverById.get(route.driverId)?.fullName ?? 'No disponible'} · Vehículo: {vehicleById.get(route.vehicleId)?.plate ?? 'No disponible'}</p>
-              {route.status === 'planned' && <form className="dispatch-planning__reassign" onSubmit={(event) => {
-                event.preventDefault();
-                const data = new FormData(event.currentTarget);
-                void reassignRoute(route, String(data.get('driverId')), String(data.get('vehicleId')));
-              }}>
-                <label>Reasignar conductor
-                  <select name="driverId" defaultValue={route.driverId}>{activeDrivers.map((driver) =>
-                    <option key={driver.id} value={driver.id}>{driver.fullName}</option>)}</select>
-                </label>
-                <label>Reasignar vehículo
-                  <select name="vehicleId" defaultValue={route.vehicleId}>{activeVehicles.map((vehicle) =>
-                    <option key={vehicle.id} value={vehicle.id}>{vehicle.plate} · {vehicle.type}</option>)}</select>
-                </label>
-                <button type="submit" disabled={busyRouteId === route.id}>Guardar reasignación</button>
-              </form>}
-            </article>)}
-          </div>}
-      </section>
+                }).join(', '),
+              }))} />
+            </div>
+          </>
+        )}
+      </DocumentSheet>
+
+      {reassignRoute_ !== undefined && (
+        <ReassignSheet key={`${reassignRoute_.id}-${reassignRoute_.driverId}-${reassignRoute_.vehicleId}`} route={reassignRoute_} drivers={activeDrivers} vehicles={activeVehicles} busy={busyRouteId === reassignRoute_.id}
+          onClose={() => setReassignRouteId(null)}
+          onSubmit={(nextDriverId, nextVehicleId) => { setReassignRouteId(null); void reassignRoute(reassignRoute_, nextDriverId, nextVehicleId); }} />
+      )}
     </section>
   );
 }
 
+function ReassignSheet({ route, drivers, vehicles, busy, onClose, onSubmit }: {
+  readonly route: DispatchRoute;
+  readonly drivers: readonly Driver[];
+  readonly vehicles: readonly Vehicle[];
+  readonly busy: boolean;
+  readonly onClose: () => void;
+  readonly onSubmit: (driverId: string, vehicleId: string) => void;
+}) {
+  const [driverId, setDriverId] = useState(route.driverId);
+  const [vehicleId, setVehicleId] = useState(route.vehicleId);
+
+  return (
+    <FormSheet open onOpenChange={(open) => { if (!open) onClose(); }} title={`Reasignar ${route.publicCode}`}
+      description="Cambia el conductor o el vehículo mientras la ruta no haya iniciado."
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit(driverId, vehicleId);
+      }}
+      footer={(
+        <>
+          <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" disabled={busy}>Guardar reasignación</Button>
+        </>
+      )}>
+      <FieldGroup className="gap-4">
+        <SelectField id={`reassign-driver-${route.id}`} label="Reasignar conductor" placeholder="Selecciona un conductor" value={driverId}
+          options={driverOptions(drivers)} onChange={setDriverId} />
+        <SelectField id={`reassign-vehicle-${route.id}`} label="Reasignar vehículo" placeholder="Selecciona un vehículo" value={vehicleId}
+          options={vehicleOptions(vehicles)} onChange={setVehicleId} />
+      </FieldGroup>
+    </FormSheet>
+  );
+}
+
 function orderStatusLabel(status: DeliveryOrder['status']): string {
-  switch (status) {
-    case 'created': return 'Creado';
-    case 'planned': return 'Planificado';
-    case 'assigned': return 'Asignado';
-    case 'in_transit': return 'En tránsito';
-    case 'delivered': return 'Entregado';
-    case 'returned': return 'Devuelto · incidencia registrada';
-    case 'cancelled': return 'Cancelado';
-  }
+  return status === 'returned' ? 'Devuelto · incidencia registrada' : ORDER_STATUS_LABELS[status];
+}
+
+function orderPoint(order: DeliveryOrder): MapPoint | null {
+  const { latitude, longitude } = order.deliveryAddress;
+  return latitude === null || longitude === null ? null : { latitude, longitude };
 }

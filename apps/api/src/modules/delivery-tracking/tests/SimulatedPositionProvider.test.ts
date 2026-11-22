@@ -68,4 +68,60 @@ describe('SimulatedPositionProvider', () => {
     expect(getGeometry).toHaveBeenCalledWith([destination], origin);
     expect(position).toMatchObject({ latitude: destination.latitude, longitude: destination.longitude });
   });
+
+  describe('reached stops', () => {
+    const coordinates = [
+      { latitude: -12, longitude: -77 },
+      { latitude: -12, longitude: -76.9 },
+    ];
+    const at = (seconds: number) => new Date(Date.parse(STARTED_AT) + seconds * 1_000).toISOString();
+    const route = (stops: number, origin = true) => ({
+      organizationId: ORGANIZATION_ID, routeId: ROUTE_ID, driverId: DRIVER_ID, startedAt: STARTED_AT,
+      ...(origin ? { origin: { latitude: -12, longitude: -77 } } : {}),
+      stops: Array.from({ length: stops }, (_, index) => ({ latitude: -12, longitude: -76.99 + index * 0.01 })),
+    });
+
+    it('counts every stop whose leg boundary the simulated progress has passed', async () => {
+      const provider = new SimulatedPositionProvider({ getGeometry: async () => ({
+        coordinates, distanceMeters: 4_000, durationSeconds: 400, legDistancesMeters: [1_000, 1_000, 2_000],
+      }) }, { now: () => RECEIVED_AT });
+
+      const counts = [];
+      for (const seconds of [0, 99, 100, 150, 200, 399, 400, 900]) {
+        counts.push((await provider.sample(route(3), at(seconds)))?.reachedStopCount);
+      }
+
+      expect(counts).toEqual([0, 0, 1, 1, 2, 2, 3, 3]);
+    });
+
+    it('treats the first stop as reached at the start when the route has no origin', async () => {
+      const provider = new SimulatedPositionProvider({ getGeometry: async () => ({
+        coordinates, distanceMeters: 2_000, durationSeconds: 200, legDistancesMeters: [1_000, 1_000],
+      }) }, { now: () => RECEIVED_AT });
+
+      const counts = [];
+      for (const seconds of [0, 100, 200]) {
+        counts.push((await provider.sample(route(3, false), at(seconds)))?.reachedStopCount);
+      }
+
+      expect(counts).toEqual([1, 2, 3]);
+    });
+
+    it('reaches every stop only at the end when the geometry has no usable leg distances', async () => {
+      const provider = new SimulatedPositionProvider({ getGeometry: async () => ({
+        coordinates, distanceMeters: 2_000, durationSeconds: 200,
+      }) }, { now: () => RECEIVED_AT });
+
+      expect((await provider.sample(route(2), at(199)))?.reachedStopCount).toBe(0);
+      expect((await provider.sample(route(2), at(200)))?.reachedStopCount).toBe(2);
+    });
+
+    it('skips several stops in one sample at an accelerated time scale', async () => {
+      const provider = new SimulatedPositionProvider({ getGeometry: async () => ({
+        coordinates, distanceMeters: 4_000, durationSeconds: 400, legDistancesMeters: [1_000, 1_000, 2_000],
+      }) }, { now: () => RECEIVED_AT }, 5, 100);
+
+      expect((await provider.sample(route(3), at(3)))?.reachedStopCount).toBe(2);
+    });
+  });
 });

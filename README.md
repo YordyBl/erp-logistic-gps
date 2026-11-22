@@ -54,11 +54,15 @@ curl --fail --location --output infra/valhalla/data/peru-latest.osm.pbf \
 docker compose -f docker-compose.yml -f docker-compose.valhalla.yml up --build
 ```
 
+On Windows (Docker Desktop), add `-f docker-compose.valhalla.windows.yml` after the Valhalla
+file so the graph build runs in a Docker volume instead of the checkout; see
+[`docs/operations/gps-tracking.md`](docs/operations/gps-tracking.md#windows-docker-desktop).
+
 The first startup builds Peru routing tiles and can take several minutes; subsequent runs reuse
 the local graph. Valhalla is exposed on loopback port `8002` by default (`VALHALLA_PORT` changes
-it), and the API container uses the internal Compose address. The web route-planning form
-accepts an optional Google Maps link per stop; the API resolves permitted Google Maps links
-to coordinates used by Valhalla and GPS simulation. See
+it), and the API container uses the internal Compose address. Every order carries coordinates
+(typed or resolved from an optional Google Maps link in the order form), and each route stop
+is one order that inherits them for Valhalla and GPS simulation. See
 [`docs/operations/gps-tracking.md`](docs/operations/gps-tracking.md) for details.
 
 ### Demo data
@@ -207,12 +211,13 @@ is a defect.
 | `GET` | `/api/v1/delivery-orders/:orderId/history` | Read audited order status changes |
 | `POST` | `/api/v1/delivery-orders/:orderId/evidence` | Upload one private JPEG/PNG/WebP photo for the authenticated driver's active attempt (1–2 photos, maximum 5,000,000 bytes each) |
 | `GET` | `/api/v1/delivery-orders/:orderId/evidence` | List evidence metadata for authorized organization users or the assigned driver |
+| `GET` | `/api/v1/delivery-evidence` | One page of the evidence vault: available photos of delivered/returned orders, newest first, with `q` (order code or recipient) and `orderId` (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/evidence/:evidenceId/download` | Stream available evidence after tenant/attempt authorization; never exposes a public object URL |
 | `POST` | `/api/v1/delivery-routes` | Plan sequenced stops and assign orders with an active driver and vehicle (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/delivery-routes/:routeId` | Read a route in the caller's organization |
 | `PATCH` | `/api/v1/delivery-routes/:routeId` | Reassign the driver or vehicle of a planned route without touching orders (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/customers` | Create a customer (ADMIN or DISPATCHER) |
-| `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List or read the customer catalog (any authenticated role) |
+| `GET` | `/api/v1/customers`, `/api/v1/customers/:customerId` | List one page of the customer catalog (`q`, `status`, `ids`, `sort`) or read one customer (ADMIN or DISPATCHER) |
 | `POST` | `/api/v1/drivers` | Create a driver (ADMIN or DISPATCHER) |
 | `GET` | `/api/v1/drivers`, `/api/v1/drivers/:driverId` | List or read the driver catalog (any authenticated role) |
 | `PATCH` | `/api/v1/drivers/:driverId` | Update the mutable driver fields (ADMIN or DISPATCHER) |

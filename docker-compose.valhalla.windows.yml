@@ -1,0 +1,25 @@
+# Windows override for the local Valhalla service (use it on top of docker-compose.valhalla.yml).
+#
+# Docker Desktop on Windows runs containers in a Linux VM whose bind mounts into the
+# NTFS checkout are not reliable for valhalla_build_tiles: it writes large intermediate
+# files with mmap, and the build aborts with "vector::_M_range_check ... (which is 0)"
+# while creating graph edges. This override keeps the build's working data (admin
+# metadata, tiles and graph) in a named Docker volume, which lives inside the VM's
+# Linux filesystem. Only the read-only OSM extract and start.sh stay bind-mounted.
+#
+# Usage (Windows only; Linux and Ubuntu servers use docker-compose.valhalla.yml alone):
+#   docker compose -f docker-compose.yml -f docker-compose.valhalla.yml -f docker-compose.valhalla.windows.yml up -d valhalla
+#
+# The first build takes a few minutes; later starts reuse the graph in the volume.
+# To rebuild the graph, remove the volume: docker compose ... down valhalla and
+# docker volume rm erp-logistic_valhalla-data.
+
+services:
+  valhalla:
+    volumes:
+      - valhalla-data:/custom_files
+      - ./infra/valhalla/data/peru-latest.osm.pbf:/custom_files/peru-latest.osm.pbf:ro
+      - ./infra/valhalla/start.sh:/opt/valhalla/start.sh:ro
+
+volumes:
+  valhalla-data:

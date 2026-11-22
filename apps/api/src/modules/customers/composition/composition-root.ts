@@ -2,11 +2,17 @@ import type { DataSource } from 'typeorm';
 
 import { SystemClock, type Clock } from '../../../shared/clock.js';
 import { generateUuidV4 } from '../../../shared/ids.js';
-import type { Customer } from '../domain/entities/Customer.js';
-import type { CustomerRepository } from '../application/ports/CustomerRepository.js';
+import { pageOffset, type PageResult } from '../../../http/pagination.js';
+import { CUSTOMER_STATUSES, type Customer } from '../domain/entities/Customer.js';
+import type {
+  CustomerPageCriteria,
+  CustomerRepository,
+  CustomerSortField,
+} from '../application/ports/CustomerRepository.js';
 import type { IdGenerator } from '../application/ports/IdGenerator.js';
 import { CreateCustomerUseCase } from '../application/use-cases/create-customer/CreateCustomerUseCase.js';
 import { GetCustomerUseCase } from '../application/use-cases/get-customer/GetCustomerUseCase.js';
+import { ListCustomersPageUseCase } from '../application/use-cases/list-customers/ListCustomersPageUseCase.js';
 import { ListCustomersUseCase } from '../application/use-cases/list-customers/ListCustomersUseCase.js';
 
 /**
@@ -55,6 +61,61 @@ export class InMemoryCustomerRepository implements CustomerRepository {
       .filter((customer) => customer.organizationId === organizationId)
       .sort(compareCustomers);
   }
+
+  /** Same filters, facet counts, order and slicing as the PostgreSQL adapter. */
+  async listPage(
+    organizationId: string,
+    criteria: CustomerPageCriteria,
+  ): Promise<PageResult<Customer>> {
+    const tenantCustomers = [...this.customers.values()].filter(
+      (customer) => customer.organizationId === organizationId,
+    );
+    const matching = (omitStatus = false) =>
+      tenantCustomers.filter((customer) => matchesPageCriteria(customer, criteria, omitStatus));
+
+    const status = Object.fromEntries(CUSTOMER_STATUSES.map((value) => [value, 0])) as Record<string, number>;
+    for (const customer of matching(true)) status[customer.status] = (status[customer.status] ?? 0) + 1;
+
+    const filtered = matching();
+    const sign = criteria.sort.direction === 'asc' ? 1 : -1;
+    const sorted = filtered.sort((left, right) => sign * (
+      compareText(sortValue(left, criteria.sort.field), sortValue(right, criteria.sort.field))
+      || compareText(left.id, right.id)
+    ));
+    const offset = pageOffset(criteria);
+    return {
+      items: sorted.slice(offset, offset + criteria.pageSize),
+      total: filtered.length,
+      counts: { status },
+    };
+  }
+}
+
+/** `omitStatus` skips the status filter so its facet counts show every option. */
+function matchesPageCriteria(
+  customer: Customer,
+  criteria: CustomerPageCriteria,
+  omitStatus: boolean,
+): boolean {
+  if (!omitStatus && criteria.status !== undefined && !criteria.status.includes(customer.status)) return false;
+  if (criteria.ids !== undefined && !criteria.ids.includes(customer.id)) return false;
+  if (criteria.q === undefined) return true;
+  const needle = criteria.q.toLocaleLowerCase();
+  return [
+    customer.name, customer.publicCode, customer.contactName,
+    customer.contactEmail, customer.contactPhone,
+  ].some((value) => value.toLocaleLowerCase().includes(needle));
+}
+
+function sortValue(customer: Customer, field: CustomerSortField): string {
+  switch (field) {
+    case 'name': return customer.name;
+    case 'createdAt': return customer.createdAt;
+  }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function compareCustomers(left: Customer, right: Customer): number {
@@ -80,6 +141,7 @@ export interface CustomersModuleOptions {
 export interface CustomersModule {
   readonly createCustomer: CreateCustomerUseCase;
   readonly listCustomers: ListCustomersUseCase;
+  readonly listCustomersPage: ListCustomersPageUseCase;
   readonly getCustomer: GetCustomerUseCase;
   readonly repository: CustomerRepository;
 }
@@ -101,6 +163,7 @@ export function buildCustomersModule(
   return {
     createCustomer: new CreateCustomerUseCase({ repository, idGenerator, clock }),
     listCustomers: new ListCustomersUseCase({ repository }),
+    listCustomersPage: new ListCustomersPageUseCase(repository),
     getCustomer: new GetCustomerUseCase({ repository }),
     repository,
   };

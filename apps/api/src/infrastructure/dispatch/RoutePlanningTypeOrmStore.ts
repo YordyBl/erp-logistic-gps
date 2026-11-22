@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { In, type DataSource, type EntityManager } from 'typeorm';
+import { Brackets, type DataSource, type EntityManager, type SelectQueryBuilder } from 'typeorm';
 
-import type { PlannedRoute, RoutePlanningStore } from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
+import { pageOffset, type PageResult } from '../../http/pagination.js';
+import {
+  ROUTE_STATUSES,
+  type PlannedRoute, type PlannedStop, type RoutePageCriteria, type RoutePlanDraft, type RoutePlanningStore,
+  type RouteSortField,
+} from '../../modules/delivery-routes/application/ports/RoutePlanningStore.js';
 import { DeliveryRouteConflictError, DeliveryRouteNotFoundError } from '../../modules/delivery-routes/domain/errors/DeliveryRouteError.js';
 import { DeliveryRouteEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryRouteEntity.js';
 import { DeliveryStopEntity } from '../../modules/delivery-routes/infrastructure/persistence/entities/DeliveryStopEntity.js';
@@ -12,12 +17,14 @@ import { DeliveryOrderStatusHistoryEntity } from '../../modules/delivery-orders/
 import { toDomain } from '../../modules/delivery-orders/infrastructure/persistence/mappers/DeliveryOrderMapper.js';
 import { DriverEntity } from '../../modules/drivers/infrastructure/persistence/entities/DriverEntity.js';
 import { VehicleEntity } from '../../modules/vehicles/infrastructure/persistence/entities/VehicleEntity.js';
+import { startRouteInTransaction } from './route-start.js';
+import { loadRouteStops } from './TrackingSnapshotTypeOrmQuery.js';
 
 /** Process-level unit of work; no module repository calls another module's repository. */
 export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
   constructor(private readonly dataSource: DataSource) {}
 
-  async plan(route: PlannedRoute, actorUserId: string): Promise<PlannedRoute> {
+  async plan(route: RoutePlanDraft, actorUserId: string): Promise<PlannedRoute> {
     try {
       return await this.dataSource.transaction(async (manager) => {
         const driver = await manager.findOne(DriverEntity, {
@@ -32,8 +39,13 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         if (driver.status !== 'active' || vehicle.status !== 'active') {
           throw new DeliveryRouteConflictError('Driver and vehicle must be active');
         }
+        const simulated = route.simulatedCompletionEnabled === true;
+        // The driver row lock above serializes this check with account binding.
+        if (simulated && await driverHasAccount(manager, route.organizationId, route.driverId)) {
+          throw new DeliveryRouteConflictError('Simulated routes require a driver without a linked account');
+        }
 
-        const allIds = route.stops.flatMap((stop) => stop.orderIds);
+        const allIds = route.stops.map((stop) => stop.orderId);
         const orders = new Map<string, DeliveryOrderEntity>();
         // Consistent lock order prevents crossed multi-order plans from deadlocking.
         for (const id of [...allIds].sort()) {
@@ -44,6 +56,18 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
           if (entity === null) throw new DeliveryRouteNotFoundError();
           orders.set(id, entity);
         }
+        // Each stop is a snapshot of its locked order's location, so a concurrent
+        // order edit cannot slip in between reading and planning.
+        const stops: PlannedStop[] = route.stops.map((stop) => {
+          const order = orders.get(stop.orderId);
+          if (order === undefined) throw new DeliveryRouteNotFoundError();
+          if (order.latitude === null || order.longitude === null) {
+            throw new DeliveryRouteConflictError('Every planned order must have delivery coordinates');
+          }
+          return { id: stop.id, sequence: stop.sequence, addressLine: order.deliveryAddressLine,
+            latitude: Number(order.latitude), longitude: Number(order.longitude), orderIds: [stop.orderId] };
+        });
+        const planned: PlannedRoute = { ...route, stops };
 
         const plannedAt = route.createdAt;
         const assignedAt = new Date(Date.parse(plannedAt) + 1).toISOString();
@@ -86,12 +110,13 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
         persistedRoute.originLatitude = route.origin === undefined ? null : String(route.origin.latitude);
         persistedRoute.originLongitude = route.origin === undefined ? null : String(route.origin.longitude);
         persistedRoute.simulatedCompletionEnabled = route.simulatedCompletionEnabled ?? false;
+        persistedRoute.simulationActorUserId = simulated ? actorUserId : null;
         persistedRoute.createdAt = new Date(route.createdAt);
         persistedRoute.startedAt = null;
         persistedRoute.completedAt = null;
         await manager.insert(DeliveryRouteEntity, persistedRoute);
 
-        for (const stop of route.stops) {
+        for (const stop of stops) {
           const row = new DeliveryStopEntity();
           row.id = stop.id;
           row.organizationId = route.organizationId;
@@ -136,7 +161,10 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
             await manager.insert(DeliveryOrderStatusHistoryEntity, history);
           }
         }
-        return route;
+        if (!simulated) return planned;
+        // Simulated routes have no driver account to start them, so they start now.
+        const startedAt = await startRouteInTransaction(manager, persistedRoute, actorUserId, assignedAt);
+        return { ...planned, status: 'in_progress' as const, startedAt: startedAt.toISOString() };
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -146,21 +174,60 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
     }
   }
 
+  async nextPublicCode(): Promise<string> {
+    const rows = await this.dataSource.query(
+      'SELECT nextval(\'delivery_route_public_code_seq\') AS value',
+    ) as { value: string }[];
+    return formatRouteCode(Number(rows[0]?.value));
+  }
+
   async findById(organizationId: string, routeId: string): Promise<PlannedRoute | null> {
     return this.readPlannedRoute(this.dataSource.manager, organizationId, routeId);
   }
 
-  async list(organizationId: string): Promise<readonly PlannedRoute[]> {
-    const routes = await this.dataSource.manager.find(DeliveryRouteEntity, {
-      where: { organizationId, status: In(['planned', 'in_progress', 'completed']) },
-      order: { plannedDate: 'ASC', createdAt: 'ASC' },
-    });
-    const result: PlannedRoute[] = [];
-    for (const route of routes) {
-      const planned = await this.readPlannedRoute(this.dataSource.manager, organizationId, route.id);
-      if (planned !== null) result.push(planned);
-    }
-    return result;
+  async listSimulationEligibleDriverIds(organizationId: string): Promise<readonly string[]> {
+    const rows = await this.dataSource.query<{ id: string }[]>(`
+      SELECT d.id FROM drivers d
+      WHERE d.organization_id=$1 AND d.status='active'
+        AND NOT EXISTS (SELECT 1 FROM driver_accounts a
+          WHERE a.organization_id=d.organization_id AND a.driver_id=d.id)
+      ORDER BY d.full_name, d.id`, [organizationId]);
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * Loads the page's route rows (filtered, sorted, `OFFSET`/`LIMIT`) and then
+   * only their stops and links in two batched queries. `q` LEFT JOINs the
+   * route's driver and vehicle within the organization; the status facet is a
+   * `GROUP BY` that leaves out the status filter.
+   */
+  async listPage(organizationId: string, criteria: RoutePageCriteria): Promise<PageResult<PlannedRoute>> {
+    const routes = this.dataSource.getRepository(DeliveryRouteEntity);
+    const filtered = (omitStatus = false): SelectQueryBuilder<DeliveryRouteEntity> =>
+      applyRoutePageFilters(routes.createQueryBuilder('r'), organizationId, criteria, omitStatus);
+    const direction = criteria.sort.direction === 'asc' ? 'ASC' : 'DESC';
+
+    const [[entities, total], statusRows] = await Promise.all([
+      filtered()
+        .orderBy(`r.${ROUTE_SORT_PROPERTIES[criteria.sort.field]}`, direction)
+        .addOrderBy('r.createdAt', direction)
+        .addOrderBy('r.id', direction)
+        .offset(pageOffset(criteria))
+        .limit(criteria.pageSize)
+        .getManyAndCount(),
+      filtered(true).select('r.status', 'value').addSelect('COUNT(*)::integer', 'count')
+        .groupBy('r.status').getRawMany<{ readonly value: string; readonly count: number | string }>(),
+    ]);
+
+    const { stopsByRoute } = await loadRouteStops(
+      this.dataSource, organizationId, entities.map((route) => route.id));
+    const status = Object.fromEntries(ROUTE_STATUSES.map((value) => [value, 0])) as Record<string, number>;
+    for (const row of statusRows) status[row.value] = Number(row.count);
+    return {
+      items: entities.map((route) => toPlannedRoute(route, stopsByRoute.get(route.id) ?? [])),
+      total,
+      counts: { status },
+    };
   }
 
   /**
@@ -175,34 +242,19 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
       where: { id: routeId, organizationId },
     });
     if (route === null) return null;
-    if (route.status !== 'planned' && route.status !== 'in_progress' && route.status !== 'completed') {
-      throw new DeliveryRouteConflictError('Persisted route status is not supported by this planner');
-    }
+    assertSupportedStatus(route);
     const stops = await manager.find(DeliveryStopEntity, {
       where: { organizationId, routeId }, order: { sequence: 'ASC' },
     });
     const links = await manager.find(DeliveryStopOrderEntity, {
       where: { organizationId, routeId }, order: { position: 'ASC' },
     });
-    return {
-      id: route.id, organizationId: route.organizationId,
-      publicCode: route.publicCode, plannedDate: route.plannedDate,
-      driverId: route.driverId, vehicleId: route.vehicleId,
-      ...(route.originAddressLine === null || route.originLatitude === null || route.originLongitude === null
-        ? {} : { origin: { addressLine: route.originAddressLine,
-          latitude: Number(route.originLatitude), longitude: Number(route.originLongitude) } }),
-      ...(route.simulatedCompletionEnabled ? { simulatedCompletionEnabled: true } : {}),
-      status: route.status as PlannedRoute['status'],
-      createdAt: route.createdAt.toISOString(),
-      ...(route.startedAt === null ? {} : { startedAt: route.startedAt.toISOString() }),
-      ...(route.completedAt === null ? {} : { completedAt: route.completedAt.toISOString() }),
-      stops: stops.map((stop) => ({
-        id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
-        latitude: stop.latitude === null ? null : Number(stop.latitude),
-        longitude: stop.longitude === null ? null : Number(stop.longitude),
-        orderIds: links.filter((link) => link.stopId === stop.id).map((link) => link.orderId),
-      })),
-    };
+    return toPlannedRoute(route, stops.map((stop) => ({
+      id: stop.id, sequence: stop.sequence, addressLine: stop.addressLine,
+      latitude: stop.latitude === null ? null : Number(stop.latitude),
+      longitude: stop.longitude === null ? null : Number(stop.longitude),
+      orderIds: links.filter((link) => link.stopId === stop.id).map((link) => link.orderId),
+    })));
   }
 
   async reassign(organizationId: string, routeId: string, changes: {
@@ -250,9 +302,89 @@ export class RoutePlanningTypeOrmStore implements RoutePlanningStore {
   }
 }
 
+const ROUTE_SORT_PROPERTIES: Record<RouteSortField, keyof DeliveryRouteEntity> = {
+  publicCode: 'publicCode',
+  plannedDate: 'plannedDate',
+  status: 'status',
+};
+
+/** Escapes `ILIKE` wildcards so the search text matches literally. */
+function likePattern(text: string): string {
+  return `%${text.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+}
+
+/** Tenant scope, listed statuses and every page filter (the status filter unless `omitStatus`). */
+function applyRoutePageFilters(
+  query: SelectQueryBuilder<DeliveryRouteEntity>,
+  organizationId: string,
+  criteria: RoutePageCriteria,
+  omitStatus: boolean,
+): SelectQueryBuilder<DeliveryRouteEntity> {
+  query.where('r.organizationId = :organizationId', { organizationId })
+    .andWhere('r.status IN (:...listed)', { listed: ROUTE_STATUSES });
+  if (!omitStatus && criteria.status !== undefined) {
+    query.andWhere('r.status IN (:...status)', { status: criteria.status });
+  }
+  if (criteria.ids !== undefined) query.andWhere('r.id IN (:...ids)', { ids: criteria.ids });
+  if (criteria.driverId !== undefined) query.andWhere('r.driverId = :driverId', { driverId: criteria.driverId });
+  if (criteria.vehicleId !== undefined) query.andWhere('r.vehicleId = :vehicleId', { vehicleId: criteria.vehicleId });
+  if (criteria.plannedFrom !== undefined) {
+    query.andWhere('r.plannedDate >= :plannedFrom', { plannedFrom: criteria.plannedFrom });
+  }
+  if (criteria.plannedTo !== undefined) {
+    query.andWhere('r.plannedDate <= :plannedTo', { plannedTo: criteria.plannedTo });
+  }
+  if (criteria.q !== undefined) {
+    query
+      .leftJoin(DriverEntity, 'd', 'd.organizationId = r.organizationId AND d.id = r.driverId')
+      .leftJoin(VehicleEntity, 'v', 'v.organizationId = r.organizationId AND v.id = r.vehicleId')
+      .andWhere(new Brackets((search) => {
+        for (const column of ['r.publicCode', 'd.fullName', 'v.plate']) {
+          search.orWhere(`${column} ILIKE :q ESCAPE '\\'`, { q: likePattern(criteria.q!) });
+        }
+      }));
+  }
+  return query;
+}
+
+function assertSupportedStatus(route: DeliveryRouteEntity): void {
+  if (route.status !== 'planned' && route.status !== 'in_progress' && route.status !== 'completed') {
+    throw new DeliveryRouteConflictError('Persisted route status is not supported by this planner');
+  }
+}
+
+function toPlannedRoute(route: DeliveryRouteEntity, stops: readonly PlannedStop[]): PlannedRoute {
+  assertSupportedStatus(route);
+  return {
+    id: route.id, organizationId: route.organizationId,
+    publicCode: route.publicCode, plannedDate: route.plannedDate,
+    driverId: route.driverId, vehicleId: route.vehicleId,
+    ...(route.originAddressLine === null || route.originLatitude === null || route.originLongitude === null
+      ? {} : { origin: { addressLine: route.originAddressLine,
+        latitude: Number(route.originLatitude), longitude: Number(route.originLongitude) } }),
+    ...(route.simulatedCompletionEnabled ? { simulatedCompletionEnabled: true } : {}),
+    status: route.status as PlannedRoute['status'],
+    createdAt: route.createdAt.toISOString(),
+    ...(route.startedAt === null ? {} : { startedAt: route.startedAt.toISOString() }),
+    ...(route.completedAt === null ? {} : { completedAt: route.completedAt.toISOString() }),
+    stops,
+  };
+}
+
+async function driverHasAccount(manager: EntityManager, organizationId: string,
+  driverId: string): Promise<boolean> {
+  const rows = await manager.query<unknown[]>(
+    'SELECT 1 FROM driver_accounts WHERE organization_id=$1 AND driver_id=$2', [organizationId, driverId]);
+  return rows.length > 0;
+}
+
 function isUniqueViolation(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('driverError' in error)) return false;
   const driverError = error.driverError;
   return typeof driverError === 'object' && driverError !== null &&
     'code' in driverError && driverError.code === '23505';
+}
+
+function formatRouteCode(value: number): string {
+  return `RUT-${String(value).padStart(8, '0')}`;
 }
