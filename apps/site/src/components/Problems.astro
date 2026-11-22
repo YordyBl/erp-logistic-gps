@@ -1,0 +1,95 @@
+---
+import { DEFAULT_PAIN, PAINS } from '../data/content';
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+---
+<section id="problemas" aria-labelledby="prob-title">
+  <div class="container wrap">
+    <h2 id="prob-title" class="disp h2">¿Cuál de estos problemas tienes hoy?</h2>
+    <div class="body" data-tabs>
+      <div role="tablist" aria-label="Problemas del reparto" aria-orientation="vertical" class="list">
+        {PAINS.map((pain, i) => (
+          <button type="button" class="pain" role="tab" id={`pain-tab-${i}`} aria-controls={`pain-panel-${i}`}
+            aria-selected={i === DEFAULT_PAIN ? 'true' : 'false'} tabindex={i === DEFAULT_PAIN ? 0 : -1}>
+            <span>{pain.pain}</span>
+            <Icon d={ICON.chevron} size={18} stroke={2.2} />
+          </button>
+        ))}
+      </div>
+      {PAINS.map((pain, i) => (
+        <div role="tabpanel" id={`pain-panel-${i}`} aria-labelledby={`pain-tab-${i}`} class="panel" hidden={i !== DEFAULT_PAIN}>
+          <div class="text">
+            <h3 class="disp">{pain.title}</h3>
+            <p>{pain.body}</p>
+          </div>
+          <div class="sample">
+            <div class="sample-head">
+              <strong class="mono">{pain.code}</strong>
+              <span class={`chip chip-${pain.tone}`}>{pain.state}</span>
+            </div>
+            <dl>
+              {pain.rows.map((row) => (<><dt>{row.k}</dt><dd>{row.v}</dd></>))}
+            </dl>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<script>
+  // Accessible tabs (WAI-ARIA pattern): click or arrow keys move the selection.
+  for (const root of document.querySelectorAll<HTMLElement>('[data-tabs]')) {
+    const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const select = (index: number, focus: boolean) => {
+      tabs.forEach((tab, i) => {
+        const selected = i === index;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        const panel = document.getElementById(tab.getAttribute('aria-controls') ?? '');
+        if (panel) panel.hidden = !selected;
+      });
+      if (focus) tabs[index]?.focus();
+    };
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => select(i, false));
+      tab.addEventListener('keydown', (event) => {
+        const last = tabs.length - 1;
+        const next = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: last }[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        select((next + tabs.length) % tabs.length, true);
+      });
+    });
+  }
+</script>
+
+<style>
+  .wrap { display: flex; flex-direction: column; gap: 28px; }
+  .h2 { max-width: 15em; }
+  .body { display: flex; flex-wrap: wrap; gap: 24px; align-items: stretch; }
+  .list { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .pain {
+    all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 16px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 15px; color: var(--ink);
+    transition: background 0.2s ease;
+  }
+  .pain:hover { background: var(--green-soft); }
+  .pain:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+  .pain[aria-selected='true'] { background: var(--green-deep); color: #ffffff; }
+  .panel {
+    flex: 1.6 1 480px; min-width: 0; border-radius: 16px; background: var(--green-soft); padding: 24px;
+    display: flex; flex-wrap: wrap; gap: 28px; align-items: center;
+  }
+  .panel[hidden] { display: none; }
+  .text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+  h3 { margin: 0; font-size: 24px; line-height: 1.12; color: var(--green-deep); }
+  .text p { margin: 0; font-size: 15px; color: var(--ink-2); }
+  .sample { flex: 1 1 260px; min-width: 0; background: #ffffff; border-radius: 14px; box-shadow: 0 18px 40px -24px rgba(7,61,39,0.45); overflow: hidden; }
+  .sample-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .sample-head strong { font-size: 14px; }
+  dl { margin: 0; padding: 14px 16px; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-weight: 500; }
+  @media (max-width: 480px) { .panel { padding: 20px; } }
+</style>

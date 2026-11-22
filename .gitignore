@@ -13,6 +13,9 @@ coverage/
 *.tsbuildinfo
 .vitest/
 
+# Astro generated types (apps/site)
+.astro/
+
 # Gentle AI skill-registry cache (auto-generated)
 .atl/
 

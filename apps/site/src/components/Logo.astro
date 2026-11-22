@@ -1,0 +1,19 @@
+---
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+---
+<span class="logo">
+  <span class="mark"><Icon d={ICON.route} color="#ffffff" /></span>
+  <strong class="disp">ERP Logistic</strong>
+</span>
+
+<style>
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .mark { width: 32px; height: 32px; border-radius: 9px; background: var(--green); display: grid; place-items: center; }
+  strong { font-size: 18px; letter-spacing: -0.02em; white-space: nowrap; }
+  @media (max-width: 520px) {
+    .logo { gap: 8px; }
+    .mark { width: 28px; height: 28px; border-radius: 8px; }
+    strong { font-size: 16px; }
+  }
+</style>

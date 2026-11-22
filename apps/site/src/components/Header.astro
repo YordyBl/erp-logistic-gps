@@ -1,0 +1,43 @@
+---
+import { APP_URL } from '../config';
+import Logo from './Logo.astro';
+---
+<header>
+  <div class="bar">
+    <a href="/" class="home" aria-label="ERP Logistic, inicio"><Logo /></a>
+    <nav class="nav" aria-label="Secciones">
+      <a href="/#problemas">Qué resuelve</a>
+      <a href="/#producto">Producto</a>
+      <a href="/#reglas">Respaldo</a>
+      <a href="/#preguntas">Preguntas</a>
+    </nav>
+    <div class="actions">
+      <a href={APP_URL} class="btn btn-outline">Ingresar</a>
+      <a href="/#demo" class="btn btn-green"><span class="long">Pedir una demo</span><span class="short">Demo</span></a>
+    </div>
+  </div>
+</header>
+
+<style>
+  header { position: relative; z-index: 2; background: #ffffff; border-bottom: 1px solid var(--line); }
+  .bar {
+    max-width: 1200px; margin: 0 auto; padding: 10px 24px; display: flex; flex-wrap: wrap;
+    align-items: center; justify-content: space-between; gap: 12px 28px;
+  }
+  .home { text-decoration: none; color: var(--ink); }
+  .nav { display: flex; gap: 24px; font-size: 14px; }
+  .nav a { color: var(--ink); text-decoration: none; font-weight: 500; }
+  .nav a:hover { color: var(--green); }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .actions .btn { min-height: 40px; }
+  .short { display: none; }
+  @media (max-width: 760px) { .nav { display: none; } }
+  /* Phones: logo and both actions stay on one row. */
+  @media (max-width: 520px) {
+    .bar { flex-wrap: nowrap; padding: 10px 16px; gap: 8px; }
+    .actions { flex-wrap: nowrap; gap: 6px; }
+    .actions .btn { min-height: 38px; padding: 0 14px; font-size: 13px; }
+    .long { display: none; }
+    .short { display: inline; }
+  }
+</style>
