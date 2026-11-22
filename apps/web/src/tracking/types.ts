@@ -30,6 +30,8 @@ export interface PublicTracking {
   readonly plannedDate: string;
   readonly timeWindow: 'AM' | 'PM';
   readonly deliveryAddress: string;
+  /** The delivery address on the map (the recipient's own address). */
+  readonly destination: MapPoint;
   readonly recipientName: string;
   readonly packages: string;
   readonly driver: { readonly firstName: string; readonly vehicle: 'moto' | 'camioneta'; readonly plate: string } | null;
@@ -37,7 +39,6 @@ export interface PublicTracking {
   readonly route: {
     readonly stopsBefore: number;
     readonly path: readonly MapPoint[];
-    readonly destination: MapPoint;
     readonly driver: { readonly state: DriverPositionState; readonly at: MapPoint; readonly updatedAt: string };
   } | null;
   readonly delivery: { readonly deliveredAt: string; readonly receivedBy: string; readonly photoUrls: readonly string[] } | null;

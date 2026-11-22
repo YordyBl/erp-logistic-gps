@@ -14,6 +14,13 @@ export class TrackingUnavailableError extends Error {
   }
 }
 
+/** Sample route from Miraflores to Barranco (illustrative coordinates). */
+const PATH = [
+  [-77.0302, -12.1222], [-77.0291, -12.1268], [-77.0272, -12.1318],
+  [-77.0251, -12.1371], [-77.0233, -12.1418], [-77.0219, -12.1458],
+] as const;
+const DESTINATION = PATH[5];
+
 const BASE: Omit<PublicTracking, 'status' | 'route' | 'delivery' | 'failure'> = {
   company: { name: 'Courier Express', initials: 'CE', color: '#1e3a8a', whatsapp: '51900000123' },
   sender: 'Librería Ática',
@@ -21,17 +28,11 @@ const BASE: Omit<PublicTracking, 'status' | 'route' | 'delivery' | 'failure'> = 
   plannedDate: '2026-11-22',
   timeWindow: 'AM',
   deliveryAddress: 'Jr. Bolognesi 455, Barranco',
+  destination: DESTINATION,
   recipientName: 'Carmen Paredes',
   packages: '2 cajas',
   driver: { firstName: 'María', vehicle: 'moto', plate: 'BXK-482' },
 };
-
-/** Sample route from Miraflores to Barranco (illustrative coordinates). */
-const PATH = [
-  [-77.0302, -12.1222], [-77.0291, -12.1268], [-77.0272, -12.1318],
-  [-77.0251, -12.1371], [-77.0233, -12.1418], [-77.0219, -12.1458],
-] as const;
-const DESTINATION = PATH[5];
 
 function secondsAgo(seconds: number): string {
   return new Date(Date.now() - seconds * 1000).toISOString();
@@ -44,17 +45,17 @@ function scenario(key: string): PublicTracking | null {
     case 'demo-camino':
       return {
         ...BASE, status: 'in_transit', delivery: null, failure: null,
-        route: { stopsBefore: 2, path: PATH, destination: DESTINATION, driver: { state: 'moving', at: PATH[2], updatedAt: secondsAgo(30) } },
+        route: { stopsBefore: 2, path: PATH, driver: { state: 'moving', at: PATH[2], updatedAt: secondsAgo(30) } },
       };
     case 'demo-otra-parada':
       return {
         ...BASE, status: 'in_transit', delivery: null, failure: null,
-        route: { stopsBefore: 1, path: PATH, destination: DESTINATION, driver: { state: 'at_other_stop', at: PATH[3], updatedAt: secondsAgo(20) } },
+        route: { stopsBefore: 1, path: PATH, driver: { state: 'at_other_stop', at: PATH[3], updatedAt: secondsAgo(20) } },
       };
     case 'demo-sin-senal':
       return {
         ...BASE, status: 'in_transit', delivery: null, failure: null,
-        route: { stopsBefore: 2, path: PATH, destination: DESTINATION, driver: { state: 'stale', at: PATH[1], updatedAt: secondsAgo(12 * 60) } },
+        route: { stopsBefore: 2, path: PATH, driver: { state: 'stale', at: PATH[1], updatedAt: secondsAgo(12 * 60) } },
       };
     case 'demo-entregado':
       return {

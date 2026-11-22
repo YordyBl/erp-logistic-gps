@@ -1,10 +1,10 @@
-import { CalendarDays, Check, LinkIcon, MessageCircle, TriangleAlert } from 'lucide-react';
+import { CalendarDays, Check, LinkIcon, MessageCircle, TriangleAlert, WifiOff } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button.js';
 import { Skeleton } from '@/components/ui/skeleton.js';
 
-import { momentLabel, plannedDayLabel, stopsLabel, timeWindowLabel } from './format.js';
+import { ago, momentLabel, plannedDayLabel, stopsLabel, timeWindowLabel } from './format.js';
 import { fetchPublicTracking } from './mockTrackingApi.js';
 import { RouteMap } from './RouteMap.js';
 import type { PublicTracking } from './types.js';
@@ -43,19 +43,17 @@ export function TrackingPage({ trackingKey, load = fetchPublicTracking }: {
 
   if (state.kind === 'loading') return <Shell layout="panel"><LoadingView /></Shell>;
   if (state.kind === 'unavailable') return <Shell layout="panel"><UnavailableView /></Shell>;
-  const { data } = state;
-  // With a live route the map is the main content: full screen on desktop. Otherwise a centered panel.
-  const layout = data.status === 'in_transit' && data.route ? 'map' : 'panel';
-  return <Shell layout={layout}><TrackingView data={data} /></Shell>;
+  return <Shell layout="split"><TrackingView data={state.data} /></Shell>;
 }
 
 /**
  * Phone: everything stacks in one column.
- * Desktop: `map` fills the window with the details in a side panel; `panel` is a centered card.
+ * Desktop: `split` fills the window with a visual (map or delivery photo) and the order in a side
+ * panel; `panel` is a centered card for screens without order data.
  */
-function Shell({ layout, children }: { readonly layout: 'map' | 'panel'; readonly children: ReactNode }) {
-  const frame = layout === 'map'
-    ? 'flex min-h-svh w-full flex-col bg-white lg:h-svh lg:flex-row'
+function Shell({ layout, children }: { readonly layout: 'split' | 'panel'; readonly children: ReactNode }) {
+  const frame = layout === 'split'
+    ? 'flex min-h-svh w-full flex-col bg-white md:h-svh md:flex-row'
     : 'mx-auto flex min-h-svh w-full max-w-xl flex-col bg-white sm:my-10 sm:min-h-0 sm:overflow-hidden sm:rounded-2xl sm:border sm:shadow-sm';
   return <main className={`${frame} text-sm text-foreground`}>{children}</main>;
 }
@@ -86,14 +84,34 @@ function ContactButton({ company }: { readonly company: PublicTracking['company'
   );
 }
 
-function TrackingView({ data }: { readonly data: PublicTracking }) {
-  const driverName = data.driver?.firstName ?? 'El motorizado';
+/** Left side on desktop, top on phones: the delivery photo once delivered, otherwise the map. */
+function Visual({ data, driverName }: { readonly data: PublicTracking; readonly driverName: string }) {
+  const company = <CompanyCard data={data} floating />;
+  const photo = data.status === 'delivered' ? data.delivery?.photoUrls[0] : undefined;
+  if (data.delivery && photo) {
+    return (
+      <figure className="relative m-0 h-72 shrink-0 overflow-hidden bg-muted sm:h-96 md:h-auto md:min-w-0 md:flex-1">
+        <img src={photo} alt="Foto de la entrega en la puerta" className="size-full object-cover" />
+        <div className="absolute top-3 left-3 z-10 max-w-[calc(100%-1.5rem)]">{company}</div>
+        <figcaption className="absolute bottom-3 left-3 rounded-full bg-white/95 px-3 py-1 text-xs font-medium shadow-md">
+          Foto 1 de {data.delivery.photoUrls.length} · tomada por el motorizado al entregar
+        </figcaption>
+      </figure>
+    );
+  }
   const route = data.status === 'in_transit' ? data.route : null;
   return (
+    <RouteMap destination={data.destination} path={route?.path} driver={route?.driver}
+      driverName={driverName} overlay={company} />
+  );
+}
+
+function TrackingView({ data }: { readonly data: PublicTracking }) {
+  const driverName = data.driver?.firstName ?? 'El motorizado';
+  return (
     <>
-      {route && <RouteMap route={route} driverName={driverName} overlay={<CompanyCard data={data} floating />} />}
-      <section className={`flex flex-1 flex-col gap-4 p-4 sm:p-6 ${route ? 'lg:w-[420px] lg:flex-none lg:overflow-y-auto lg:border-l lg:p-8' : ''}`}>
-        {!route && <div className="border-b pb-4"><CompanyCard data={data} /></div>}
+      <Visual data={data} driverName={driverName} />
+      <section className="flex flex-1 flex-col gap-4 p-4 sm:p-6 md:w-[360px] md:flex-none md:overflow-y-auto md:border-l lg:w-[420px] lg:p-8">
         <Summary data={data} driverName={driverName} />
         <Steps status={data.status} />
         <Details data={data} />
@@ -120,26 +138,26 @@ function Summary({ data, driverName }: { readonly data: PublicTracking; readonly
       const near = data.route?.driver.state === 'at_other_stop'
         ? `${driverName} está entregando otro pedido; luego quedan ${stopsLabel(before)} antes de la tuya`
         : before === 0 ? `${driverName} va hacia tu dirección` : `${driverName} está a ${stopsLabel(before)} de ti`;
-      return <Headline eyebrow={capitalize(when)} title="Tu pedido está en camino" highlight={near} />;
+      const updated = data.route?.driver.updatedAt;
+      return (
+        <div className="flex flex-col gap-3">
+          <Headline eyebrow={capitalize(when)} title="Tu pedido está en camino" highlight={near} />
+          {data.route?.driver.state === 'stale' && updated && (
+            <p className="flex gap-2 rounded-lg bg-amber-50 px-3.5 py-3 text-[13px] text-amber-900">
+              <WifiOff className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>Sin señal del celular de {driverName} desde {ago(updated)}. Tu pedido sigue en camino; el avance se actualizará cuando vuelva la señal.</span>
+            </p>
+          )}
+        </div>
+      );
     }
     case 'delivered': {
       const { delivery } = data;
       if (delivery === null) return null;
-      const [photo] = delivery.photoUrls;
       return (
-        <div className="flex flex-col gap-3">
-          <Headline icon={<Check aria-hidden="true" />} tone="solid" title="Entregado">
-            {capitalize(momentLabel(delivery.deliveredAt))} · recibió {delivery.receivedBy}
-          </Headline>
-          {photo && (
-            <figure className="overflow-hidden rounded-xl border">
-              <img src={photo} alt="Foto de la entrega en la puerta" className="aspect-[5/3] w-full object-cover" />
-              <figcaption className="bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-                Foto 1 de {delivery.photoUrls.length} · tomada por el motorizado al entregar
-              </figcaption>
-            </figure>
-          )}
-        </div>
+        <Headline icon={<Check aria-hidden="true" />} tone="solid" title="Entregado">
+          {capitalize(momentLabel(delivery.deliveredAt))} · recibió {delivery.receivedBy}
+        </Headline>
       );
     }
     case 'failed': {
