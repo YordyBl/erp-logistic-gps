@@ -24,3 +24,9 @@ export const SITE = {
   description:
     'Arma las rutas, sigue a tus motorizados y guarda la foto, la hora y quién recibió cada pedido. Sistema de reparto de última milla para empresas de Lima y Callao.',
 } as const;
+
+/** Hero copy, shared by the landing and the generated share image (/og.jpg). */
+export const HERO = {
+  tagline: 'Reparto de última milla en Lima y Callao',
+  headline: { before: 'Cada entrega en Lima, con ', highlight: 'prueba', after: '.' },
+} as const;

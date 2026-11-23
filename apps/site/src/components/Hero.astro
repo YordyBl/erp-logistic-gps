@@ -2,6 +2,7 @@
 import { Picture } from 'astro:assets';
 
 import lima from '../assets/lima-costa.webp';
+import { HERO } from '../config';
 import Icon from './Icon.astro';
 import { ICON } from './icons';
 
@@ -19,8 +20,8 @@ const STOPS = [
 
   <div class="inner">
     <div class="copy">
-      <span class="badge glass"><Icon d={ICON.truck} size={16} color="#86efac" /> Reparto de última milla en Lima y Callao</span>
-      <h1 id="hero-title" class="disp">Cada entrega en Lima, con <span>prueba</span>.</h1>
+      <span class="badge glass"><Icon d={ICON.truck} size={16} color="#86efac" /> {HERO.tagline}</span>
+      <h1 id="hero-title" class="disp">{HERO.headline.before}<span>{HERO.headline.highlight}</span>{HERO.headline.after}</h1>
       <p>Arma las rutas, sigue a tus motorizados y guarda la foto, la hora y quién recibió cada pedido. Sin Excel, sin cuaderno, sin perseguir a nadie por WhatsApp.</p>
       <div class="ctas">
         <a href="#demo" class="btn btn-amber btn-lg">Pedir una demo <Icon d={ICON.arrow} size={18} stroke={2.2} /></a>
