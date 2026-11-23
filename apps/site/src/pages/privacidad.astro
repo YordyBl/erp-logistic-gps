@@ -1,0 +1,38 @@
+---
+import Footer from '../components/Footer.astro';
+import Header from '../components/Header.astro';
+import { PENDING } from '../config';
+import Base from '../layouts/Base.astro';
+---
+<Base title="Política de privacidad · ERP Logistic" description="Cómo ERP Logistic trata los datos personales que recibe." noindex>
+  <Header />
+  <main class="doc">
+    <p class="pill">Borrador · falta completar los datos de la empresa</p>
+    <h1 class="disp">Política de privacidad</h1>
+    <p>Esta política explica cómo tratamos los datos personales, conforme a la Ley N.° 29733, Ley de Protección de Datos Personales, y su reglamento.</p>
+
+    <h2 class="disp">Quién es responsable</h2>
+    <p>El responsable del tratamiento es {PENDING.company}. Para cualquier consulta sobre tus datos puedes escribirnos al {PENDING.whatsapp}.</p>
+
+    <h2 class="disp">Qué datos recibimos al pedir una demo</h2>
+    <p>Nombre, empresa, celular, volumen aproximado de pedidos por día y, si lo indicas, tu correo. Este sitio no los guarda: el formulario solo arma un mensaje que tú decides enviar por WhatsApp.</p>
+
+    <h2 class="disp">Para qué los usamos</h2>
+    <p>Solo para responderte y coordinar la demo. No los vendemos ni los compartimos con terceros con fines comerciales.</p>
+
+    <h2 class="disp">Datos dentro del sistema</h2>
+    <p>Las empresas que usan ERP Logistic registran pedidos, destinatarios y fotos de evidencia de entrega. Cada empresa trabaja en un espacio aislado y las fotos no son públicas: las ve el personal autorizado de esa empresa y, solo la de su propio pedido, el destinatario, mediante su enlace de seguimiento.</p>
+
+    <h2 class="disp">Tus derechos</h2>
+    <p>Puedes pedir acceder, rectificar, cancelar u oponerte al tratamiento de tus datos escribiéndonos por el mismo medio. Si no estás conforme con la respuesta, puedes acudir a la Autoridad Nacional de Protección de Datos Personales.</p>
+  </main>
+  <Footer />
+</Base>
+
+<style>
+  .doc { max-width: 700px; margin: 0 auto; padding: 48px 24px 72px; display: flex; flex-direction: column; gap: 10px; }
+  h1 { margin: 6px 0 4px; font-size: clamp(26px, 2.8vw, 34px); line-height: 1.1; }
+  h2 { margin: 14px 0 0; font-size: 18px; line-height: 1.25; }
+  p { margin: 0; color: var(--ink-2); font-size: 15px; }
+  .pill { color: var(--amber-text); }
+</style>

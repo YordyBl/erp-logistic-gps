@@ -1,0 +1,146 @@
+---
+import { DRIVER } from '../data/content';
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+
+const LATER = [
+  { address: 'Av. Grau 320, Chorrillos', orders: '1 pedido', position: '4 de 5' },
+  { address: 'Av. Huaylas 1450, Chorrillos', orders: '2 pedidos', position: '5 de 5' },
+];
+const PROGRESS = ['done', 'done', 'current', 'todo', 'todo'];
+---
+<section aria-label="Conductor y administrador">
+  <div class="container roles">
+    <div class="row driver">
+      <div class="phone-wrap">
+        <div class="phone" role="img" aria-label="Celular del conductor con su ruta del día y la siguiente parada">
+          <div class="phone-head">
+            <span class="date">Mi ruta de hoy · martes 18 nov</span>
+            <div class="route"><strong class="mono">R-0408</strong><span>2 de 5 entregadas</span></div>
+            <div class="bars">{PROGRESS.map((p) => <span class={p} />)}</div>
+          </div>
+          <div class="phone-body">
+            <div class="next">
+              <span class="pill">Siguiente parada · 3 de 5</span>
+              <strong class="addr">Jr. Bolognesi 455, Barranco</strong>
+              <span class="who"><span class="mono">LIM-0144</span> · Carmen Paredes · 2 cajas</span>
+              <div class="photo"><Icon d={ICON.camera} size={32} stroke={1.8} /> Tomar foto de entrega</div>
+              <span class="confirm">Confirmar entrega</span>
+              <span class="report">Reportar problema</span>
+            </div>
+            <span class="later-title">Después</span>
+            {LATER.map((stop) => (
+              <div class="later"><span><strong>{stop.address}</strong><span>{stop.orders}</span></span><span class="mono">{stop.position}</span></div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div class="stack copy">
+        <span class="eyebrow">Conductor · celular</span>
+        <h2 class="disp h3">El motorizado sabe a dónde ir y qué hacer.</h2>
+        <p class="lead">Ve su ruta en el celular, con su propia cuenta: las paradas en orden y, en cada una, los pedidos que tiene que dejar.</p>
+        <div class="features">
+          {DRIVER.map((d) => (
+            <div class="feature">
+              <span class="ico"><Icon d={d.icon} /></span>
+              <span><strong>{d.title}</strong><span>{d.body}</span></span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    <div class="row proof">
+      <div class="stack copy">
+        <span class="eyebrow">Administrador · constancias</span>
+        <h2 class="disp h3">Ante un reclamo, la respuesta está a un clic.</h2>
+        <p class="lead">Cada entrega guarda fotos, receptor, hora y responsable, con el historial de quién cambió cada estado. Las fotos no son públicas: las ve el personal autorizado de tu empresa y, solo la de su pedido, el destinatario.</p>
+      </div>
+      <article class="card receipt" aria-label="Ejemplo de constancia de entrega">
+        <div class="receipt-head">
+          <span class="id"><span>Constancia de entrega</span><strong class="mono">LIM-0142</strong></span>
+          <span class="chip chip-green ok"><Icon d={ICON.check} size={13} stroke={3} />Entregado</span>
+        </div>
+        <div class="receipt-body">
+          <dl>
+            <dt>Recibió</dt><dd>Carmen Paredes</dd>
+            <dt>Dirección</dt><dd>Calle Las Begonias 441, San Isidro</dd>
+            <dt>Hora</dt><dd class="mono">18 nov · 10:42</dd>
+            <dt>Conductor</dt><dd>María Rojas</dd>
+          </dl>
+          <div class="photos"><div><Icon d={ICON.lock} size={22} /><strong>2 fotos privadas</strong></div></div>
+        </div>
+        <ol class="log">
+          <li><span class="mono">07:30</span><span>Asignado a R-0408 <span class="by">· Operador</span></span></li>
+          <li><span class="mono">10:41</span><span>2 fotos subidas <span class="by">· Conductor</span></span></li>
+          <li><span class="mono">10:42</span><strong>Entrega confirmada</strong></li>
+        </ol>
+      </article>
+    </div>
+  </div>
+</section>
+
+<style>
+  .roles { display: flex; flex-direction: column; gap: 64px; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; }
+  .driver { flex-wrap: wrap-reverse; gap: 32px 56px; }
+  .proof { gap: 40px 56px; }
+  .copy { flex: 1 1 440px; }
+  .proof .copy { flex: 1 1 340px; gap: 14px; }
+  .copy .lead { max-width: 32em; }
+
+  .phone-wrap { flex: 0 1 380px; min-width: 0; display: flex; justify-content: center; }
+  .phone {
+    zoom: 0.6; width: 420px; max-width: 100%; aspect-ratio: 393 / 852; border: 14px solid var(--ink); border-radius: 60px;
+    overflow: hidden; background: var(--wash); box-shadow: 0 48px 96px -40px rgba(7,61,39,0.6); box-sizing: content-box;
+    display: flex; flex-direction: column;
+  }
+  .phone-head { padding: 32px 26px 24px; background: var(--green-deep); color: #ffffff; display: flex; flex-direction: column; gap: 8px; }
+  .date { font-size: 16px; opacity: 0.85; }
+  .route { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .route strong { font-size: 30px; }
+  .route span { font-size: 16px; color: #cfe7d9; }
+  .bars { display: flex; gap: 5px; margin-top: 8px; }
+  .bars span { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,0.25); }
+  .bars .done { background: var(--mint); }
+  .bars .current { background: var(--amber); }
+  .phone-body { flex: 1; min-height: 0; padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .next { background: #ffffff; border-radius: 22px; padding: 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 8px 22px -12px rgba(7,61,39,0.35); }
+  .next .pill { padding: 4px 12px; font-size: 15px; }
+  .addr { font-size: 25px; line-height: 1.22; }
+  .who { font-size: 17px; color: var(--ink-2); }
+  .photo { height: 130px; border-radius: 16px; border: 2px dashed #b9cdbf; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--ink-2); font-size: 17px; font-weight: 600; }
+  .confirm { height: 60px; border-radius: 16px; background: var(--green); color: #ffffff; display: grid; place-items: center; font-weight: 600; font-size: 18px; }
+  .report { height: 56px; border-radius: 16px; border: 1px solid var(--line-strong); display: grid; place-items: center; font-weight: 600; font-size: 17px; }
+  .later-title { font-size: 16px; font-weight: 600; color: var(--muted); padding: 0 4px; }
+  .later { background: #ffffff; border-radius: 16px; padding: 16px 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 17px; }
+  .later > span:first-child { display: flex; flex-direction: column; }
+  .later strong { font-weight: 600; }
+  .later > span:first-child span, .later .mono { font-size: 14px; color: var(--muted); }
+
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px 28px; margin-top: 6px; font-size: 15px; }
+  .feature { display: flex; gap: 12px; align-items: flex-start; }
+  .ico { width: 36px; height: 36px; border-radius: 10px; background: var(--green-soft); color: var(--green-text); display: grid; place-items: center; flex: none; }
+  .feature > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+  .feature strong { font-weight: 600; }
+  .feature > span:last-child span { font-size: 14px; color: var(--ink-2); }
+
+  .receipt { flex: 1.5 1 520px; min-width: 0; }
+  .receipt-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .id { display: flex; flex-direction: column; }
+  .id span { font-size: 12px; color: var(--muted); }
+  .id strong { font-size: 18px; }
+  .ok { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 13px; }
+  .receipt-body { display: flex; flex-wrap: wrap; }
+  dl { flex: 1 1 240px; min-width: 0; margin: 0; padding: 16px 20px; display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-weight: 500; }
+  .photos { flex: 0 1 180px; min-width: 0; padding: 16px 20px 16px 0; }
+  .photos div { height: 100%; min-height: 120px; border-radius: 10px; background: var(--green-soft); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; font-size: 12px; color: var(--ink-2); padding: 10px; }
+  .log { list-style: none; margin: 0; padding: 14px 20px 18px; border-top: 1px solid var(--line); background: #fafcfb; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+  .log li { display: flex; gap: 12px; }
+  .log .mono { color: var(--muted); width: 44px; flex: none; }
+  .log .by { color: var(--muted); }
+  .log strong { font-weight: 600; color: var(--green-text); }
+  @media (max-width: 480px) { .photos { flex-basis: 100%; padding: 0 20px 16px; } }
+</style>

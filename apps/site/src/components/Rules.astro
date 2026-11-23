@@ -1,0 +1,34 @@
+---
+import { RULES } from '../data/content';
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+---
+<section id="reglas" aria-labelledby="reglas-title">
+  <div class="container wrap">
+    <div class="intro">
+      <h2 id="reglas-title" class="disp h2">Cuando dicen «nunca me llegó», tienes cómo responder.</h2>
+      <p>Estas reglas viven en el sistema, no en la memoria de cada turno.</p>
+    </div>
+    <ul>
+      {RULES.map((r) => (
+        <li>
+          <span class="tick"><Icon d={ICON.check} size={16} stroke={2.5} /></span>
+          <span class="txt"><strong>{r.title}</strong><span>{r.body}</span></span>
+        </li>
+      ))}
+    </ul>
+  </div>
+</section>
+
+<style>
+  section { background: var(--green-deep); color: #ffffff; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 40px 64px; align-items: flex-start; }
+  .intro { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .intro p { margin: 0; font-size: 16px; color: #cfe7d9; max-width: 28em; }
+  ul { flex: 1.5 1 520px; min-width: 0; list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px 28px; }
+  li { display: flex; gap: 14px; align-items: flex-start; }
+  .tick { width: 28px; height: 28px; border-radius: 50%; background: rgba(126,224,171,0.16); color: var(--mint); display: grid; place-items: center; flex: none; }
+  .txt { display: flex; flex-direction: column; gap: 2px; }
+  .txt strong { font-size: 15px; font-weight: 600; }
+  .txt span { font-size: 14px; color: #cfe7d9; }
+</style>

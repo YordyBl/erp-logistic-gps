@@ -1,0 +1,115 @@
+---
+import { PENDING, WHATSAPP_NUMBER } from '../config';
+import { VOLUMES } from '../data/content';
+import WhatsAppIcon from './WhatsAppIcon.astro';
+
+const recipient = WHATSAPP_NUMBER ? `+${WHATSAPP_NUMBER}` : PENDING.whatsapp;
+---
+<section id="demo" aria-labelledby="demo-title">
+  <div class="container wrap">
+    <div class="intro">
+      <h2 id="demo-title" class="disp">Te mostramos una ruta completa en 30 minutos.</h2>
+      <p>Por videollamada y con datos de ejemplo de Lima: del pedido a la foto de entrega. Luego vemos cómo encaja con tus clientes y tus motorizados.</p>
+      <p class="price">Precio: {PENDING.price}</p>
+    </div>
+
+    <form id="demo-form" data-whatsapp={WHATSAPP_NUMBER} aria-labelledby="demo-title" novalidate>
+      <div class="field-wrap">
+        <label for="d-nombre">Nombre</label>
+        <input id="d-nombre" name="nombre" class="field" type="text" placeholder="Rosa Quispe" autocomplete="name" required />
+      </div>
+      <div class="field-wrap">
+        <label for="d-empresa">Empresa</label>
+        <input id="d-empresa" name="empresa" class="field" type="text" placeholder="Courier Express SAC" autocomplete="organization" required />
+      </div>
+      <div class="field-wrap">
+        <label for="d-celular">Celular</label>
+        <input id="d-celular" name="celular" class="field mono" type="tel" placeholder="900 000 123" autocomplete="tel" inputmode="tel" required />
+      </div>
+      <div class="field-wrap">
+        <label for="d-volumen">Pedidos por día</label>
+        <select id="d-volumen" name="volumen" class="field">
+          {VOLUMES.map((v) => <option>{v}</option>)}
+        </select>
+      </div>
+      <div class="field-wrap full">
+        <label for="d-correo">Correo <span class="optional">(opcional)</span></label>
+        <input id="d-correo" name="correo" class="field" type="email" placeholder="rosa@courierexpress.pe" autocomplete="email" />
+      </div>
+      <p class="error full" role="alert" hidden></p>
+      <button type="submit" class="btn btn-lg btn-whatsapp full"><WhatsAppIcon fill="currentColor" width="22" height="22" />Pedir la demo por WhatsApp</button>
+      <p class="note full">
+        Se abre WhatsApp con tus datos ya escritos para enviarlos a {recipient}. Solo los usamos para coordinar la demo; no los compartimos.{' '}
+        <a href="/privacidad">Política de privacidad</a>
+      </p>
+    </form>
+  </div>
+</section>
+
+<script>
+  const REQUIRED = [
+    { name: 'nombre', label: 'tu nombre' },
+    { name: 'empresa', label: 'tu empresa' },
+    { name: 'celular', label: 'tu celular' },
+  ] as const;
+  const form = document.querySelector<HTMLFormElement>('#demo-form');
+  const error = form?.querySelector<HTMLElement>('.error');
+
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const value = (name: string) => String(data.get(name) ?? '').trim();
+
+    const missing = REQUIRED.filter((field) => value(field.name) === '');
+    if (missing.length > 0) {
+      if (error) {
+        error.textContent = `Falta ${missing.map((field) => field.label).join(', ')}.`;
+        error.hidden = false;
+      }
+      form.querySelector<HTMLInputElement>(`[name="${missing[0]!.name}"]`)?.focus();
+      return;
+    }
+    if (error) error.hidden = true;
+
+    const lines = [
+      'Hola, quiero una demo de ERP Logistic.',
+      `Nombre: ${value('nombre')}`,
+      `Empresa: ${value('empresa')}`,
+      `Celular: ${value('celular')}`,
+      `Pedidos por día: ${value('volumen')}`,
+      value('correo') && `Correo: ${value('correo')}`,
+    ].filter(Boolean);
+    const number = form.dataset.whatsapp ?? '';
+    // Without a configured number WhatsApp asks which chat to send it to.
+    const url = `https://wa.me/${number}?text=${encodeURIComponent(lines.join('\n'))}`;
+    window.open(url, '_blank', 'noopener');
+  });
+</script>
+
+<style>
+  section { background: var(--green); color: #ffffff; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 36px 56px; align-items: center; }
+  .intro { flex: 1 1 400px; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+  h2 { margin: 0; font-size: clamp(30px, 3.4vw, 46px); line-height: 1.05; }
+  .intro p { margin: 0; font-size: 16px; color: #e3f4ea; max-width: 30em; }
+  .intro .price { font-size: 15px; font-weight: 600; color: #ffe2b0; }
+  form {
+    flex: 1 1 440px; min-width: 0; background: #ffffff; color: var(--ink); border-radius: 16px; padding: 24px;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; box-shadow: 0 30px 60px -30px rgba(0,0,0,0.45);
+  }
+  .field-wrap { display: flex; flex-direction: column; gap: 6px; }
+  .full { grid-column: 1 / -1; }
+  label { font-weight: 600; font-size: 13px; }
+  .optional { font-weight: 400; color: var(--muted); }
+  .field { height: 42px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 10px; font: inherit; color: var(--ink); background: #ffffff; width: 100%; }
+  .field.mono { font-family: var(--font-mono); }
+  .field::placeholder { color: #66726b; }
+  .field:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(12,122,75,0.18); outline: none; }
+  /* WhatsApp green with near-black text and mark: white on this green fails contrast (2:1). */
+  .btn-whatsapp { background: #25d366; color: #052618; font-weight: 700; }
+  .btn-whatsapp:hover { background: #1ebe5b; color: #052618; }
+  .error { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--red-soft); color: var(--red-text); font-size: 14px; font-weight: 600; }
+  .error[hidden] { display: none; }
+  .note { margin: 0; font-size: 13px; color: var(--muted); text-align: center; }
+  @media (max-width: 480px) { form { padding: 20px; } }
+</style>

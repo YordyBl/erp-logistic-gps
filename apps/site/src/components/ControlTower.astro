@@ -1,0 +1,66 @@
+---
+import { FEATURES, ROUTES } from '../data/content';
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+import MapBackdrop from './MapBackdrop.astro';
+
+const BAR: Record<string, string> = { green: '#0c7a4b', red: '#b4432a', gray: '#8f9a93', amber: '#8f9a93' };
+---
+<section id="producto" aria-labelledby="torre-title" class="section-wash">
+  <div class="container split">
+    <div class="stack intro">
+      <span class="eyebrow">Operador · panel web</span>
+      <h2 id="torre-title" class="disp h2">Todo el día de reparto en una sola pantalla</h2>
+      <p class="lead">Qué hay que entregar, quién lo lleva y en qué estado está. Agrupa pedidos en paradas, asigna conductor y vehículo, y reasigna si algo falla. Si una posición GPS se queda vieja, se muestra como última posición conocida.</p>
+      <ul class="checks">
+        {FEATURES.map((f) => (
+          <li><span class="tick"><Icon d={ICON.check} size={12} stroke={3} /></span><span><strong>{f.title}</strong> <span class="body">{f.body}</span></span></li>
+        ))}
+      </ul>
+    </div>
+
+    <figure class="card tower">
+      <figcaption class="card-head">
+        <strong>Torre de control</strong>
+        <span class="mono">mar 18 nov · 11:20</span>
+      </figcaption>
+      <div class="grid">
+        <ul class="routes">
+          {ROUTES.map((r) => (
+            <li>
+              <div class="row"><strong class="mono">{r.code}</strong><span class={`chip chip-${r.tone}`}>{r.status}</span></div>
+              <span class="meta">{r.driver} · {r.progress}</span>
+              <div class="track"><div style={`width: ${r.pct}%; background: ${BAR[r.tone]}`}></div></div>
+            </li>
+          ))}
+        </ul>
+        <div class="map-box">
+          <MapBackdrop label="Mapa de ejemplo con rutas en curso">
+            <svg viewBox="0 0 400 340" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+              <path d="M50 280 C 120 230, 160 210, 210 160 S 290 100, 350 70" stroke="#0c7a4b" stroke-width="5" fill="none" stroke-linecap="round" />
+              <circle cx="210" cy="160" r="9" fill="#f2a93b" stroke="#ffffff" stroke-width="3" />
+              <circle cx="110" cy="110" r="8" fill="#b4432a" stroke="#ffffff" stroke-width="3" />
+              <circle cx="300" cy="260" r="8" fill="#8f9a93" stroke="#ffffff" stroke-width="3" />
+            </svg>
+          </MapBackdrop>
+          <span class="map-tag">Gris: última posición conocida, hace 12 min</span>
+        </div>
+      </div>
+    </figure>
+  </div>
+</section>
+
+<style>
+  .intro { flex: 1 1 340px; }
+  .tower { flex: 1.9 1 560px; min-width: 0; }
+  .grid { display: flex; flex-wrap: wrap; min-height: 380px; }
+  .routes { flex: 1 1 230px; min-width: 0; border-right: 1px solid var(--line); list-style: none; margin: 0; padding: 0; }
+  .routes li { padding: 12px 16px; border-bottom: 1px solid #eef2ef; display: flex; flex-direction: column; gap: 6px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .row strong { font-size: 13px; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .track { height: 4px; border-radius: 2px; background: #eef2ef; overflow: hidden; }
+  .track div { height: 4px; }
+  .map-box { flex: 2.6 1 320px; min-width: 0; position: relative; min-height: 320px; }
+  @media (max-width: 640px) { .routes { border-right: 0; } }
+</style>

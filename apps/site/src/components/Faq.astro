@@ -1,0 +1,32 @@
+---
+import { FAQS } from '../data/content';
+import Icon from './Icon.astro';
+import { ICON } from './icons';
+---
+<section id="preguntas" aria-labelledby="faq-title" class="section-wash">
+  <div class="wrap">
+    <h2 id="faq-title" class="disp h2">Preguntas frecuentes</h2>
+    <div class="faq">
+      {FAQS.map((item) => (
+        <details>
+          <summary>{item.q}<span class="chev"><Icon d={ICON.plus} stroke={2.2} color="#0c7a4b" /></span></summary>
+          <p>{item.a}</p>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .wrap { max-width: 820px; margin: 0 auto; padding: 72px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .faq { border-bottom: 1px solid #dce5df; }
+  details { border-top: 1px solid #dce5df; }
+  summary {
+    cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    padding: 16px 0; font-weight: 600; font-size: 16px;
+  }
+  summary::-webkit-details-marker { display: none; }
+  .chev { flex: none; transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1); }
+  details[open] .chev { transform: rotate(45deg); }
+  p { margin: 0 0 16px; color: var(--ink-2); max-width: 42em; font-size: 15px; }
+</style>

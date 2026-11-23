@@ -1,0 +1,38 @@
+---
+/**
+ * Drawn street map in the spirit of the Lima coast (not a real map and not a screenshot).
+ * Shares the 400×340 viewBox with the overlay passed in the slot, so markers line up.
+ */
+interface Props {
+  readonly label: string;
+}
+const { label } = Astro.props;
+---
+<div class="map" role="img" aria-label={label}>
+  <svg viewBox="0 0 400 340" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <rect width="400" height="340" fill="#eef1ea" />
+    <g stroke="#ffffff" stroke-width="3" fill="none">
+      <path d="M0 40h400M0 95h400M0 150h400M0 205h400M0 255h400M0 300h400" />
+      <path d="M40 0v340M95 0v340M150 0v340M205 0v340M260 0v340M315 0v340M365 0v340" />
+      <path d="M0 120 L400 20M0 230 L400 120" stroke-width="2" />
+    </g>
+    <g fill="#d3ead6">
+      <rect x="160" y="105" width="36" height="36" rx="4" />
+      <rect x="270" y="215" width="38" height="32" rx="4" />
+      <rect x="50" y="50" width="34" height="34" rx="4" />
+      <rect x="325" y="45" width="30" height="40" rx="4" />
+    </g>
+    <g stroke="#f4d27a" stroke-width="6" fill="none" stroke-linecap="round">
+      <path d="M0 175 C 120 165, 240 150, 400 140" />
+      <path d="M230 0 C 225 110, 240 220, 250 340" />
+    </g>
+    <path d="M0 270 C 60 262, 110 300, 150 340 L0 340Z" fill="#bcdcf0" />
+    <path d="M0 270 C 60 262, 110 300, 150 340" stroke="#a7cde6" stroke-width="2" fill="none" />
+  </svg>
+  <slot />
+</div>
+
+<style>
+  .map { position: absolute; inset: 0; }
+  .map > svg, .map > :global(svg) { position: absolute; inset: 0; width: 100%; height: 100%; }
+</style>

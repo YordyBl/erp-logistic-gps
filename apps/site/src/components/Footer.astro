@@ -1,0 +1,26 @@
+---
+import { APP_URL, PENDING } from '../config';
+---
+<footer>
+  <div class="wrap">
+    <strong class="disp">ERP Logistic</strong>
+    <nav aria-label="Enlaces del pie">
+      <a href={APP_URL}>Ingresar</a>
+      <a href="/#demo">Pedir una demo</a>
+      <a href="/privacidad">Privacidad y datos</a>
+    </nav>
+    <p class="recipient">¿Esperas un paquete? Usa el enlace que te envió tu empresa de reparto.</p>
+    <p class="legal">Reparto de última milla en Lima y Callao · Hora de Lima (UTC−5) · {PENDING.company}</p>
+  </div>
+</footer>
+
+<style>
+  footer { background: var(--green-night); color: #cfe7d9; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px 24px; font-size: 14px; }
+  strong { font-size: 18px; color: #ffffff; }
+  nav { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+  nav a { color: #ffffff; }
+  p { margin: 0; width: 100%; }
+  .recipient { color: rgba(255,255,255,0.85); }
+  .legal { font-size: 13px; color: #a9c9b7; }
+</style>

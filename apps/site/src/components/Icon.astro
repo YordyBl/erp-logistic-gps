@@ -1,0 +1,12 @@
+---
+/** Decorative 24×24 stroke icon; the text next to it carries the meaning. */
+interface Props {
+  readonly d: string;
+  readonly size?: number;
+  readonly stroke?: number;
+  readonly color?: string;
+}
+const { d, size = 20, stroke = 2, color = 'currentColor' } = Astro.props;
+---
+<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} stroke-width={stroke}
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={d} /></svg>

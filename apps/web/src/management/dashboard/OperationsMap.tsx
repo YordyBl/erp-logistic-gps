@@ -2,7 +2,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { useEffect, useMemo, useRef } from 'react';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 
-import { OPENFREEMAP_STYLE } from '../ControlTowerPage.js';
+import { OPENFREEMAP_STYLE } from '../../lib/mapStyle.js';
 import type { StopState } from '../routes/routeProgress.js';
 
 const DATA_SOURCE = 'operations-map-data';

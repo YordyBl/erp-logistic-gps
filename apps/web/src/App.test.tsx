@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { api, type AuthSession, type DeliveryEvidence, type DeliveryOrder, type DeliveryRoute, type Page } from './api/client.js';
@@ -47,6 +48,11 @@ function session(role: AuthSession['user']['role']): AuthSession {
   };
 }
 
+/** Renders the app at a URL, as the browser router would. */
+function renderApp(path = '/app') {
+  return render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -67,7 +73,7 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'login').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
 
-    render(<App />);
+    renderApp();
     expect(screen.queryByLabelText('ID de organización')).toBeNull();
     await user.type(await screen.findByLabelText('Correo operativo'), 'driver@example.test');
     await user.type(screen.getByLabelText('Contraseña'), 'password');
@@ -82,7 +88,7 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(null);
     const login = vi.spyOn(api, 'login');
 
-    render(<App />);
+    renderApp();
     await user.click(await screen.findByRole('button', { name: /Ingresar/ }));
     expect(await screen.findByText('Ingresa tu correo.')).toBeTruthy();
     expect(screen.getByText('Ingresa tu contraseña.')).toBeTruthy();
@@ -107,10 +113,10 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order, secondOrder]));
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
 
-    render(<App />);
+    renderApp();
     await screen.findByRole('heading', { name: 'Estado del reparto' });
 
-    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
+    await user.click(screen.getByRole('link', { name: 'Pedidos' }));
     expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
     // With thousands of orders the menu must stay usable: it never lists order codes.
     expect(screen.queryByRole('button', { name: 'Pedido LIM-2042' })).toBeNull();
@@ -125,13 +131,13 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByText('R-041')).toBeTruthy();
     expect(screen.getByRole('button', { name: /Iniciar ruta/ })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Evidencia de entrega' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Clientes' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Pedidos' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Clientes' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Pedidos' })).toBeNull();
   });
 
   it('lets administrators switch between customer and order management', async () => {
@@ -147,13 +153,13 @@ describe('role-specific delivery workspace', () => {
     });
     vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order]));
 
-    render(<App />);
+    renderApp();
 
-    await user.click(await screen.findByRole('button', { name: 'Clientes' }));
+    await user.click(await screen.findByRole('link', { name: 'Clientes' }));
     expect(await screen.findByRole('heading', { name: 'Clientes' })).toBeTruthy();
     expect(await screen.findByText('Lima Supply')).toBeTruthy();
 
-    await user.click(screen.getByRole('button', { name: 'Pedidos' }));
+    await user.click(screen.getByRole('link', { name: 'Pedidos' }));
     expect(await screen.findByRole('heading', { name: 'Pedidos' })).toBeTruthy();
     expect((await screen.findAllByText('LIM-2041')).length).toBeGreaterThan(0);
   });
@@ -163,26 +169,26 @@ describe('role-specific delivery workspace', () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
 
-    render(<App />);
-    await user.click(await screen.findByRole('button', { name: 'Torre de control' }));
+    renderApp();
+    await user.click(await screen.findByRole('link', { name: 'Torre de control' }));
     expect(await screen.findByRole('heading', { name: 'Torre de control' })).toBeTruthy();
 
     cleanup();
     vi.restoreAllMocks();
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
-    render(<App />);
+    renderApp();
     await screen.findByText('R-041');
-    expect(screen.queryByRole('button', { name: 'Torre de control' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Torre de control' })).toBeNull();
   });
 
   it('opens the operational dashboard by default for operators', async () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByRole('heading', { name: 'Estado del reparto' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Resumen' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Resumen' }).getAttribute('aria-current')).toBe('page');
   });
 
   it('shows driver administration to operators but not DRIVER accounts', async () => {
@@ -191,34 +197,34 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'listDrivers').mockResolvedValue([]);
     vi.spyOn(api, 'listDriverAccounts').mockResolvedValue([]);
 
-    render(<App />);
-    await user.click(await screen.findByRole('button', { name: 'Conductores' }));
+    renderApp();
+    await user.click(await screen.findByRole('link', { name: 'Conductores' }));
     expect(await screen.findByRole('heading', { name: 'Conductores' })).toBeTruthy();
 
     cleanup();
     vi.restoreAllMocks();
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
-    render(<App />);
+    renderApp();
     await screen.findByText('R-041');
-    expect(screen.queryByRole('button', { name: 'Conductores' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Conductores' })).toBeNull();
   });
 
   it('opens vehicle management for operators while keeping it out of the DRIVER workspace', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
     vi.spyOn(api, 'listVehicles').mockResolvedValue([]);
-    render(<App />);
-    await user.click(await screen.findByRole('button', { name: 'Vehículos' }));
+    renderApp();
+    await user.click(await screen.findByRole('link', { name: 'Vehículos' }));
     expect(await screen.findByRole('heading', { name: 'Vehículos' })).toBeTruthy();
 
     cleanup();
     vi.restoreAllMocks();
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
-    render(<App />);
+    renderApp();
     await screen.findByText('R-041');
-    expect(screen.queryByRole('button', { name: 'Vehículos' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Vehículos' })).toBeNull();
   });
 
   it('lets an operator look up private evidence by order code', async () => {
@@ -228,8 +234,8 @@ describe('role-specific delivery workspace', () => {
     const listEvidence = vi.spyOn(api, 'listEvidence').mockResolvedValue([evidence]);
     const listEvidencePage = vi.spyOn(api, 'listEvidencePage').mockResolvedValue({ data: [], meta: { page: 1, pageSize: 8, total: 0 } });
 
-    render(<App />);
-    await user.click(await screen.findByRole('button', { name: 'Evidencias' }));
+    renderApp();
+    await user.click(await screen.findByRole('link', { name: 'Evidencias' }));
     await user.type(await screen.findByLabelText('Código del pedido'), 'LIM-2041');
 
     expect(await screen.findByText('Foto 1')).toBeTruthy();
@@ -250,7 +256,7 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(activeRoute);
     const completeRoute = vi.spyOn(api, 'completeRoute');
 
-    render(<App />);
+    renderApp();
     expect(await screen.findByText('LIM-2041')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Finalizar ruta/ })).toBeNull();
     expect(completeRoute).not.toHaveBeenCalled();
@@ -268,8 +274,49 @@ describe('role-specific delivery workspace', () => {
     vi.spyOn(api, 'getMyRoute').mockResolvedValue(routeWithOutcomes);
     const completeRoute = vi.spyOn(api, 'completeRoute').mockResolvedValue({ ...routeWithOutcomes, status: 'completed' });
 
-    render(<App />);
+    renderApp();
     await user.click(await screen.findByRole('button', { name: /Finalizar ruta/ }));
     await waitFor(() => expect(completeRoute).toHaveBeenCalledWith(route.id));
+  });
+  it('opens a screen straight from its URL, so it survives a reload', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
+    vi.spyOn(api, 'listVehicles').mockResolvedValue([]);
+
+    renderApp('/app/vehiculos');
+
+    expect(await screen.findByRole('heading', { name: 'Vehículos' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Vehículos' }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('opens an order detail from its own URL', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+    vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order]));
+
+    renderApp('/app/pedidos/LIM-2041');
+
+    expect(await screen.findByRole('heading', { name: 'LIM-2041' })).toBeTruthy();
+    // The detail Sheet is modal, so the sidebar behind it is hidden from assistive tech.
+    expect(screen.getByRole('link', { name: 'Pedidos', hidden: true }).getAttribute('aria-current')).toBe('page');
+  });
+
+  it('sends unknown addresses and the site root to the ERP', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+
+    renderApp('/app/no-existe');
+    expect(await screen.findByRole('heading', { name: 'Estado del reparto' })).toBeTruthy();
+
+    cleanup();
+    renderApp('/');
+    expect(await screen.findByRole('heading', { name: 'Estado del reparto' })).toBeTruthy();
+  });
+
+  it('keeps drivers on their route when they open an operator URL', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
+    vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
+
+    renderApp('/app/clientes');
+
+    expect(await screen.findByText('R-041')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Clientes' })).toBeNull();
   });
 });

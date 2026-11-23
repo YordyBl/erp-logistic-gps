@@ -1,4 +1,5 @@
 import { Route } from 'lucide-react';
+import { Link } from 'react-router';
 
 import type { AuthSession } from '../api/client.js';
 import { BrandMark } from '../components/BrandMark.js';
@@ -6,17 +7,16 @@ import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem,
   SidebarRail, useSidebar,
 } from '../components/ui/sidebar.js';
-import { isNavItemActive, NAV_ITEMS, type NavItem, type NavView, type OperatorView } from './navigation.js';
+import { isNavItemActive, NAV_ITEMS, viewPath, type NavItem, type OperatorView } from './navigation.js';
 import { NavUser } from './NavUser.js';
 
 interface AppSidebarProps {
   readonly session: AuthSession;
   readonly activeView: OperatorView;
-  readonly onNavigate: (view: NavView) => void;
   readonly onSignOut: () => void;
 }
 
-export function AppSidebar({ session, activeView, onNavigate, onSignOut }: AppSidebarProps) {
+export function AppSidebar({ session, activeView, onSignOut }: AppSidebarProps) {
   const { isMobile, setOpenMobile } = useSidebar();
   const isDriver = session.user.role === 'DRIVER';
 
@@ -24,9 +24,11 @@ export function AppSidebar({ session, activeView, onNavigate, onSignOut }: AppSi
     const active = isNavItemActive(view, activeView);
     return (
       <SidebarMenuItem key={view}>
-        <SidebarMenuButton tooltip={label} isActive={active} aria-current={active ? 'page' : undefined}
-          onClick={() => { onNavigate(view); if (isMobile) setOpenMobile(false); }}>
-          <Icon aria-hidden="true" /> <span>{label}</span>
+        <SidebarMenuButton asChild tooltip={label} isActive={active}>
+          <Link to={viewPath(view)} aria-current={active ? 'page' : undefined}
+            onClick={() => { if (isMobile) setOpenMobile(false); }}>
+            <Icon aria-hidden="true" /> <span>{label}</span>
+          </Link>
         </SidebarMenuButton>
       </SidebarMenuItem>
     );

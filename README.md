@@ -12,7 +12,7 @@ remain pending.
 
 ## Quick path
 
-Prerequisites: Node.js 22.13+ (`.nvmrc` provided), Docker Engine and Docker Compose. The
+Prerequisites: Node.js 22.23.4+ (`.nvmrc` provided; the public site uses Astro, which requires it), Docker Engine and Docker Compose. The
 demo overlay needs Compose >= 2.20. Docker Compose builds the API and React web images and runs
 PostgreSQL and MinIO for a local end-to-end test. No Docker is required for unit and HTTP suites.
 
@@ -29,7 +29,8 @@ docker compose up --build
 |---|---|
 | API liveness | http://localhost:3000/healthz |
 | API readiness (PostgreSQL) | http://localhost:3000/readyz |
-| Web app | http://localhost:8080 |
+| Public site | http://localhost:8080 |
+| Web app (ERP) | http://localhost:8080/app |
 | MinIO console | http://localhost:9001 |
 
 Migrations are a one-shot job, not part of API boot. Run them before starting the full stack so
@@ -109,7 +110,7 @@ export LOGIN_ORGANIZATION_ID=<organization-id-printed-by-seed>
 docker compose up -d api
 ```
 
-Open http://localhost:8080 and sign in with one of these local-only accounts:
+Open http://localhost:8080/app and sign in with one of these local-only accounts:
 
 | Role | Email | Password |
 |---|---|---|
