@@ -79,6 +79,12 @@ export class CreateUserUseCase {
       role: command.role,
       status: 'active',
       createdAt: this.dependencies.clock.now(),
+      name: {
+        firstName: command.firstName,
+        paternalSurname: command.paternalSurname,
+        maternalSurname: command.maternalSurname,
+      },
+      lastLoginAt: null,
     });
 
     await this.dependencies.users.save(user);

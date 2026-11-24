@@ -13,7 +13,7 @@ import {
   CryptoIdGenerator,
   type IdentityModule,
 } from '../modules/identity-and-access/composition/composition-root.js';
-import { User } from '../modules/identity-and-access/domain/entities/User.js';
+import { User, type PersonName } from '../modules/identity-and-access/domain/entities/User.js';
 import { OrganizationEntity } from '../modules/identity-and-access/infrastructure/persistence/entities/OrganizationEntity.js';
 import { SystemClock, type Clock } from '../shared/clock.js';
 
@@ -47,29 +47,33 @@ interface DemoUserSeed {
   readonly role: 'ADMIN' | 'DISPATCHER' | 'DRIVER';
   readonly email: string;
   readonly password: string;
+  readonly name: PersonName;
 }
 
 /**
  * Documented demo credentials. The password policy applies (at least 10
  * characters, one letter and one digit), and they are intentionally weak
- * because they are public.
+ * because they are public. Names are fictional demo data.
  */
 const DEMO_ADMIN: DemoUserSeed = {
   role: 'ADMIN',
   email: 'admin@demo.lima',
   password: 'Admin-demo-1',
+  name: { firstName: 'Carla', paternalSurname: 'Benites', maternalSurname: 'Rojas' },
 };
 
 const DEMO_DISPATCHER: DemoUserSeed = {
   role: 'DISPATCHER',
   email: 'dispatcher@demo.lima',
   password: 'Dispatcher-demo-1',
+  name: { firstName: 'Óscar', paternalSurname: 'Ramírez', maternalSurname: 'Paredes' },
 };
 
 const DEMO_DRIVER: DemoUserSeed = {
   role: 'DRIVER',
   email: 'driver@demo.lima',
   password: 'Driver-demo-1',
+  name: { firstName: 'Jorge', paternalSurname: 'Huamán', maternalSurname: 'Quispe' },
 };
 
 const DEMO_USERS: readonly DemoUserSeed[] = [
@@ -203,6 +207,7 @@ async function ensureAdminUser(
   );
 
   if (existing !== null) {
+    await completeMissingName(identity, existing, DEMO_ADMIN);
     return { id: existing.id, created: false };
   }
 
@@ -214,6 +219,7 @@ async function ensureAdminUser(
     role: DEMO_ADMIN.role,
     status: 'active',
     createdAt: clock.now(),
+    name: DEMO_ADMIN.name,
   });
 
   await identity.users.save(admin);
@@ -231,6 +237,7 @@ async function ensureInvitedUser(
   const existing = await identity.users.findByEmail(organizationId, seed.email);
 
   if (existing !== null) {
+    await completeMissingName(identity, existing, seed);
     return { seed, created: false };
   }
 
@@ -240,9 +247,22 @@ async function ensureInvitedUser(
     email: seed.email,
     password: seed.password,
     role: seed.role,
+    firstName: seed.name.firstName,
+    paternalSurname: seed.name.paternalSurname,
+    maternalSurname: seed.name.maternalSurname,
   });
 
   return { seed, created: true };
+}
+
+/**
+ * Accounts seeded before names existed get the demo name; the password, role
+ * and status are left as they are.
+ */
+async function completeMissingName(identity: IdentityModule, user: User, seed: DemoUserSeed): Promise<void> {
+  if (user.name !== null) return;
+  await identity.users.save(user.with({ name: seed.name }));
+  log(`${seed.email}: demo name completed`);
 }
 
 /**

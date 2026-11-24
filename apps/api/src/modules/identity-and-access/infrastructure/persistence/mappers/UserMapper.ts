@@ -21,6 +21,10 @@ export function toUserEntity(user: User): UserEntity {
   entity.role = user.role;
   entity.status = user.status;
   entity.createdAt = new Date(user.createdAt);
+  entity.firstName = user.name?.firstName ?? null;
+  entity.paternalSurname = user.name?.paternalSurname ?? null;
+  entity.maternalSurname = user.name?.maternalSurname ?? null;
+  entity.lastLoginAt = user.lastLoginAt === null ? null : new Date(user.lastLoginAt);
 
   return entity;
 }
@@ -42,5 +46,13 @@ export function toUserDomain(entity: UserEntity): User {
     role: entity.role,
     status: entity.status,
     createdAt: entity.createdAt.toISOString(),
+    name: entity.firstName === null || entity.paternalSurname === null
+      ? null
+      : {
+        firstName: entity.firstName,
+        paternalSurname: entity.paternalSurname,
+        maternalSurname: entity.maternalSurname,
+      },
+    lastLoginAt: entity.lastLoginAt === null ? null : entity.lastLoginAt.toISOString(),
   });
 }

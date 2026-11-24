@@ -78,4 +78,15 @@ export class RefreshTokenTypeOrmStore implements RefreshTokenStore {
       .andWhere('"revoked_at" IS NULL')
       .execute();
   }
+
+  async revokeAllForUser(userId: string, revokedAt: string): Promise<void> {
+    await this.dataSource
+      .getRepository(RefreshTokenEntity)
+      .createQueryBuilder()
+      .update()
+      .set({ revokedAt: new Date(revokedAt) })
+      .where('"user_id" = :userId', { userId })
+      .andWhere('"revoked_at" IS NULL')
+      .execute();
+  }
 }

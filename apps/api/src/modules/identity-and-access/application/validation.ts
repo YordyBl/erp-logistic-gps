@@ -1,6 +1,6 @@
 import { z, type ZodError } from 'zod';
 
-import { EMAIL_MAX_LENGTH, EMAIL_PATTERN } from '../domain/entities/User.js';
+import { EMAIL_MAX_LENGTH, EMAIL_PATTERN, NAME_PART_MAX_LENGTH } from '../domain/entities/User.js';
 import { IdentityValidationError } from '../domain/errors/IdentityError.js';
 
 /**
@@ -18,6 +18,16 @@ export const emailSchema = z
   .regex(EMAIL_PATTERN, 'email must be a valid address');
 
 export const refreshTokenSchema = z.string().min(1).max(512);
+
+/** Nombres and apellido paterno are required; apellido materno may be empty. */
+export const requiredNamePartSchema = z.string().trim().min(1).max(NAME_PART_MAX_LENGTH);
+export const optionalNamePartSchema = z
+  .string()
+  .trim()
+  .max(NAME_PART_MAX_LENGTH)
+  .nullable()
+  .optional()
+  .transform((value) => (value === undefined || value === null || value === '' ? null : value));
 
 /** Converts a Zod failure into the module's typed boundary error. */
 export function toIdentityValidationError(

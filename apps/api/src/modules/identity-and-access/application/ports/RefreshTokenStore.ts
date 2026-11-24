@@ -32,4 +32,6 @@ export interface RefreshTokenStore {
   findByHash(tokenHash: string): Promise<StoredRefreshToken | null>;
   revokeOne(tokenId: string, revokedAt: string): Promise<boolean>;
   revokeFamily(familyId: string, revokedAt: string): Promise<void>;
+  /** Ends every live session of a user (disabled account or password reset). */
+  revokeAllForUser(userId: string, revokedAt: string): Promise<void>;
 }

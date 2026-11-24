@@ -53,4 +53,17 @@ export class UserEntity {
 
   @Column({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
+
+  /** Nombres; NULL only for accounts created before names were recorded. */
+  @Column({ name: 'first_name', type: 'varchar', length: 60, nullable: true })
+  firstName!: string | null;
+
+  @Column({ name: 'paternal_surname', type: 'varchar', length: 60, nullable: true })
+  paternalSurname!: string | null;
+
+  @Column({ name: 'maternal_surname', type: 'varchar', length: 60, nullable: true })
+  maternalSurname!: string | null;
+
+  @Column({ name: 'last_login_at', type: 'timestamptz', nullable: true })
+  lastLoginAt!: Date | null;
 }

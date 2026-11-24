@@ -28,9 +28,10 @@ the in-memory login limiter wired by the process composition root.
 
 | In scope | Out of scope (later tasks) |
 |---|---|
-| `Organization` and `User` entities, roles and statuses | Password reset, invitations by email, user disable/enable use cases |
+| `Organization` and `User` entities, roles and statuses | Invitations by email, self-service password change |
 | Password policy and Argon2id hashing | Key rotation, asymmetric keys, JWKS |
 | ADMIN-only user provisioning (use case + `POST /api/v1/users`) | Scheduled cleanup of expired rows |
+| ADMIN user administration: list, change name/role/status, set a temporary password (`GET /users`, `PATCH /users/:id`, `PUT /users/:id/password`); names as nombres + apellido paterno + materno; last sign-in | |
 | Login, refresh rotation with reuse detection, idempotent logout | Demo seed and documented demo credentials (T4) |
 | HS256 access tokens with an explicit claim set | Corporate-client role (explicitly out of the MVP) |
 | Refresh-token family model and server-side hash storage | Shared (Redis) rate-limit storage |

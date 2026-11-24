@@ -16,4 +16,6 @@ export interface UserRepository {
   findById(userId: string): Promise<User | null>;
   findByEmail(organizationId: string, email: string): Promise<User | null>;
   listByOrganizationAndRole(organizationId: string, role: UserRole): Promise<User[]>;
+  /** Every user of the tenant, ordered by email then id. */
+  listByOrganization(organizationId: string): Promise<User[]>;
 }

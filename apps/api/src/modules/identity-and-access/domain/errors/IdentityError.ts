@@ -137,3 +137,21 @@ export class WeakPasswordError extends DomainError {
     this.reasons = reasons;
   }
 }
+
+/** An ADMIN tried to change their own role or disable their own account. */
+export class SelfChangeForbiddenError extends DomainError {
+  readonly code = 'IDENTITY_SELF_CHANGE_FORBIDDEN';
+
+  constructor() {
+    super('An administrator cannot change their own role or disable their own account');
+  }
+}
+
+/** A DRIVER account linked to a catalog driver cannot change role until unlinked. */
+export class DriverAccountLinkedError extends DomainError {
+  readonly code = 'IDENTITY_DRIVER_ACCOUNT_LINKED';
+
+  constructor() {
+    super('The account is linked to a driver; unlink it before changing its role');
+  }
+}

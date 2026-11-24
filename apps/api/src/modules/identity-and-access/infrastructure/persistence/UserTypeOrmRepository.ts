@@ -50,6 +50,15 @@ export class UserTypeOrmRepository implements UserRepository {
 
     return entities.map(toUserDomain);
   }
+
+  async listByOrganization(organizationId: string): Promise<User[]> {
+    const entities = await this.dataSource.getRepository(UserEntity).find({
+      where: { organizationId },
+      order: { email: 'ASC', id: 'ASC' },
+    });
+
+    return entities.map(toUserDomain);
+  }
 }
 
 function translateUserPersistenceError(error: unknown, user: User): Error {

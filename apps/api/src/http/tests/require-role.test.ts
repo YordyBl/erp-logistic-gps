@@ -64,6 +64,9 @@ function validUserBody(overrides: Record<string, unknown> = {}): Record<string, 
     email: NEW_USER_EMAIL,
     password: NEW_USER_PASSWORD,
     role: 'DISPATCHER',
+    firstName: 'Óscar',
+    paternalSurname: 'Ramírez',
+    maternalSurname: 'Paredes',
     ...overrides,
   };
 }

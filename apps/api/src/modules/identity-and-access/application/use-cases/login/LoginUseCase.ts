@@ -73,6 +73,10 @@ export class LoginUseCase {
     const now = this.dependencies.clock.now();
     const familyId = this.dependencies.idGenerator.nextId();
 
+    // «Último acceso» on the user administration screen; NULL means the
+    // account never signed in («Sin primer ingreso»).
+    await this.dependencies.users.save(user.with({ lastLoginAt: now }));
+
     return createSession(user, familyId, now, {
       tokenService: this.dependencies.tokenService,
       refreshTokens: this.dependencies.refreshTokens,

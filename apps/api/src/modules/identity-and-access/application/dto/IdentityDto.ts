@@ -9,6 +9,12 @@ export interface UserDto {
   readonly role: UserRole;
   readonly status: UserStatus;
   readonly createdAt: string;
+  /** Null together for accounts created before names were recorded. */
+  readonly firstName: string | null;
+  readonly paternalSurname: string | null;
+  readonly maternalSurname: string | null;
+  /** Last successful sign-in; null when the account never signed in. */
+  readonly lastLoginAt: string | null;
 }
 
 /** Minimal identity carried inside an authenticated session. */
@@ -33,6 +39,10 @@ export function toUserDto(user: User): UserDto {
     role: user.role,
     status: user.status,
     createdAt: user.createdAt,
+    firstName: user.name?.firstName ?? null,
+    paternalSurname: user.name?.paternalSurname ?? null,
+    maternalSurname: user.name?.maternalSurname ?? null,
+    lastLoginAt: user.lastLoginAt,
   };
 }
 

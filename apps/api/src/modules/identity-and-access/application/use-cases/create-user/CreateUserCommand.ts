@@ -4,6 +4,8 @@ import { USER_ROLES } from '../../../domain/entities/User.js';
 import { assertPasswordPolicy } from '../../../domain/policies/password-policy.js';
 import {
   emailSchema,
+  optionalNamePartSchema,
+  requiredNamePartSchema,
   toIdentityValidationError,
 } from '../../validation.js';
 
@@ -20,6 +22,9 @@ export const createUserCommandSchema = z.strictObject({
   email: emailSchema,
   password: z.string(),
   role: z.enum(USER_ROLES),
+  firstName: requiredNamePartSchema,
+  paternalSurname: requiredNamePartSchema,
+  maternalSurname: optionalNamePartSchema,
 });
 
 export type CreateUserCommand = z.infer<typeof createUserCommandSchema>;

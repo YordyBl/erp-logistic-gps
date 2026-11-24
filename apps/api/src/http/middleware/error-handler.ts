@@ -20,6 +20,7 @@ import {
   DriverValidationError,
 } from '../../modules/drivers/domain/errors/DriverError.js';
 import {
+  DriverAccountLinkedError,
   EmailAlreadyInUseError,
   ForbiddenRoleError,
   IdentityValidationError,
@@ -27,6 +28,7 @@ import {
   InvalidTokenError,
   RefreshNotFoundError,
   RefreshReuseDetectedError,
+  SelfChangeForbiddenError,
   UserNotFoundError,
   WeakPasswordError,
 } from '../../modules/identity-and-access/domain/errors/IdentityError.js';
@@ -250,7 +252,11 @@ function mapError(error: unknown): MappedError {
     };
   }
 
-  if (error instanceof EmailAlreadyInUseError) {
+  if (
+    error instanceof EmailAlreadyInUseError ||
+    error instanceof SelfChangeForbiddenError ||
+    error instanceof DriverAccountLinkedError
+  ) {
     return {
       statusCode: 409,
       code: error.code,

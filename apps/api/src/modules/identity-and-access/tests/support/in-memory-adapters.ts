@@ -72,6 +72,12 @@ export class InMemoryUserRepository implements UserRepository {
       .filter((user) => user.organizationId === organizationId && user.role === role)
       .sort((left, right) => left.email.localeCompare(right.email) || left.id.localeCompare(right.id));
   }
+
+  async listByOrganization(organizationId: string): Promise<User[]> {
+    return [...this.users.values()]
+      .filter((user) => user.organizationId === organizationId)
+      .sort((left, right) => left.email.localeCompare(right.email) || left.id.localeCompare(right.id));
+  }
 }
 
 /** In-memory refresh-token store with the production revocation contract. */
@@ -106,6 +112,14 @@ export class InMemoryRefreshTokenStore implements RefreshTokenStore {
   async revokeFamily(familyId: string, revokedAt: string): Promise<void> {
     for (const [tokenId, token] of this.tokens) {
       if (token.familyId === familyId && token.revokedAt === null) {
+        this.tokens.set(tokenId, { ...token, revokedAt });
+      }
+    }
+  }
+
+  async revokeAllForUser(userId: string, revokedAt: string): Promise<void> {
+    for (const [tokenId, token] of this.tokens) {
+      if (token.userId === userId && token.revokedAt === null) {
         this.tokens.set(tokenId, { ...token, revokedAt });
       }
     }

@@ -5,6 +5,9 @@ import type { LoginRateLimitConfig } from '../config/config.js';
 import type { TokenService } from '../modules/identity-and-access/application/ports/TokenService.js';
 import type { UserRepository } from '../modules/identity-and-access/application/ports/UserRepository.js';
 import type { CreateUserUseCase } from '../modules/identity-and-access/application/use-cases/create-user/CreateUserUseCase.js';
+import type { ListUsersUseCase } from '../modules/identity-and-access/application/use-cases/list-users/ListUsersUseCase.js';
+import type { ResetUserPasswordUseCase } from '../modules/identity-and-access/application/use-cases/reset-user-password/ResetUserPasswordUseCase.js';
+import type { UpdateUserUseCase } from '../modules/identity-and-access/application/use-cases/update-user/UpdateUserUseCase.js';
 import type { LoginUseCase } from '../modules/identity-and-access/application/use-cases/login/LoginUseCase.js';
 import type { LogoutUseCase } from '../modules/identity-and-access/application/use-cases/logout/LogoutUseCase.js';
 import type { RefreshSessionUseCase } from '../modules/identity-and-access/application/use-cases/refresh-session/RefreshSessionUseCase.js';
@@ -40,6 +43,7 @@ import {
 } from './routes/health.routes.js';
 import { createUsersRouter } from './routes/users.routes.js';
 import { createDispatchDashboardRouter, type DispatchDashboardQuery } from './routes/dispatch-dashboard.routes.js';
+import { createReportsRouter, type OperationsReportQuery } from './routes/reports.routes.js';
 import { createVehicleRouteStatsRouter, type VehicleRouteStatsQuery } from './routes/vehicle-route-stats.routes.js';
 import type { TrackingWebSocketHub } from '../modules/delivery-tracking/infrastructure/TrackingWebSocketHub.js';
 import {
@@ -65,6 +69,9 @@ export interface AuthHttpDependencies {
   readonly refreshSession: RefreshSessionUseCase;
   readonly logout: LogoutUseCase;
   readonly createUser: CreateUserUseCase;
+  readonly listUsers: ListUsersUseCase;
+  readonly updateUser: UpdateUserUseCase;
+  readonly resetUserPassword: ResetUserPasswordUseCase;
   readonly users: UserRepository;
   readonly tokenService: TokenService;
   readonly cookie: RefreshCookieConfig;
@@ -99,6 +106,8 @@ export interface AppDependencies {
   readonly dispatchDashboard?: DispatchDashboardQuery;
   /** Per-vehicle route aggregates (`GET /vehicles/route-stats`); optional only for HTTP test callers. */
   readonly vehicleRouteStats?: VehicleRouteStatsQuery;
+  /** Period reports (`GET /reports/operations`); optional only for HTTP test callers. */
+  readonly reports?: OperationsReportQuery;
   /** Identity use cases and ports used by the auth and user routes. */
   readonly auth: AuthHttpDependencies;
   /** Customer, driver and vehicle catalogs. */
@@ -129,6 +138,7 @@ export function buildApp({
   routeTrack,
   dispatchDashboard,
   vehicleRouteStats,
+  reports,
   auth,
   catalogs,
   readiness,
@@ -193,10 +203,35 @@ export function buildApp({
   );
   app.use(
     '/api/v1/users',
-    createUsersRouter({ createUser: auth.createUser }, authenticate),
+    createUsersRouter({
+      createUser: auth.createUser,
+      listUsers: auth.listUsers,
+      updateUser: auth.updateUser,
+      resetUserPassword: auth.resetUserPassword,
+      driverLinks: {
+        linkedDrivers: async (organizationId) => {
+          const [{ accounts }, { drivers }] = await Promise.all([
+            catalogs.drivers.bindDriverAccount.listAccounts(organizationId),
+            catalogs.drivers.listDrivers.execute({ organizationId }),
+          ]);
+          const nameById = new Map(drivers.map((driver) => [driver.id, driver.fullName]));
+          const links = new Map<string, { id: string; fullName: string }>();
+          for (const account of accounts) {
+            const fullName = account.driverId === null ? undefined : nameById.get(account.driverId);
+            if (account.driverId !== null && fullName !== undefined) {
+              links.set(account.userId, { id: account.driverId, fullName });
+            }
+          }
+          return links;
+        },
+      },
+    }, authenticate),
   );
   if (dispatchDashboard !== undefined) {
     app.use('/api/v1/dashboard', createDispatchDashboardRouter(dispatchDashboard, authenticate));
+  }
+  if (reports !== undefined) {
+    app.use('/api/v1/reports', createReportsRouter(reports, authenticate));
   }
   // Delivery-execution has narrower per-route role gates (including DRIVER
   // evidence uploads). Mount it before the role-restricted order catalog so

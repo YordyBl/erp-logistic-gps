@@ -28,6 +28,8 @@ function createCommand(overrides: Record<string, unknown> = {}): Record<string, 
     email: 'ana.torres@lima.test',
     password: 'delivery2026',
     role: 'DISPATCHER',
+    firstName: 'Ana',
+    paternalSurname: 'Torres',
     ...overrides,
   };
 }
@@ -48,6 +50,10 @@ describe('CreateUser', () => {
       role: 'DISPATCHER',
       status: 'active',
       createdAt: expect.any(String) as string,
+      firstName: 'Ana',
+      paternalSurname: 'Torres',
+      maternalSurname: null,
+      lastLoginAt: null,
     });
 
     const stored = await context.module.users.findById(NEW_USER_ID);

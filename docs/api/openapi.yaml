@@ -113,6 +113,66 @@ paths:
                     status: not_ready
                     checks:
                       database: down
+  /api/v1/reports/operations:
+    get:
+      tags: [reports]
+      operationId: getOperationsReport
+      summary: Period report of the operation (ADMIN, DISPATCHER)
+      description: |
+        Days are Lima calendar days, both ends inclusive, at most 366 per period.
+        KPIs come as raw counts so every rate can be traced: orders created,
+        closed attempts (delivered or failed), first attempts and the mean time
+        between stop closures of a route. Returned orders are counted from failed
+        attempts, because a returned order can be planned again. The weekly
+        series covers the 8 weeks (Monday start) ending with the week of `to`.
+        Simulator completions are excluded unless `includeSimulated=true`;
+        `kpis.simulatedAttempts` always tells how many exist in the period.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+        - { name: compareFrom, in: query, required: false, schema: { type: string, format: date }, description: Sent together with compareTo. }
+        - { name: compareTo, in: query, required: false, schema: { type: string, format: date } }
+        - { name: includeSimulated, in: query, required: false, schema: { type: string, enum: ['true', 'false'], default: 'false' } }
+      responses:
+        '200':
+          description: Report of the period and, when asked, of the comparison period.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [period, comparison, includeSimulated, kpis, comparisonKpis, weekly, incidents, districts, drivers]
+                    properties:
+                      period: { type: object, properties: { from: { type: string, format: date }, to: { type: string, format: date } } }
+                      comparison: { oneOf: [{ type: 'null' }, { type: object, properties: { from: { type: string, format: date }, to: { type: string, format: date } } }] }
+                      includeSimulated: { type: boolean }
+                      kpis: { $ref: '#/components/schemas/ReportKpis' }
+                      comparisonKpis: { oneOf: [{ type: 'null' }, { $ref: '#/components/schemas/ReportKpis' }] }
+                      weekly:
+                        type: array
+                        items: { type: object, properties: { weekStart: { type: string, format: date }, delivered: { type: integer }, returned: { type: integer }, cancelled: { type: integer } } }
+                      incidents:
+                        type: array
+                        items: { type: object, properties: { category: { type: string }, count: { type: integer } } }
+                      districts:
+                        type: array
+                        maxItems: 50
+                        items: { type: object, properties: { district: { type: string }, orders: { type: integer }, firstAttempts: { type: integer }, firstAttemptDelivered: { type: integer }, closedAttempts: { type: integer }, returned: { type: integer } } }
+                      drivers:
+                        type: array
+                        maxItems: 50
+                        items: { type: object, properties: { driverId: { type: string, format: uuid }, fullName: { type: string }, routes: { type: integer }, deliveries: { type: integer }, firstAttempts: { type: integer }, firstAttemptDelivered: { type: integer }, closedAttempts: { type: integer }, returned: { type: integer } } }
+        '400':
+          description: '`REPORT_INVALID_QUERY`: missing or impossible days, a reversed or too long period, or half a comparison.'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /api/v1/dashboard:
     get:
       tags: [dashboard]
@@ -350,6 +410,23 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
   /api/v1/users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List the accounts of the caller organization (ADMIN only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Every account of the organization, ordered by email, with its linked driver.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [users]
       operationId: createUser
@@ -376,6 +453,9 @@ paths:
                   email: new.dispatcher@lima.test
                   password: temporary-pass-1
                   role: DISPATCHER
+                  firstName: Óscar
+                  paternalSurname: Ramírez
+                  maternalSurname: Paredes
       responses:
         '201':
           description: User created. The password hash is never returned.
@@ -396,6 +476,81 @@ paths:
           $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalServerError'
+  /api/v1/users/{userId}:
+    patch:
+      tags: [users]
+      operationId: updateUser
+      summary: Change a user's name, role or status (ADMIN only)
+      description: |
+        An ADMIN cannot change their own role nor disable themselves
+        (`IDENTITY_SELF_CHANGE_FORBIDDEN`, 409), which keeps an active ADMIN in
+        the organization. A DRIVER account linked to a driver keeps its role
+        until unlinked (`IDENTITY_DRIVER_ACCOUNT_LINKED`, 409). Disabling ends
+        every session of the account.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: Updated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/users/{userId}/password:
+    put:
+      tags: [users]
+      operationId: resetUserPassword
+      summary: Set a new temporary password (ADMIN only)
+      description: There is no email flow; the ADMIN hands the password over. Every session of the account ends.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetUserPasswordRequest'
+      responses:
+        '204':
+          description: Password replaced.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/delivery-routes:
     get:
       tags: [delivery-routes]
@@ -2830,6 +2985,19 @@ components:
                     items:
                       type: string
                       format: uuid
+    ReportKpis:
+      type: object
+      required: [orders, closedAttempts, delivered, returned, firstAttempts, firstAttemptDelivered, avgStopSeconds, timedStops, simulatedAttempts]
+      properties:
+        orders: { type: integer, description: Orders created in the period. }
+        closedAttempts: { type: integer }
+        delivered: { type: integer }
+        returned: { type: integer, description: Failed attempts (the order was returned). }
+        firstAttempts: { type: integer }
+        firstAttemptDelivered: { type: integer }
+        avgStopSeconds: { type: [integer, 'null'], description: Mean time between consecutive stop closures of a route; the first from the route start. }
+        timedStops: { type: integer }
+        simulatedAttempts: { type: integer, description: Simulator completions in the period, included or not. }
     UserRole:
       type: string
       enum: [ADMIN, DISPATCHER, DRIVER]
@@ -2855,7 +3023,7 @@ components:
     User:
       type: object
       additionalProperties: false
-      required: [id, organizationId, email, role, status, createdAt]
+      required: [id, organizationId, email, role, status, createdAt, firstName, paternalSurname, maternalSurname, lastLoginAt]
       properties:
         id:
           type: string
@@ -2873,6 +3041,79 @@ components:
         createdAt:
           type: string
           format: date-time
+        firstName:
+          type: [string, 'null']
+          maxLength: 60
+          description: Nombres. Null (with paternalSurname) only for accounts created before names were recorded.
+        paternalSurname:
+          type: [string, 'null']
+          maxLength: 60
+        maternalSurname:
+          type: [string, 'null']
+          maxLength: 60
+          description: Optional; people with a single surname leave it empty.
+        lastLoginAt:
+          type: [string, 'null']
+          format: date-time
+          description: Last successful sign-in; null when the account never signed in.
+    UserListItem:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          required: [driver]
+          properties:
+            driver:
+              description: Catalog driver linked to the account, if any.
+              oneOf:
+                - type: 'null'
+                - type: object
+                  additionalProperties: false
+                  required: [id, fullName]
+                  properties:
+                    id:
+                      type: string
+                      format: uuid
+                    fullName:
+                      type: string
+    UserListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserListItem'
+    UpdateUserRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        Any name field replaces the whole name: firstName and paternalSurname
+        travel together, and an absent or empty maternalSurname clears it.
+      properties:
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 60
+        paternalSurname:
+          type: string
+          minLength: 1
+          maxLength: 60
+        maternalSurname:
+          type: [string, 'null']
+          maxLength: 60
+        role:
+          $ref: '#/components/schemas/UserRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+    ResetUserPasswordRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: New temporary password; same policy as CreateUserRequest.
     LoginRequest:
       type: object
       additionalProperties: false
@@ -2922,7 +3163,7 @@ components:
     CreateUserRequest:
       type: object
       additionalProperties: false
-      required: [email, password, role]
+      required: [email, password, role, firstName, paternalSurname]
       properties:
         email:
           type: string
@@ -2935,6 +3176,18 @@ components:
             digit. Rejected with `IDENTITY_WEAK_PASSWORD`.
         role:
           $ref: '#/components/schemas/UserRole'
+        firstName:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Nombres.
+        paternalSurname:
+          type: string
+          minLength: 1
+          maxLength: 60
+        maternalSurname:
+          type: [string, 'null']
+          maxLength: 60
     UserResponse:
       type: object
       required: [data]

@@ -10,8 +10,12 @@ import type { PasswordHasher } from '../application/ports/PasswordHasher.js';
 import type { RefreshTokenStore } from '../application/ports/RefreshTokenStore.js';
 import type { TokenService } from '../application/ports/TokenService.js';
 import type { UserRepository } from '../application/ports/UserRepository.js';
+import type { DriverAccountLookup } from '../application/ports/DriverAccountLookup.js';
 import { CreateUserUseCase } from '../application/use-cases/create-user/CreateUserUseCase.js';
+import { ListUsersUseCase } from '../application/use-cases/list-users/ListUsersUseCase.js';
 import { LoginUseCase } from '../application/use-cases/login/LoginUseCase.js';
+import { ResetUserPasswordUseCase } from '../application/use-cases/reset-user-password/ResetUserPasswordUseCase.js';
+import { UpdateUserUseCase } from '../application/use-cases/update-user/UpdateUserUseCase.js';
 import { LogoutUseCase } from '../application/use-cases/logout/LogoutUseCase.js';
 import { RefreshSessionUseCase } from '../application/use-cases/refresh-session/RefreshSessionUseCase.js';
 import { RegisterOrganizationUseCase } from '../application/use-cases/register-organization/RegisterOrganizationUseCase.js';
@@ -56,6 +60,15 @@ export interface IdentityModuleDependencies {
 export interface IdentityModule {
   readonly registerOrganization: RegisterOrganizationUseCase;
   readonly createUser: CreateUserUseCase;
+  readonly listUsers: ListUsersUseCase;
+  readonly updateUser: UpdateUserUseCase;
+  readonly resetUserPassword: ResetUserPasswordUseCase;
+  /**
+   * Binds the `drivers` module's account links. The drivers module is built
+   * after identity (it needs the user repository), so the root binds it late;
+   * until then a role change of a DRIVER account fails loudly.
+   */
+  setDriverAccountLookup(lookup: DriverAccountLookup): void;
   readonly login: LoginUseCase;
   readonly refreshSession: RefreshSessionUseCase;
   readonly logout: LogoutUseCase;
@@ -79,8 +92,31 @@ export function buildIdentityModule(
   const clock = dependencies.clock ?? new SystemClock();
   const idGenerator = dependencies.idGenerator ?? new CryptoIdGenerator();
   const sessionPolicy = dependencies.sessionPolicy ?? DEFAULT_SESSION_POLICY;
+  let driverAccountLookup: DriverAccountLookup | undefined;
+  const driverAccounts: DriverAccountLookup = {
+    isLinkedToDriver: async (organizationId, userId) => {
+      if (driverAccountLookup === undefined) {
+        throw new Error('Driver account lookup is not bound to the identity module');
+      }
+      return driverAccountLookup.isLinkedToDriver(organizationId, userId);
+    },
+  };
 
   return {
+    listUsers: new ListUsersUseCase(dependencies.userRepository),
+    updateUser: new UpdateUserUseCase({
+      users: dependencies.userRepository,
+      refreshTokens: dependencies.refreshTokenStore,
+      driverAccounts,
+      clock,
+    }),
+    resetUserPassword: new ResetUserPasswordUseCase({
+      users: dependencies.userRepository,
+      passwordHasher: dependencies.passwordHasher,
+      refreshTokens: dependencies.refreshTokenStore,
+      clock,
+    }),
+    setDriverAccountLookup: (lookup) => { driverAccountLookup = lookup; },
     registerOrganization: new RegisterOrganizationUseCase({
       organizations: dependencies.organizationRepository,
       idGenerator,

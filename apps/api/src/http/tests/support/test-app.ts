@@ -178,6 +178,10 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
     return `55555555-5555-4555-8555-${String(customerSequence).padStart(12, '0')}`;
   } } });
   const drivers = buildDriversModule({ userRepository: identity.users });
+  identity.setDriverAccountLookup({
+    isLinkedToDriver: async (organizationId, userId) =>
+      (await drivers.accountBindings.findDriverId(organizationId, userId)) !== null,
+  });
   const vehicles = buildVehiclesModule();
   const deliveryRoutes = module.repository instanceof InMemoryDeliveryOrderRepository
     ? (() => {
@@ -202,6 +206,9 @@ export function buildTestApp(options: TestAppOptions = {}): TestApp {
       refreshSession: identity.refreshSession,
       logout: identity.logout,
       createUser: identity.createUser,
+      listUsers: identity.listUsers,
+      updateUser: identity.updateUser,
+      resetUserPassword: identity.resetUserPassword,
       users: identity.users,
       tokenService: identity.tokenService,
       cookie: {

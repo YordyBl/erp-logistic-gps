@@ -15,6 +15,18 @@ export const EMAIL_MAX_LENGTH = 254;
 
 export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+export const NAME_PART_MAX_LENGTH = 60;
+
+/**
+ * Peruvian naming: nombres, apellido paterno and an optional apellido materno
+ * (people with a single surname, such as many foreign residents, leave it out).
+ */
+export interface PersonName {
+  readonly firstName: string;
+  readonly paternalSurname: string;
+  readonly maternalSurname: string | null;
+}
+
 const ISO_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -27,7 +39,13 @@ export interface UserCreateProps {
   readonly role: UserRole;
   readonly status: UserStatus;
   readonly createdAt: string;
+  /** Null only for accounts created before names were recorded. */
+  readonly name?: PersonName | null;
+  /** Last successful sign-in; null when the account never signed in. */
+  readonly lastLoginAt?: string | null;
 }
+
+type UserChanges = Partial<Pick<UserCreateProps, 'passwordHash' | 'role' | 'status' | 'name' | 'lastLoginAt'>>;
 
 /**
  * Platform user inside exactly one organization.
@@ -38,9 +56,9 @@ export interface UserCreateProps {
  * reloaded from storage on every authentication, so a stale access token cannot
  * keep an old role (ADR-003 §2).
  *
- * `passwordHash` is never serialized to a DTO or logged. Status transitions
- * (disable/enable) belong to a later use case; this milestone only creates
- * `active` users.
+ * `passwordHash` is never serialized to a DTO or logged. Role, status, name and
+ * password changes go through {@link User.with}, which re-validates the whole
+ * entity; the ADMIN-only `update-user` use case decides which are allowed.
  */
 export class User {
   readonly id: string;
@@ -50,6 +68,8 @@ export class User {
   readonly role: UserRole;
   readonly status: UserStatus;
   readonly createdAt: string;
+  readonly name: PersonName | null;
+  readonly lastLoginAt: string | null;
 
   private constructor(
     id: string,
@@ -59,6 +79,8 @@ export class User {
     role: UserRole,
     status: UserStatus,
     createdAt: string,
+    name: PersonName | null,
+    lastLoginAt: string | null,
   ) {
     this.id = id;
     this.organizationId = organizationId;
@@ -67,6 +89,24 @@ export class User {
     this.role = role;
     this.status = status;
     this.createdAt = createdAt;
+    this.name = name;
+    this.lastLoginAt = lastLoginAt;
+  }
+
+  /** A copy with some fields replaced, validated like a new entity. */
+  with(changes: UserChanges): User {
+    return User.create({
+      id: this.id,
+      organizationId: this.organizationId,
+      email: this.email,
+      passwordHash: this.passwordHash,
+      role: this.role,
+      status: this.status,
+      createdAt: this.createdAt,
+      name: this.name,
+      lastLoginAt: this.lastLoginAt,
+      ...changes,
+    });
   }
 
   static create(props: UserCreateProps): User {
@@ -115,8 +155,51 @@ export class User {
       props.role,
       props.status,
       requireIsoTimestamp(props.createdAt, 'createdAt'),
+      props.name === undefined || props.name === null ? null : normalizePersonName(props.name),
+      props.lastLoginAt === undefined || props.lastLoginAt === null
+        ? null
+        : requireIsoTimestamp(props.lastLoginAt, 'lastLoginAt'),
     );
   }
+}
+
+/** Trims each part; nombres and apellido paterno are required, materno is optional. */
+export function normalizePersonName(value: PersonName): PersonName {
+  return {
+    firstName: namePart(value.firstName, 'firstName', true)!,
+    paternalSurname: namePart(value.paternalSurname, 'paternalSurname', true)!,
+    maternalSurname: namePart(value.maternalSurname, 'maternalSurname', false),
+  };
+}
+
+/** «Nombres Paterno Materno», or null when the account has no name yet. */
+export function displayName(name: PersonName | null): string | null {
+  if (name === null) return null;
+  return [name.firstName, name.paternalSurname, name.maternalSurname]
+    .filter((part): part is string => part !== null)
+    .join(' ');
+}
+
+function namePart(raw: unknown, field: string, required: boolean): string | null {
+  if (raw === null || raw === undefined) {
+    if (required) throw new IdentityValidationError(`${field} is required`, { field });
+    return null;
+  }
+  if (typeof raw !== 'string') {
+    throw new IdentityValidationError(`${field} must be a string`, { field });
+  }
+  const trimmed = raw.trim().replace(/\s+/g, ' ');
+  if (trimmed.length === 0) {
+    if (required) throw new IdentityValidationError(`${field} is required`, { field });
+    return null;
+  }
+  if (trimmed.length > NAME_PART_MAX_LENGTH) {
+    throw new IdentityValidationError(
+      `${field} must be at most ${NAME_PART_MAX_LENGTH} characters`,
+      { field },
+    );
+  }
+  return trimmed;
 }
 
 /** Trims and lowercases an email so per-organization uniqueness is stable. */
