@@ -36,9 +36,11 @@ const newDriverForm = (): DriverForm => ({
   fullName: '', documentNumber: '', phone: '', licenseNumber: '', status: 'active',
 });
 
-export function DriverManagementPage({ client, canBindAccounts }: {
+export function DriverManagementPage({ client, canBindAccounts, initialQuery = '' }: {
   readonly client: DriverClient;
   readonly canBindAccounts: boolean;
+  /** Búsqueda con la que abre, por ejemplo la que llega del buscador global. */
+  readonly initialQuery?: string;
 }) {
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [accounts, setAccounts] = useState<readonly DriverAccountOption[]>([]);
@@ -55,7 +57,7 @@ export function DriverManagementPage({ client, canBindAccounts }: {
   const [form, setForm] = useState<DriverForm>(newDriverForm);
   const [editForm, setEditForm] = useState<DriverForm>(newDriverForm);
   const [selectedAccounts, setSelectedAccounts] = useState<Readonly<Record<string, string>>>({});
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const [filter, setFilter] = useState<DriverFilter>('all');
 
   const loadData = useCallback(async () => {

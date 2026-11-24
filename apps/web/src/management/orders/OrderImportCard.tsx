@@ -7,6 +7,7 @@ import { Alert, AlertDescription } from '../../components/ui/alert.js';
 import { Button } from '../../components/ui/button.js';
 import { Field, FieldDescription, FieldLabel } from '../../components/ui/field.js';
 import { Input } from '../../components/ui/input.js';
+import { downloadBlob } from '../../lib/download.js';
 
 type ImportClient = Pick<ApiClient, 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
 
@@ -49,12 +50,7 @@ export function OrderImportSheet({ client, open, onOpenChange, onImported }: {
     setDownloadingTemplate(true);
     try {
       const blob = await client.downloadDeliveryOrderImportTemplate();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'delivery-orders-template.xlsx';
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, 'delivery-orders-template.xlsx');
     } catch {
       setImportError('No se pudo descargar la plantilla. Inténtalo de nuevo.');
     } finally {

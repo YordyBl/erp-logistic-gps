@@ -4,10 +4,10 @@ import { Link } from 'react-router';
 import type { AuthSession } from '../api/client.js';
 import { BrandMark } from '../components/BrandMark.js';
 import {
-  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem,
-  SidebarRail, useSidebar,
+  Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarHeader,
+  SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarRail, useSidebar,
 } from '../components/ui/sidebar.js';
-import { isNavItemActive, NAV_ITEMS, viewPath, type NavItem, type OperatorView } from './navigation.js';
+import { isNavItemActive, NAV_GROUPS, navItemsFor, viewPath, type NavItem, type OperatorView } from './navigation.js';
 import { NavUser } from './NavUser.js';
 
 interface AppSidebarProps {
@@ -19,6 +19,7 @@ interface AppSidebarProps {
 export function AppSidebar({ session, activeView, onSignOut }: AppSidebarProps) {
   const { isMobile, setOpenMobile } = useSidebar();
   const isDriver = session.user.role === 'DRIVER';
+  const items = navItemsFor(session.user.role);
 
   const renderItem = ({ view, label, icon: Icon }: NavItem) => {
     const active = isNavItemActive(view, activeView);
@@ -42,17 +43,29 @@ export function AppSidebar({ session, activeView, onSignOut }: AppSidebarProps) 
 
       <SidebarContent>
         <nav aria-label="Navegación principal">
-          <SidebarGroup>
-            <SidebarMenu>
-              {isDriver ? (
+          {isDriver ? (
+            <SidebarGroup>
+              <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive tooltip="Mi ruta">
                     <a href="#mi-ruta" aria-current="page"><Route aria-hidden="true" /> <span>Mi ruta</span></a>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-              ) : NAV_ITEMS.map(renderItem)}
-            </SidebarMenu>
-          </SidebarGroup>
+              </SidebarMenu>
+            </SidebarGroup>
+          ) : NAV_GROUPS.map((group) => {
+            const groupItems = items.filter((item) => item.group === group.id);
+            if (groupItems.length === 0) return null;
+            return (
+              <SidebarGroup key={group.id}>
+                {/* Colapsada, la etiqueta sube sobre el último ícono del grupo anterior: no debe tapar su clic. */}
+                <SidebarGroupLabel className="group-data-[collapsible=icon]:pointer-events-none">{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>{groupItems.map(renderItem)}</SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            );
+          })}
         </nav>
       </SidebarContent>
 

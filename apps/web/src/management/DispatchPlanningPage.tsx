@@ -84,10 +84,14 @@ function vehicleOptions(vehicles: readonly Vehicle[]) {
   return vehicles.map((vehicle) => ({ value: vehicle.id, label: `${vehicle.plate} · ${vehicle.type}` }));
 }
 
-export function DispatchPlanningPage({ client }: { readonly client: DispatchClient }) {
+export function DispatchPlanningPage({ client, initialQuery }: {
+  readonly client: DispatchClient;
+  /** Búsqueda de rutas con la que abre, por ejemplo la que llega del buscador global. */
+  readonly initialQuery?: string;
+}) {
   const table = useServerTable<DispatchRoute>(
     (params, signal) => client.listDispatchRoutesPage(params, signal),
-    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS },
+    { sortFields: ROUTE_SORT_FIELDS, filterParams: ROUTE_FILTER_PARAMS, initialSearch: initialQuery },
   );
   const { rows: routes, meta, reload: reloadRoutes } = table;
   // Pedidos de las paradas de la página visible, para su avance y su detalle.

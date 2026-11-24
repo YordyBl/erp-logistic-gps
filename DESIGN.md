@@ -57,12 +57,14 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 | `ActivityTimeline.tsx` | Eventos con fecha en columna fija e icono sobre la línea |
 | `CardArt.tsx` | Fondos vectoriales propios: destellos y esferas |
 | `IconChip.tsx` | Icono sobre fondo suave con color de estado |
+| `KpiCard.tsx` | Tarjeta de cifra con detalle y variación opcional, en una lista |
+| `lib/download.ts` | Descarga de archivos y CSV para Excel (`;`, BOM UTF-8) |
 | `management/routes/` | Avance real por ruta (`routeProgress.ts`) y paradas en vertical u horizontal (`RouteTimeline.tsx`) |
 | `management/dashboard/` | `OperationsMap` de solo lectura y `OrderStatusBar` |
 
 ## Patrones
 
-- **Armazón:** como `sidebar-07`, con `SidebarProvider`, `Sidebar collapsible="icon"`, `SidebarInset` y `SidebarTrigger`. `Ctrl+B` activo. "Pedidos" es un `Collapsible` con `SidebarMenuSub`; la cuenta es un `DropdownMenu`.
+- **Armazón:** como `sidebar-07`, con `SidebarProvider`, `Sidebar collapsible="icon"`, `SidebarInset` y `SidebarTrigger`. `Ctrl+B` activo. El menú se agrupa con `SidebarGroupLabel` en Operación, Pedidos, Flota y Administración (`shell/navigation.ts`); cada entrada declara los roles que la ven y que pueden abrir su ruta. La cuenta es un `DropdownMenu`.
 - **Login:** dos tarjetas sobre fondo gris: mapa isométrico a la izquierda (`public/login-map.svg`) y formulario a la derecha.
 - **Formularios:** los registros y ediciones van en `FormSheet`, con `FieldGroup` + `Field`. Los `Input` conservan la validación nativa (`required`, `pattern`, `minLength`, `maxLength`). `Select` y `DatePicker` no la aplican, así que se validan con mensaje en español mediante `FieldError`.
 - **`pattern`:** se compila con el flag `v`. Los patrones viven en `lib/patterns.ts`, con test, porque uno inválido se ignora sin avisar.
@@ -72,7 +74,7 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 - **Botones:** tamaño por defecto; `icon-sm` solo para cerrar diálogos.
 - **Tarjetas:** solo para lo destacado. Las tablas y los buscadores van directos sobre la página.
 - **Tablas:** `DataTable` en los listados, con acciones en un menú de tres puntos y detalle al pulsar la fila. En móvil se desplazan dentro de su contenedor, no la página.
-- **Indicadores:** solo el Resumen lleva tarjetas de cifras. Las demás pantallas resumen sus cifras en la línea bajo el título, para no repetir el mismo bloque.
+- **Indicadores:** solo el Resumen y Reportes llevan tarjetas de cifras (`KpiCard`). Las demás pantallas resumen sus cifras en la línea bajo el título, para no repetir el mismo bloque. En Reportes cada tasa muestra su base («86 de 95 primeros intentos») y la variación dice si mejora o empeora, no solo si sube.
 - **Estados:** un solo nombre por estado de pedido, en `delivery/orderStatus.ts`.
 - **Paneles:** la clase `.doc-form` de `styles.css` aplica fuente Geist Mono, campos de una línea y una trama rayada en lo pendiente; al enfocar aparece el placeholder. Los controles siguen siendo los de shadcn.
 - **Imágenes:** los fondos son vectores propios. No se copian imágenes de plantillas de terceros.

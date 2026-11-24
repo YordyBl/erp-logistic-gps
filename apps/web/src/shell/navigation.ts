@@ -1,32 +1,64 @@
-import { Building2, Camera, IdCard, LayoutDashboard, Package, RadioTower, Route, Truck, type LucideIcon } from 'lucide-react';
+import {
+  Building2, Camera, ChartColumn, IdCard, LayoutDashboard, Package, RadioTower, Route, Truck, Users, type LucideIcon,
+} from 'lucide-react';
 
 import type { UserRole } from '../api/client.js';
 
-export type OperatorView = 'dashboard' | 'evidence' | 'customers' | 'orders' | 'orders-manage' | 'drivers' | 'vehicles' | 'routes' | 'control-tower';
+export type OperatorView =
+  | 'dashboard' | 'evidence' | 'customers' | 'orders' | 'orders-manage' | 'drivers' | 'vehicles' | 'routes'
+  | 'control-tower' | 'reports' | 'users';
 
 /** Views reachable from the sidebar; `orders-manage` is opened from inside Pedidos. */
 export type NavView = Exclude<OperatorView, 'orders-manage'>;
+
+export type NavGroup = 'operation' | 'orders' | 'fleet' | 'administration';
 
 export interface NavItem {
   readonly view: NavView;
   readonly label: string;
   readonly icon: LucideIcon;
+  readonly group: NavGroup;
+  /** Roles that see the item and may open its route. Drivers have their own workspace. */
+  readonly roles: readonly UserRole[];
 }
+
+const OPERATORS: readonly UserRole[] = ['ADMIN', 'DISPATCHER'];
+
+/** Sidebar groups, in order, with the label shown above each one. */
+export const NAV_GROUPS: readonly { readonly id: NavGroup; readonly label: string }[] = [
+  { id: 'operation', label: 'Operación' },
+  { id: 'orders', label: 'Pedidos' },
+  { id: 'fleet', label: 'Flota' },
+  { id: 'administration', label: 'Administración' },
+];
 
 /**
  * Pedidos is a plain link: the order list (with search, filters and detail)
  * lives in its own view, so the sidebar never loads every order.
  */
 export const NAV_ITEMS: readonly NavItem[] = [
-  { view: 'dashboard', label: 'Resumen', icon: LayoutDashboard },
-  { view: 'control-tower', label: 'Torre de control', icon: RadioTower },
-  { view: 'orders', label: 'Pedidos', icon: Package },
-  { view: 'routes', label: 'Despacho', icon: Route },
-  { view: 'drivers', label: 'Conductores', icon: IdCard },
-  { view: 'vehicles', label: 'Vehículos', icon: Truck },
-  { view: 'customers', label: 'Clientes', icon: Building2 },
-  { view: 'evidence', label: 'Evidencias', icon: Camera },
+  { view: 'dashboard', label: 'Resumen', icon: LayoutDashboard, group: 'operation', roles: OPERATORS },
+  { view: 'control-tower', label: 'Torre de control', icon: RadioTower, group: 'operation', roles: OPERATORS },
+  { view: 'routes', label: 'Despacho', icon: Route, group: 'operation', roles: OPERATORS },
+  { view: 'reports', label: 'Reportes', icon: ChartColumn, group: 'operation', roles: OPERATORS },
+  { view: 'orders', label: 'Pedidos', icon: Package, group: 'orders', roles: OPERATORS },
+  { view: 'customers', label: 'Clientes', icon: Building2, group: 'orders', roles: OPERATORS },
+  { view: 'evidence', label: 'Evidencias', icon: Camera, group: 'orders', roles: OPERATORS },
+  { view: 'drivers', label: 'Conductores', icon: IdCard, group: 'fleet', roles: OPERATORS },
+  { view: 'vehicles', label: 'Vehículos', icon: Truck, group: 'fleet', roles: OPERATORS },
+  { view: 'users', label: 'Usuarios', icon: Users, group: 'administration', roles: ['ADMIN'] },
 ];
+
+/** Items a role sees in the sidebar. */
+export function navItemsFor(role: UserRole): readonly NavItem[] {
+  return NAV_ITEMS.filter((item) => item.roles.includes(role));
+}
+
+/** Whether a role may open a sidebar view; views outside the sidebar follow the dashboard. */
+export function canOpenView(view: OperatorView, role: UserRole): boolean {
+  const item = NAV_ITEMS.find((candidate) => candidate.view === view);
+  return (item?.roles ?? OPERATORS).includes(role);
+}
 
 /** The ERP lives under `/app`; `/` is reserved for the public site. */
 export const APP_BASE = '/app';
@@ -42,6 +74,8 @@ const VIEW_SEGMENTS: Record<OperatorView, string> = {
   vehicles: 'vehiculos',
   customers: 'clientes',
   evidence: 'evidencias',
+  reports: 'reportes',
+  users: 'usuarios',
 };
 
 /** Relative route path of a view, for `<Route path>`. */

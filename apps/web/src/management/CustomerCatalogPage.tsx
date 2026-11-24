@@ -95,11 +95,15 @@ const emptyForm: CreateCustomerInput = {
   status: 'active',
 };
 
-export function CustomerCatalogPage({ client }: { readonly client: CustomerCatalogClient }) {
+export function CustomerCatalogPage({ client, initialQuery }: {
+  readonly client: CustomerCatalogClient;
+  /** Búsqueda con la que abre, por ejemplo la que llega del buscador global. */
+  readonly initialQuery?: string;
+}) {
   // El servidor ordena por nombre por defecto; la cabecera lo refleja desde el inicio.
   const table = useServerTable<Customer>(
     (params, signal) => client.listCustomersPage(params, signal),
-    { sortFields: CUSTOMER_SORT_FIELDS, filterParams: CUSTOMER_FILTER_PARAMS, initialSorting: [{ id: 'name', desc: false }] },
+    { sortFields: CUSTOMER_SORT_FIELDS, filterParams: CUSTOMER_FILTER_PARAMS, initialSorting: [{ id: 'name', desc: false }], initialSearch: initialQuery },
   );
   const { rows, meta, reload } = table;
   const [formOpen, setFormOpen] = useState(false);

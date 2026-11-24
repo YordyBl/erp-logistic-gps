@@ -12,7 +12,7 @@ import { summarizeRoute } from './routeProgress.js';
 import { RouteTimeline } from './RouteTimeline.js';
 
 /** A partir de este tiempo sin posición, la señal se marca para que alguien la revise. */
-const STALE_SIGNAL_MS = 15 * 60_000;
+export const STALE_SIGNAL_MS = 15 * 60_000;
 
 /** Conductor y placa de una ruta, si los catálogos cargaron. */
 export function routeCrew(details: RouteDetails, routeId: string): { readonly driver?: string; readonly plate?: string } {

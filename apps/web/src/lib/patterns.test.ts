@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { IDENTIFIER_PATTERN, PHONE_PATTERN } from './patterns.js';
+import { IDENTIFIER_PATTERN, PASSWORD_PATTERN, PHONE_PATTERN } from './patterns.js';
 
 /** Igual que el navegador con el atributo `pattern`: lanza si el patrón no compila con `v`. */
 function matches(pattern: string, value: string): boolean {
@@ -25,5 +25,14 @@ describe('patrones de validación', () => {
     expect(matches(IDENTIFIER_PATTERN, 'A1')).toBe(true);
     expect(matches(IDENTIFIER_PATTERN, '-ABC')).toBe(false);
     expect(matches(IDENTIFIER_PATTERN, 'ABC 123')).toBe(false);
+  });
+
+  it('exige una letra y un dígito en la contraseña, como la API', () => {
+    for (const password of ['Lima-2026-x', 'clave2026', 'ñandú12345']) {
+      expect(matches(PASSWORD_PATTERN, password)).toBe(true);
+    }
+    for (const password of ['solo-letras', '1234567890', '----------']) {
+      expect(matches(PASSWORD_PATTERN, password)).toBe(false);
+    }
   });
 });

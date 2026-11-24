@@ -9,6 +9,7 @@ import { Card, CardContent } from '../components/ui/card.js';
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty.js';
 import { Skeleton } from '../components/ui/skeleton.js';
 import { useServerTable } from '../hooks/use-server-table.js';
+import { downloadBlob } from '../lib/download.js';
 import { formatDateTime } from '../lib/format.js';
 
 type VaultClient = Pick<ApiClient, 'listEvidencePage' | 'downloadEvidence'>;
@@ -32,12 +33,7 @@ export function EvidenceVault({ client, onPreview }: {
     setDownloadFailed(false);
     try {
       const blob = await client.downloadEvidence(item.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${item.order.publicCode}-${item.id.slice(0, 8)}.${item.mimeType.replace('image/', '')}`;
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${item.order.publicCode}-${item.id.slice(0, 8)}.${item.mimeType.replace('image/', '')}`);
     } catch {
       setDownloadFailed(true);
     }

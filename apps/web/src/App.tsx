@@ -1,6 +1,6 @@
 import { ArrowLeft } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 
 import { ApiError, api, type AuthSession } from './api/client.js';
 import { LoginScreen } from './auth/LoginScreen.js';
@@ -16,10 +16,13 @@ import { DispatchDashboardPage } from './management/DispatchDashboardPage.js';
 import { DispatchPlanningPage } from './management/DispatchPlanningPage.js';
 import { DriverManagementPage } from './management/DriverManagementPage.js';
 import { OrdersPage } from './management/OrdersPage.js';
+import { ReportsPage } from './management/ReportsPage.js';
+import { UserManagementPage } from './management/UserManagementPage.js';
 import { VehicleManagementPage } from './management/VehicleManagementPage.js';
 import { AppShell } from './shell/AppShell.js';
+import { GlobalSearch, type SearchTarget } from './shell/GlobalSearch.js';
 import { IncidentNotifications } from './shell/IncidentNotifications.js';
-import { APP_BASE, orderPath, viewFromPath, viewPath, viewSegment, type OperatorView } from './shell/navigation.js';
+import { APP_BASE, canOpenView, orderPath, viewFromPath, viewPath, viewSegment, type OperatorView } from './shell/navigation.js';
 
 /**
  * `/` belongs to the public site (still to come) and the ERP lives under `/app`.
@@ -100,8 +103,11 @@ function Workspace({ session, onSignOut }: { readonly session: AuthSession; read
   return (
     <AppShell session={session} activeView={activeView} pageId={activeView}
       headerActions={(
-        <IncidentNotifications client={api} refreshKey={activeView}
-          onOpenOrder={(code) => void navigate(orderPath(code))} onOpenDispatch={() => void navigate(viewPath('routes'))} />
+        <div className="flex items-center gap-2">
+          <GlobalSearch client={api} onOpen={(target) => void navigate(searchTargetPath(target))} />
+          <IncidentNotifications client={api} refreshKey={activeView}
+            onOpenOrder={(code) => void navigate(orderPath(code))} onOpenDispatch={() => void navigate(viewPath('routes'))} />
+        </div>
       )}
       onSignOut={() => void onSignOut()}>
       <OperatorRoutes session={session} />
@@ -109,9 +115,23 @@ function Workspace({ session, onSignOut }: { readonly session: AuthSession; read
   );
 }
 
+/** Pantalla que muestra lo elegido en el buscador global; las listas abren con la búsqueda escrita. */
+function searchTargetPath(target: SearchTarget): string {
+  const withQuery = (view: OperatorView, query: string) => `${viewPath(view)}?${new URLSearchParams({ q: query }).toString()}`;
+  switch (target.kind) {
+    case 'order': return orderPath(target.publicCode);
+    case 'route': return withQuery(target.inProgress ? 'control-tower' : 'routes', target.publicCode);
+    case 'driver': return withQuery('drivers', target.query);
+    case 'vehicle': return withQuery('vehicles', target.query);
+    case 'customer': return withQuery('customers', target.query);
+  }
+}
+
 function OperatorRoutes({ session }: { readonly session: AuthSession }) {
   const navigate = useNavigate();
   const goTo = (view: OperatorView) => () => void navigate(viewPath(view));
+  // La clave vuelve a montar la pantalla cuando el buscador global trae otra búsqueda a la misma lista.
+  const initialQuery = useSearchParams()[0].get('q') ?? '';
 
   return (
     <Routes>
@@ -119,7 +139,7 @@ function OperatorRoutes({ session }: { readonly session: AuthSession }) {
         <DispatchDashboardPage client={api} userName={session.user.email.split('@')[0] ?? ''} onOpenOrders={goTo('orders')}
           onOpenDispatch={goTo('routes')} onOpenControlTower={goTo('control-tower')} />
       )} />
-      <Route path={viewSegment('control-tower')} element={<ControlTowerPage client={api} />} />
+      <Route path={viewSegment('control-tower')} element={<ControlTowerPage key={initialQuery} client={api} initialQuery={initialQuery} />} />
       <Route path={`${viewSegment('orders')}/:codigo?`} element={<OrdersRoute />} />
       <Route path={viewSegment('orders-manage')} element={(
         <>
@@ -131,11 +151,17 @@ function OperatorRoutes({ session }: { readonly session: AuthSession }) {
           <DeliveryOrderManagementPage client={api} />
         </>
       )} />
-      <Route path={viewSegment('routes')} element={<DispatchPlanningPage client={api} />} />
-      <Route path={viewSegment('drivers')} element={<DriverManagementPage client={api} canBindAccounts={session.user.role === 'ADMIN'} />} />
-      <Route path={viewSegment('vehicles')} element={<VehicleManagementPage client={api} />} />
-      <Route path={viewSegment('customers')} element={<CustomerCatalogPage client={api} />} />
+      <Route path={viewSegment('routes')} element={<DispatchPlanningPage key={initialQuery} client={api} initialQuery={initialQuery} />} />
+      <Route path={viewSegment('drivers')} element={<DriverManagementPage key={initialQuery} client={api} canBindAccounts={session.user.role === 'ADMIN'} initialQuery={initialQuery} />} />
+      <Route path={viewSegment('vehicles')} element={<VehicleManagementPage key={initialQuery} client={api} initialQuery={initialQuery} />} />
+      <Route path={viewSegment('customers')} element={<CustomerCatalogPage key={initialQuery} client={api} initialQuery={initialQuery} />} />
       <Route path={viewSegment('evidence')} element={<EvidenceWorkspace client={api} />} />
+      {canOpenView('reports', session.user.role) && (
+        <Route path={viewSegment('reports')} element={<ReportsPage client={api} />} />
+      )}
+      {canOpenView('users', session.user.role) && (
+        <Route path={viewSegment('users')} element={<UserManagementPage client={api} currentUserId={session.user.id} />} />
+      )}
       <Route path="*" element={<Navigate to={APP_BASE} replace />} />
     </Routes>
   );

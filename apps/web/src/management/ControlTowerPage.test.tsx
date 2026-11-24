@@ -330,3 +330,93 @@ describe('ControlTowerPage driver selection and route track', () => {
     expect(screen.queryByText('Recorrido realizado')).toBeNull();
   });
 });
+
+describe('ControlTowerPage route filters and search', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mapMock.options = undefined;
+    mapMock.load = undefined;
+    mapMock.handlers.clear();
+    vi.stubGlobal('Image', class {
+      onload: (() => void) | null = null;
+      src = '';
+      constructor() { queueMicrotask(() => this.onload?.()); }
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const route = (id: string, publicCode: string, driverId: string, vehicleId: string, status: 'planned' | 'in_progress') => ({
+    ...snapshot.routes[0]!, id, publicCode, driverId, vehicleId, status,
+    stops: [{ ...snapshot.routes[0]!.stops[0]!, id: `stop-${id}` }],
+  });
+
+  /** R-100 con señal reciente, R-200 en curso sin posición y R-300 por salir. */
+  async function renderFleet(receivedAt = new Date().toISOString()) {
+    const harness = createSocketHarness();
+    const client = {
+      createTrackingTicket: vi.fn().mockResolvedValue({ ticket: 'ticket' }),
+      listDrivers: vi.fn().mockResolvedValue([
+        { id: 'driver-1', fullName: 'Ana Quispe' }, { id: 'driver-2', fullName: 'José Gómez' }, { id: 'driver-3', fullName: 'Rosa Vega' },
+      ]),
+      listVehicles: vi.fn().mockResolvedValue([
+        { id: 'vehicle-1', plate: 'ABC-123' }, { id: 'vehicle-2', plate: 'DEF-456' }, { id: 'vehicle-3', plate: 'GHI-789' },
+      ]),
+    };
+    render(<ControlTowerPage client={client as never} socketFactory={() => harness.socket as unknown as WebSocket} />);
+    await waitFor(() => expect(mapMock.options).toBeDefined());
+    act(() => harness.emit({ type: 'snapshot', sequence: 0, data: {
+      routes: [route('route-1', 'R-100', 'driver-1', 'vehicle-1', 'in_progress'),
+        route('route-2', 'R-200', 'driver-2', 'vehicle-2', 'in_progress'),
+        route('route-3', 'R-300', 'driver-3', 'vehicle-3', 'planned')],
+      orders: snapshot.orders,
+      positions: [{ ...snapshot.positions[0]!, receivedAt, recordedAt: receivedAt }],
+    } }));
+    await screen.findByText('Rosa Vega');
+  }
+
+  const filterButton = (label: string, count: number) => new RegExp(String.raw`^${label}\s*${count}$`);
+  const visibleCodes = () => screen.queryAllByRole('heading', { level: 3 }).map((heading) => heading.textContent);
+
+  it('counts each filter and lists only the routes without signal or still to leave', async () => {
+    await renderFleet();
+
+    expect(screen.getByRole('button', { name: filterButton('Todas', 3) })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: filterButton('Sin señal', 1) }));
+    expect(visibleCodes()).toEqual(['R-200']);
+    fireEvent.click(screen.getByRole('button', { name: filterButton('Por salir', 1) }));
+    expect(visibleCodes()).toEqual(['R-300']);
+    fireEvent.click(screen.getByRole('button', { name: filterButton('Todas', 3) }));
+    expect(visibleCodes()).toHaveLength(3);
+  });
+
+  it('searches by route code, driver without accents and plate, and offers to clear an empty result', async () => {
+    await renderFleet();
+    const search = screen.getByRole('textbox', { name: 'Buscar rutas' });
+
+    fireEvent.change(search, { target: { value: 'gomez' } });
+    expect(visibleCodes()).toEqual(['R-200']);
+    fireEvent.change(search, { target: { value: 'ghi-7' } });
+    expect(visibleCodes()).toEqual(['R-300']);
+    fireEvent.change(search, { target: { value: 'r-100' } });
+    expect(visibleCodes()).toEqual(['R-100']);
+
+    fireEvent.click(screen.getByRole('button', { name: filterButton('Por salir', 1) }));
+    expect(screen.getByText('Ninguna ruta coincide con el filtro.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Limpiar filtros' }));
+    expect(visibleCodes()).toHaveLength(3);
+    expect((search as HTMLInputElement).value).toBe('');
+  });
+
+  it('moves a route to "Sin señal" when its last position gets old, without any new message', async () => {
+    // shouldAdvanceTime: waitFor reintenta con setInterval, así que el reloj falso debe seguir corriendo.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'], shouldAdvanceTime: true });
+    await renderFleet(new Date(Date.now() - 14.5 * 60_000).toISOString());
+    expect(screen.getByRole('button', { name: filterButton('Sin señal', 1) })).toBeTruthy();
+
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole('button', { name: filterButton('Sin señal', 2) })).toBeTruthy();
+  });
+});

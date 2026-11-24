@@ -127,6 +127,82 @@ export interface DriverAccountBinding {
   readonly userId: string | null;
 }
 
+/** Conteos de un periodo; las tasas se calculan en la web desde su numerador y denominador. */
+export interface ReportKpis {
+  readonly orders: number;
+  readonly closedAttempts: number;
+  readonly delivered: number;
+  readonly returned: number;
+  readonly firstAttempts: number;
+  readonly firstAttemptDelivered: number;
+  readonly avgStopSeconds: number | null;
+  readonly timedStops: number;
+  readonly simulatedAttempts: number;
+}
+
+export interface ReportBreakdown {
+  readonly firstAttempts: number;
+  readonly firstAttemptDelivered: number;
+  readonly closedAttempts: number;
+  readonly returned: number;
+}
+
+export interface OperationsReport {
+  readonly period: { readonly from: string; readonly to: string };
+  readonly comparison: { readonly from: string; readonly to: string } | null;
+  readonly includeSimulated: boolean;
+  readonly kpis: ReportKpis;
+  readonly comparisonKpis: ReportKpis | null;
+  readonly weekly: readonly { readonly weekStart: string; readonly delivered: number; readonly returned: number; readonly cancelled: number }[];
+  readonly incidents: readonly { readonly category: string; readonly count: number }[];
+  readonly districts: readonly (ReportBreakdown & { readonly district: string; readonly orders: number })[];
+  readonly drivers: readonly (ReportBreakdown & { readonly driverId: string; readonly fullName: string; readonly routes: number; readonly deliveries: number })[];
+}
+
+export interface OperationsReportParams {
+  readonly from: string;
+  readonly to: string;
+  readonly compareFrom?: string;
+  readonly compareTo?: string;
+  readonly includeSimulated?: boolean;
+}
+
+export type UserStatus = 'active' | 'disabled';
+
+/** Cuenta de la organización en Usuarios y roles. El nombre es nulo solo en cuentas anteriores a los nombres. */
+export interface UserAccount {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly email: string;
+  readonly role: UserRole;
+  readonly status: UserStatus;
+  readonly createdAt: string;
+  readonly firstName: string | null;
+  readonly paternalSurname: string | null;
+  readonly maternalSurname: string | null;
+  /** Último ingreso; nulo si nunca inició sesión. */
+  readonly lastLoginAt: string | null;
+  readonly driver: { readonly id: string; readonly fullName: string } | null;
+}
+
+export interface CreateUserInput {
+  readonly email: string;
+  readonly password: string;
+  readonly role: UserRole;
+  readonly firstName: string;
+  readonly paternalSurname: string;
+  readonly maternalSurname?: string | null;
+}
+
+/** Los campos del nombre viajan juntos: nombres y apellido paterno, materno opcional. */
+export interface UpdateUserInput {
+  readonly firstName?: string;
+  readonly paternalSurname?: string;
+  readonly maternalSurname?: string | null;
+  readonly role?: UserRole;
+  readonly status?: UserStatus;
+}
+
 export interface Vehicle {
   readonly id: string;
   readonly organizationId: string;
@@ -496,6 +572,15 @@ export class ApiClient {
     return this.requestData('/dashboard');
   }
 
+  /** Cifras de un periodo en días de Lima, con su comparación; sin `includeSimulated` excluye el simulador. */
+  async getOperationsReport(params: OperationsReportParams, signal?: AbortSignal): Promise<OperationsReport> {
+    const query = buildQuery({
+      from: params.from, to: params.to, compareFrom: params.compareFrom, compareTo: params.compareTo,
+      includeSimulated: params.includeSimulated === true ? 'true' : undefined,
+    });
+    return this.requestData(`/reports/operations${query}`, signal === undefined ? {} : { signal });
+  }
+
   async createTrackingTicket(): Promise<{ readonly ticket: string; readonly expiresAt: string }> {
     return this.requestData('/tracking/ticket', { method: 'POST', body: '{}' });
   }
@@ -702,6 +787,29 @@ export class ApiClient {
   async bindDriverAccount(driverId: string, userId: string | null): Promise<DriverAccountBinding> {
     return this.requestData(`/drivers/${encodeURIComponent(driverId)}/account`, {
       method: 'PUT', body: JSON.stringify({ userId }),
+    });
+  }
+
+  /** Cuentas de la organización con su conductor vinculado (solo ADMIN). */
+  async listUsers(): Promise<readonly UserAccount[]> {
+    return this.requestData('/users');
+  }
+
+  /** Alta con contraseña temporal que el administrador entrega a la persona. */
+  async createUser(input: CreateUserInput): Promise<Omit<UserAccount, 'driver'>> {
+    return this.requestData('/users', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateUser(userId: string, input: UpdateUserInput): Promise<Omit<UserAccount, 'driver'>> {
+    return this.requestData(`/users/${encodeURIComponent(userId)}`, {
+      method: 'PATCH', body: JSON.stringify(input),
+    });
+  }
+
+  /** Nueva contraseña temporal; cierra todas las sesiones de la cuenta. */
+  async resetUserPassword(userId: string, password: string): Promise<void> {
+    await this.requestData<void>(`/users/${encodeURIComponent(userId)}/password`, {
+      method: 'PUT', body: JSON.stringify({ password }),
     });
   }
 

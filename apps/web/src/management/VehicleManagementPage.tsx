@@ -42,14 +42,18 @@ const STATUS_OPTIONS: readonly { readonly value: VehicleStatus; readonly label: 
 
 const emptyForm = (): VehicleForm => ({ plate: '', type: '', capacityKg: '' });
 
-export function VehicleManagementPage({ client }: { readonly client: VehicleClient }) {
+export function VehicleManagementPage({ client, initialQuery = '' }: {
+  readonly client: VehicleClient;
+  /** Búsqueda con la que abre, por ejemplo la que llega del buscador global. */
+  readonly initialQuery?: string;
+}) {
   const [vehicles, setVehicles] = useState<readonly Vehicle[]>([]);
   const [routeStats, setRouteStats] = useState<readonly VehicleRouteStats[]>([]);
   const [history, setHistory] = useState<RouteHistoryState | null>(null);
   const [drivers, setDrivers] = useState<readonly Driver[]>([]);
   const [routesError, setRoutesError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery);
   const detailRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);

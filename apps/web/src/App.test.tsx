@@ -288,6 +288,32 @@ describe('role-specific delivery workspace', () => {
     expect(screen.getByRole('link', { name: 'Vehículos' }).getAttribute('aria-current')).toBe('page');
   });
 
+  it('opens the list of a result picked in the global search with its search already typed', async () => {
+    const user = userEvent.setup();
+    const driver = {
+      id: 'driver-1', organizationId: 'org-1', fullName: 'Ana Quispe', documentNumber: '45781236', phone: '900000214',
+      licenseNumber: 'Q45781236', status: 'active' as const, createdAt: order.createdAt, updatedAt: order.createdAt,
+    };
+    const empty = { data: [], meta: { page: 1, pageSize: 5, total: 0 } };
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
+    vi.spyOn(api, 'listDrivers').mockResolvedValue([driver, { ...driver, id: 'driver-2', fullName: 'Luis Vega' }]);
+    vi.spyOn(api, 'listDriverAccounts').mockResolvedValue([]);
+    vi.spyOn(api, 'listVehicles').mockResolvedValue([]);
+    vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(empty);
+    vi.spyOn(api, 'listDispatchRoutesPage').mockResolvedValue(empty);
+    vi.spyOn(api, 'listCustomersPage').mockResolvedValue(empty);
+
+    renderApp();
+    await screen.findByRole('link', { name: 'Conductores' });
+    await user.keyboard('{Control>}k{/Control}');
+    await user.type(await screen.findByPlaceholderText(/Buscar pedido, ruta/), 'quispe');
+    await user.click(await screen.findByText('Ana Quispe'));
+
+    expect(await screen.findByRole('heading', { name: 'Conductores' })).toBeTruthy();
+    expect((screen.getByRole('textbox', { name: 'Buscar conductores' }) as HTMLInputElement).value).toBe('Ana Quispe');
+    expect(screen.queryByText('Luis Vega')).toBeNull();
+  });
+
   it('opens an order detail from its own URL', async () => {
     vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
     vi.spyOn(api, 'listDeliveryOrdersPage').mockResolvedValue(pageOf([order]));
@@ -318,5 +344,54 @@ describe('role-specific delivery workspace', () => {
 
     expect(await screen.findByText('R-041')).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Clientes' })).toBeNull();
+  });
+});
+
+describe('navigation by role', () => {
+  const emptyReport = {
+    period: { from: '2026-11-01', to: '2026-11-18' }, comparison: null, includeSimulated: false,
+    kpis: { orders: 0, closedAttempts: 0, delivered: 0, returned: 0, firstAttempts: 0, firstAttemptDelivered: 0, avgStopSeconds: null, timedStops: 0, simulatedAttempts: 0 },
+    comparisonKpis: null, weekly: [], incidents: [], districts: [], drivers: [],
+  };
+
+  it('groups the sidebar and shows Usuarios and Reportes to administrators', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('ADMIN'));
+    vi.spyOn(api, 'listUsers').mockResolvedValue([]);
+
+    renderApp('/app/usuarios');
+
+    expect(await screen.findByRole('heading', { name: 'Usuarios y roles' })).toBeTruthy();
+    for (const group of ['Operación', 'Pedidos', 'Flota', 'Administración']) {
+      expect(screen.getAllByText(group).length).toBeGreaterThan(0);
+    }
+    expect(screen.getByRole('link', { name: 'Usuarios' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('link', { name: 'Reportes' })).toBeTruthy();
+  });
+
+  it('opens Reportes for dispatchers but keeps Usuarios out of their reach', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DISPATCHER'));
+    const getReport = vi.spyOn(api, 'getOperationsReport').mockResolvedValue(emptyReport);
+    const listUsers = vi.spyOn(api, 'listUsers').mockResolvedValue([]);
+
+    renderApp('/app/reportes');
+    expect(await screen.findByRole('heading', { name: 'Reportes' })).toBeTruthy();
+    expect(getReport).toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Usuarios' })).toBeNull();
+
+    cleanup();
+    renderApp('/app/usuarios');
+    expect(await screen.findByRole('heading', { name: 'Estado del reparto' })).toBeTruthy();
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
+  it('shows neither Reportes nor Usuarios to drivers', async () => {
+    vi.spyOn(api, 'restoreSession').mockResolvedValue(session('DRIVER'));
+    vi.spyOn(api, 'getMyRoute').mockResolvedValue(route);
+
+    renderApp('/app/reportes');
+
+    expect(await screen.findByText('R-041')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Reportes' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Usuarios' })).toBeNull();
   });
 });

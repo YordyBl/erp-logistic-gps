@@ -1,13 +1,15 @@
-import { Route } from 'lucide-react';
+import { Route, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoJSONSource, Map as MapLibreMap, MapLayerMouseEvent, Popup } from 'maplibre-gl';
 
 import type { ApiClient, DeliveryOrder, DispatchRoute, RouteTrack } from '../api/client.js';
 import { ErrorNotice, LoadingRows } from '../components/Notices.js';
+import { SearchInput } from '../components/SearchInput.js';
+import { Button } from '../components/ui/button.js';
 import { Card } from '../components/ui/card.js';
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia } from '../components/ui/empty.js';
 import { formatTimeAgo } from '../lib/format.js';
-import { ActiveRouteItem, routeCrew } from './routes/ActiveRouteItem.js';
+import { ActiveRouteItem, routeCrew, STALE_SIGNAL_MS } from './routes/ActiveRouteItem.js';
 import type { RouteDetails } from './routes/routeDetails.js';
 import { ORDER_STATUS_LABELS } from '../delivery/orderStatus.js';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
@@ -91,8 +93,35 @@ interface SelectedTrack extends RouteTrack {
 
 type TrailPoint = RouteTrack['traveled'][number];
 
-export function ControlTowerPage({ client, socketFactory = openTrackingSocket }: {
+type RouteFilter = 'all' | 'no-signal' | 'planned';
+
+const ROUTE_FILTERS: readonly { readonly value: RouteFilter; readonly label: string }[] = [
+  { value: 'all', label: 'Todas' },
+  { value: 'no-signal', label: 'Sin señal' },
+  { value: 'planned', label: 'Por salir' },
+];
+
+/** Cada cuánto se vuelve a evaluar la señal: una ruta queda sin señal justo cuando no llegan mensajes. */
+const SIGNAL_CHECK_MS = 30_000;
+
+function matchesRouteFilter(route: TrackingRoute, position: TrackingPosition | undefined, filter: RouteFilter, now: number): boolean {
+  switch (filter) {
+    case 'all': return true;
+    case 'planned': return route.status === 'planned';
+    case 'no-signal': return route.status === 'in_progress' &&
+      (position === undefined || now - Date.parse(position.receivedAt) > STALE_SIGNAL_MS);
+  }
+}
+
+/** Minúsculas y sin tildes, para que "Quispe" encuentre "quispe" y "Gomez" a "Gómez". */
+function normalizeText(value: string): string {
+  return value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('es-PE');
+}
+
+export function ControlTowerPage({ client, socketFactory = openTrackingSocket, initialQuery = '' }: {
   readonly client: TicketClient;
+  /** Búsqueda con la que abre, por ejemplo la que llega del buscador global. */
+  readonly initialQuery?: string;
   readonly socketFactory?: (ticket: string) => MapSocket;
 }) {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -108,6 +137,14 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const [trackVersion, setTrackVersion] = useState(0);
   const cardRefs = useRef(new Map<string, HTMLLIElement>());
   const selectedRouteId = selection?.routeId ?? null;
+  const [filter, setFilter] = useState<RouteFilter>('all');
+  const [query, setQuery] = useState(initialQuery);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), SIGNAL_CHECK_MS);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -335,6 +372,16 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
   const routes = snapshot.routes.filter((route) => route.status !== 'completed')
     .sort((left, right) => Number(right.status === 'in_progress') - Number(left.status === 'in_progress'));
   const latestPositionByRoute = new Map(snapshot.positions.map((position) => [position.routeId, position]));
+  const filterCounts = Object.fromEntries(ROUTE_FILTERS.map(({ value }) => [value,
+    routes.filter((route) => matchesRouteFilter(route, latestPositionByRoute.get(route.id), value, now)).length])) as Record<RouteFilter, number>;
+  const needle = normalizeText(query.trim());
+  // Solo se filtra la lista: el mapa sigue mostrando todas las rutas.
+  const visibleRoutes = routes.filter((route) => {
+    if (!matchesRouteFilter(route, latestPositionByRoute.get(route.id), filter, now)) return false;
+    if (needle === '') return true;
+    const { driver, plate } = routeCrew(details, route.id);
+    return [route.publicCode, driver, plate].some((value) => value !== undefined && normalizeText(value).includes(needle));
+  });
 
   // A route that finished or left the snapshot can no longer be followed.
   const selectionVisible = selectedRouteId === null || routes.some((route) => route.id === selectedRouteId);
@@ -384,6 +431,20 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
         </Card>
         <div className="flex min-h-0 flex-col gap-4 xl:h-[36rem]">
           <h2 className="text-base font-semibold">{routes.length} {routes.length === 1 ? 'Ruta activa' : 'Rutas activas'}</h2>
+          {routes.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap gap-1" role="group" aria-label="Filtrar rutas">
+                {ROUTE_FILTERS.map((option) => (
+                  <Button key={option.value} type="button" size="sm" variant={filter === option.value ? 'secondary' : 'ghost'}
+                    aria-pressed={filter === option.value} onClick={() => setFilter(option.value)}>
+                    {option.label}
+                    <span className="text-muted-foreground tabular-nums">{filterCounts[option.value]}</span>
+                  </Button>
+                ))}
+              </div>
+              <SearchInput value={query} onChange={setQuery} label="Buscar rutas" placeholder="Ruta, conductor o placa" className="w-full" />
+            </div>
+          )}
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
             {routes.length === 0 && connection !== 'connected' && <LoadingRows label="Conectando con el seguimiento…" rows={2} />}
             {routes.length === 0 && connection === 'connected' && (
@@ -394,9 +455,20 @@ export function ControlTowerPage({ client, socketFactory = openTrackingSocket }:
                 </EmptyHeader>
               </Empty>
             )}
-            {routes.length > 0 && (
+            {routes.length > 0 && visibleRoutes.length === 0 && (
+              <Empty>
+                <EmptyHeader>
+                  <EmptyMedia variant="icon"><SearchX aria-hidden="true" /></EmptyMedia>
+                  <EmptyDescription>Ninguna ruta coincide con el filtro.</EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button type="button" variant="outline" size="sm" onClick={() => { setFilter('all'); setQuery(''); }}>Limpiar filtros</Button>
+                </EmptyContent>
+              </Empty>
+            )}
+            {visibleRoutes.length > 0 && (
               <ul className="flex flex-col gap-3 p-1">
-                {routes.map((route) => (
+                {visibleRoutes.map((route) => (
                   <ActiveRouteItem key={route.id} route={route} position={latestPositionByRoute.get(route.id)} details={details}
                     selected={route.id === selectedRouteId} onSelect={() => selectFromList(route)}
                     elementRef={(element) => {

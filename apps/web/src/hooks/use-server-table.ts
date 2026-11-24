@@ -48,6 +48,8 @@ export interface ServerTableOptions {
   readonly params?: PageParams;
   /** Espera tras la última tecla antes de buscar. Por defecto 300 ms. */
   readonly debounceMs?: number;
+  /** Búsqueda con la que arranca la tabla, por ejemplo la que llega del buscador global. */
+  readonly initialSearch?: string;
 }
 
 export interface ServerTable<T> {
@@ -97,7 +99,7 @@ export function useServerTable<T>(
   );
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: options.pageSize ?? 10 });
   const [sorting, setSorting] = useState<SortingState>(options.initialSorting ?? []);
-  const [globalFilter, setGlobalFilter] = useState('');
+  const [globalFilter, setGlobalFilter] = useState(options.initialSearch ?? '');
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [result, setResult] = useState<Page<T> | null>(null);
   const [loading, setLoading] = useState(true);

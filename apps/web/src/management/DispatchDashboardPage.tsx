@@ -9,7 +9,7 @@ import { fetchByIds } from '../api/fetchByIds.js';
 import { ActivityTimeline, type TimelineEvent } from '../components/ActivityTimeline.js';
 import { AnnouncementBanner } from '../components/AnnouncementBanner.js';
 import { ConfettiArt, SpheresArt } from '../components/CardArt.js';
-import { IconChip, type IconChipTone } from '../components/IconChip.js';
+import { KpiCard } from '../components/KpiCard.js';
 import { ErrorNotice } from '../components/Notices.js';
 import { ORDER_STATUS_ICONS } from '../components/OrderStatusBadge.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -265,29 +265,6 @@ function DeliveredRingCard({ counts, total }: { readonly counts: DispatchDashboa
               )}
             </p>
           </div>
-        </CardContent>
-      </Card>
-    </li>
-  );
-}
-
-function KpiCard({ icon, tone, label, value, detail }: {
-  readonly icon: LucideIcon;
-  readonly tone: IconChipTone;
-  readonly label: string;
-  readonly value: number;
-  readonly detail: string;
-}) {
-  return (
-    <li className="xl:col-span-3">
-      <Card className="h-full">
-        <CardContent className="flex h-full flex-row items-start justify-between gap-2">
-          <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <strong className="text-2xl font-semibold tabular-nums">{value.toLocaleString('es-PE')}</strong>
-            <p className="text-xs text-muted-foreground">{detail}</p>
-          </div>
-          <IconChip icon={icon} tone={tone} />
         </CardContent>
       </Card>
     </li>
