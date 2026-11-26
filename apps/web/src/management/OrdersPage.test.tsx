@@ -36,6 +36,8 @@ function makeClient(overrides: {
     listDeliveryOrdersPage: overrides.listDeliveryOrdersPage ?? vi.fn<ApiClient['listDeliveryOrdersPage']>().mockResolvedValue(page),
     findOrderByPublicCode: overrides.findOrderByPublicCode ?? vi.fn<ApiClient['findOrderByPublicCode']>().mockResolvedValue(order),
     listDeliveryOrderStatusHistory: vi.fn<ApiClient['listDeliveryOrderStatusHistory']>().mockResolvedValue([]),
+    listEvidence: vi.fn<ApiClient['listEvidence']>().mockResolvedValue([]),
+    downloadEvidence: vi.fn<ApiClient['downloadEvidence']>().mockResolvedValue(new Blob()),
   };
 }
 

@@ -17,7 +17,7 @@ import { countLabel, formatDateTime } from '../lib/format.js';
 import { ORDER_FILTER_PARAMS, ORDER_SORT_FIELDS, ORDER_STATUS_FILTER, TIME_WINDOW_FILTER } from './orders/orderFilters.js';
 import { OrderDetailSheet } from './orders/OrderDetailSheet.js';
 
-type OrdersClient = Pick<ApiClient, 'listDeliveryOrdersPage' | 'findOrderByPublicCode' | 'listDeliveryOrderStatusHistory'>;
+type OrdersClient = Pick<ApiClient, 'listDeliveryOrdersPage' | 'findOrderByPublicCode' | 'listDeliveryOrderStatusHistory' | 'listEvidence' | 'downloadEvidence'>;
 
 export function OrdersPage({ client, selectedCode, onSelectOrder, onManage }: {
   readonly client: OrdersClient;

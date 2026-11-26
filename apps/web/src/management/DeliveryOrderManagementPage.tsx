@@ -19,7 +19,7 @@ import { ORDER_FILTER_PARAMS, ORDER_SORT_FIELDS, ORDER_STATUS_FILTER, TIME_WINDO
 import { OrderImportSheet } from './orders/OrderImportCard.js';
 import { useCustomerNames } from './orders/useCustomerNames.js';
 
-type OrderClient = Pick<ApiClient, 'listCustomersPage' | 'listDeliveryOrdersPage' | 'createDeliveryOrder' | 'editDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
+type OrderClient = Pick<ApiClient, 'listCustomersPage' | 'listDeliveryOrdersPage' | 'createDeliveryOrder' | 'editDeliveryOrder' | 'resolveGoogleMapsLink' | 'cancelDeliveryOrder' | 'listDeliveryOrderStatusHistory' | 'listEvidence' | 'downloadEvidence' | 'importDeliveryOrders' | 'downloadDeliveryOrderImportTemplate'>;
 
 export function DeliveryOrderManagementPage({ client }: { readonly client: OrderClient }) {
   const table = useServerTable<DeliveryOrder>(
@@ -206,8 +206,22 @@ export function DeliveryOrderManagementPage({ client }: { readonly client: Order
 
       <OrderDetailSheet client={client} order={detailOrder} onClose={() => setDetailSnapshot(null)}
         customerName={detailOrder === null ? undefined : customerNameOf(detailOrder.customerId)}
-        {...(detailOrder !== null && canEdit(detailOrder.status) ? {
-          footer: <Button type="button" onClick={() => startEdit(detailOrder)}><Pencil data-icon="inline-start" aria-hidden="true" /> Editar pedido</Button>,
+        {...(detailOrder !== null && (canEdit(detailOrder.status) || canCancel(detailOrder.status)) ? {
+          footer: (
+            <>
+              {canEdit(detailOrder.status) && (
+                <Button type="button" variant="outline" className="flex-1" onClick={() => startEdit(detailOrder)}>
+                  <Pencil data-icon="inline-start" aria-hidden="true" /> Editar pedido
+                </Button>
+              )}
+              {canCancel(detailOrder.status) && (
+                <Button type="button" variant="destructive" size="icon" className="ml-auto"
+                  aria-label={`Cancelar pedido ${detailOrder.publicCode}`} onClick={() => void cancelOrder(detailOrder)}>
+                  <Ban aria-hidden="true" />
+                </Button>
+              )}
+            </>
+          ),
         } : {})} />
 
       <OrderEditSheet client={client} order={editingOrder} onClose={() => setEditingSnapshot(null)}

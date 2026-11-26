@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, chooseRowAction, pickDay, setupUser } from '../test/ui.js';
@@ -242,6 +242,10 @@ describe('DispatchPlanningPage', () => {
     await screen.findByText('RUTA-DONE');
     expect(screen.getByText(/Completada/)).toBeTruthy();
     await chooseRowAction(user, 'Acciones de RUTA-DONE', 'Ver detalle');
+    const detail = screen.getByRole('dialog', { name: 'RUTA-DONE' });
+    expect(within(detail).getByText('Conductor')).toBeTruthy();
+    expect(within(detail).getByText('Vehículo')).toBeTruthy();
+    expect(within(detail).getByRole('heading', { name: 'Paradas' })).toBeTruthy();
     expect(screen.getByText('Av. Arequipa 100')).toBeTruthy();
     expect(screen.getByText('PED-001 (Creado)')).toBeTruthy();
     // Only the orders of the visible page's stops are requested, by id.

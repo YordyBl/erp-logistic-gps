@@ -9,7 +9,8 @@ import type {
 import { fetchByIds } from '../api/fetchByIds.js';
 import { RowActions, SortableHeader, TableProgress } from '../components/data-table/columnHelpers.js';
 import { DataTable, type DataTableFilter } from '../components/data-table/DataTable.js';
-import { DocumentSheet, DocumentTitle, FormSheet } from '../components/FormSheet.js';
+import { DetailField, DetailFields, DetailSection, DetailSheet } from '../components/DetailSheet.js';
+import { DocumentTitle, FormSheet } from '../components/FormSheet.js';
 import { DateField, SelectField, TextField } from '../components/FormFields.js';
 import { IconChip } from '../components/IconChip.js';
 import { MapLink } from '../components/MapLink.js';
@@ -672,35 +673,41 @@ export function DispatchPlanningPage({ client, initialQuery }: {
           filters={[ROUTE_STATUS_FILTER]} onRowClick={(row) => setDetailRouteId(row.route.id)} />
       )}
 
-      <DocumentSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }}
-        title={detailRow?.route.publicCode ?? 'Ruta'} description="Paradas, pedidos y avance de la ruta."
+      <DetailSheet open={detailRow !== undefined} onOpenChange={(open) => { if (!open) setDetailRouteId(null); }}
+        eyebrow="Ruta" title={detailRow?.route.publicCode ?? 'Ruta'} description="Paradas, pedidos y avance de la ruta."
+        {...(detailRow === undefined ? {} : {
+          status: <Badge variant={ROUTE_BADGES[detailRow.route.status]}>{ROUTE_STATUS_LABELS[detailRow.route.status]}</Badge>,
+        })}
         {...(detailRow?.route.status === 'planned' ? {
-          footer: <Button type="button" variant="outline" onClick={() => { setReassignRouteId(detailRow.route.id); setDetailRouteId(null); }}><ArrowLeftRight data-icon="inline-start" aria-hidden="true" /> Reasignar</Button>,
+          footer: <Button type="button" variant="outline" className="flex-1" onClick={() => { setReassignRouteId(detailRow.route.id); setDetailRouteId(null); }}><ArrowLeftRight data-icon="inline-start" aria-hidden="true" /> Reasignar</Button>,
         } : {})}>
         {detailRow !== undefined && (
           <>
-            <DocumentTitle title="HOJA DE RUTA" aside={<Badge variant={ROUTE_BADGES[detailRow.route.status]}>{ROUTE_STATUS_LABELS[detailRow.route.status]}</Badge>}>
-              <span>N°: <span className="text-foreground">{detailRow.route.publicCode}</span></span>
-              <span>Fecha: <span className="text-foreground">{formatPlannedDate(detailRow.route.plannedDate)}</span></span>
-              <span>Conductor: <span className="text-foreground">{detailRow.driver}</span></span>
-              <span>Vehículo: <span className="text-foreground">{detailRow.plate}</span></span>
-            </DocumentTitle>
-            <TableProgress percent={detailRow.progress.percent} label={`Avance de ${detailRow.route.publicCode}`}
-              detail={`${detailRow.progress.closed} de ${detailRow.progress.total} ${detailRow.progress.total === 1 ? 'pedido cerrado' : 'pedidos cerrados'}`} />
-            <div className="text-xs">
-              <RouteTimeline stops={detailRow.route.stops.map((stop, index) => ({
-                id: stop.id,
-                addressLine: stop.addressLine,
-                state: detailRow.progress.stopStates[index] ?? 'pending',
-                detail: stop.orderIds.map((id) => {
-                  const order = routeOrders.get(id);
-                  return order === undefined ? 'Pedido' : `${order.publicCode} (${orderStatusLabel(order.status)})`;
-                }).join(', '),
-              }))} />
-            </div>
+            <DetailFields>
+              <DetailField label="Fecha">{formatPlannedDate(detailRow.route.plannedDate)}</DetailField>
+              <DetailField label="Conductor">{detailRow.driver}</DetailField>
+              <DetailField label="Vehículo"><span className="font-mono">{detailRow.plate}</span></DetailField>
+              <DetailField label="Avance">
+                <TableProgress percent={detailRow.progress.percent} label={`Avance de ${detailRow.route.publicCode}`}
+                  detail={`${detailRow.progress.closed} de ${detailRow.progress.total} ${detailRow.progress.total === 1 ? 'pedido cerrado' : 'pedidos cerrados'}`} />
+              </DetailField>
+            </DetailFields>
+            <DetailSection title="Paradas">
+              <div className="text-xs">
+                <RouteTimeline stops={detailRow.route.stops.map((stop, index) => ({
+                  id: stop.id,
+                  addressLine: stop.addressLine,
+                  state: detailRow.progress.stopStates[index] ?? 'pending',
+                  detail: stop.orderIds.map((id) => {
+                    const order = routeOrders.get(id);
+                    return order === undefined ? 'Pedido' : `${order.publicCode} (${orderStatusLabel(order.status)})`;
+                  }).join(', '),
+                }))} />
+              </div>
+            </DetailSection>
           </>
         )}
-      </DocumentSheet>
+      </DetailSheet>
 
       {reassignRoute_ !== undefined && (
         <ReassignSheet key={`${reassignRoute_.id}-${reassignRoute_.driverId}-${reassignRoute_.vehicleId}`} route={reassignRoute_} drivers={activeDrivers} vehicles={activeVehicles} busy={busyRouteId === reassignRoute_.id}

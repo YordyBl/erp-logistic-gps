@@ -50,7 +50,8 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 | `Notices.tsx` | `ErrorNotice`, `SuccessNotice` y `LoadingRows` |
 | `PageHeader.tsx` | Título, descripción y acciones de cada pantalla |
 | `OrderStatusBadge.tsx` | Estado de pedido con su etiqueta y variante |
-| `FormSheet.tsx` | Registro o edición en panel lateral; el estado queda en quien lo usa y cerrar no borra lo escrito. `paper` y `DocumentSheet` lo muestran como documento |
+| `FormSheet.tsx` | Registro o edición en panel lateral; el estado queda en quien lo usa y cerrar no borra lo escrito. `paper` lo muestra como documento |
+| `DetailSheet.tsx` | Detalle de un registro: `DetailSheet`, `DetailFields`/`DetailField`, `DetailSection` y `StatusTrail` (recorrido de estados) |
 | `data-table/DataTable.tsx` | Tabla con búsqueda, filtros punteados, orden, columnas visibles y paginación (`@tanstack/react-table` 8) |
 | `data-table/columnHelpers.tsx` | Cabecera ordenable, menú de tres puntos y barra de avance para celdas |
 | `AnnouncementBanner.tsx` | Aviso con degradado que se oculta durante la sesión |
@@ -66,6 +67,7 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 
 - **Armazón:** como `sidebar-07`, con `SidebarProvider`, `Sidebar collapsible="icon"`, `SidebarInset` y `SidebarTrigger`. `Ctrl+B` activo. El menú se agrupa con `SidebarGroupLabel` en Operación, Pedidos, Flota y Administración (`shell/navigation.ts`); cada entrada declara los roles que la ven y que pueden abrir su ruta. La cuenta es un `DropdownMenu`.
 - **Login:** dos tarjetas sobre fondo gris: mapa isométrico a la izquierda (`public/login-map.svg`) y formulario a la derecha.
+- **Detalles:** el detalle de un registro va en `DetailSheet`, un panel angosto: etiqueta («Pedido», «Ruta»), código en mono y badge de estado en la cabecera; datos clave-valor en `DetailFields`, bloques con título en `DetailSection` y las acciones en el pie, a ancho repartido, con la destructiva como icono al final. Sin `.doc-form`: es lectura, no un formulario.
 - **Formularios:** los registros y ediciones van en `FormSheet`, con `FieldGroup` + `Field`. Los `Input` conservan la validación nativa (`required`, `pattern`, `minLength`, `maxLength`). `Select` y `DatePicker` no la aplican, así que se validan con mensaje en español mediante `FieldError`.
 - **`pattern`:** se compila con el flag `v`. Los patrones viven en `lib/patterns.ts`, con test, porque uno inválido se ignora sin avisar.
 - **Fechas:** `lib/dates.ts`. Nunca `new Date('YYYY-MM-DD')`, que se interpreta como UTC y en Lima muestra el día anterior.
@@ -76,7 +78,7 @@ Fuera de `components/ui` se compone con libertad, sin restilizar los controles.
 - **Tablas:** `DataTable` en los listados, con acciones en un menú de tres puntos y detalle al pulsar la fila. En móvil se desplazan dentro de su contenedor, no la página.
 - **Indicadores:** solo el Resumen y Reportes llevan tarjetas de cifras (`KpiCard`). Las demás pantallas resumen sus cifras en la línea bajo el título, para no repetir el mismo bloque. En Reportes cada tasa muestra su base («86 de 95 primeros intentos») y la variación dice si mejora o empeora, no solo si sube.
 - **Estados:** un solo nombre por estado de pedido, en `delivery/orderStatus.ts`.
-- **Paneles:** la clase `.doc-form` de `styles.css` aplica fuente Geist Mono, campos de una línea y una trama rayada en lo pendiente; al enfocar aparece el placeholder. Los controles siguen siendo los de shadcn.
+- **Paneles:** en los formularios, la clase `.doc-form` de `styles.css` aplica fuente Geist Mono, campos de una línea y una trama rayada en lo pendiente; al enfocar aparece el placeholder. Los controles siguen siendo los de shadcn.
 - **Imágenes:** los fondos son vectores propios. No se copian imágenes de plantillas de terceros.
 - **Cursor:** todo lo accionable lleva `cursor: pointer`, por pedido del usuario.
 

@@ -1,11 +1,11 @@
 /** @vitest-environment jsdom */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { chooseOption, chooseRowAction, setupUser } from '../test/ui.js';
 
-import { ApiError, type Customer, type DeliveryOrder, type DeliveryOrderImportResult, type DeliveryOrderStatusHistory, type Page, type PageParams } from '../api/client.js';
+import { ApiError, type Customer, type DeliveryEvidence, type DeliveryOrder, type DeliveryOrderImportResult, type DeliveryOrderStatusHistory, type Page, type PageParams } from '../api/client.js';
 import { DeliveryOrderManagementPage } from './DeliveryOrderManagementPage.js';
 
 const customer: Customer = {
@@ -63,6 +63,8 @@ function makeClient(overrides: Partial<{
   editDeliveryOrder: (id: string, changes: unknown) => Promise<DeliveryOrder>;
   cancelDeliveryOrder: (id: string) => Promise<DeliveryOrder>;
   listDeliveryOrderStatusHistory: (id: string) => Promise<readonly DeliveryOrderStatusHistory[]>;
+  listEvidence: (orderId: string) => Promise<readonly DeliveryEvidence[]>;
+  downloadEvidence: (evidenceId: string) => Promise<Blob>;
   importDeliveryOrders: (file: File) => Promise<DeliveryOrderImportResult>;
   downloadDeliveryOrderImportTemplate: () => Promise<Blob>;
 }> = {}) {
@@ -74,6 +76,8 @@ function makeClient(overrides: Partial<{
     editDeliveryOrder: vi.fn().mockResolvedValue(order),
     cancelDeliveryOrder: vi.fn().mockResolvedValue({ ...order, status: 'cancelled' }),
     listDeliveryOrderStatusHistory: vi.fn().mockResolvedValue([]),
+    listEvidence: vi.fn().mockResolvedValue([]),
+    downloadEvidence: vi.fn().mockResolvedValue(new Blob(['foto'], { type: 'image/jpeg' })),
     importDeliveryOrders: vi.fn().mockResolvedValue({ importedOrders: [], rejectedOrders: [] }),
     downloadDeliveryOrderImportTemplate: vi.fn().mockResolvedValue(new Blob()),
     ...overrides,
@@ -299,7 +303,9 @@ describe('DeliveryOrderManagementPage', () => {
     await screen.findByText('LIM-2041');
     await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
 
-    expect(await screen.findByText(/Creado → Cancelado/)).toBeTruthy();
+    const trail = await screen.findByRole('list', { name: 'Historial LIM-2041' });
+    expect(within(trail).getByText('Cancelado')).toBeTruthy();
+    expect(within(trail).getByText('Desde Creado')).toBeTruthy();
     expect(client.listDeliveryOrderStatusHistory).toHaveBeenCalledWith(order.id);
   });
 
@@ -341,7 +347,7 @@ describe('DeliveryOrderManagementPage', () => {
     await screen.findByText('LIM-2041');
     await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
 
-    expect(await screen.findByText(/Incidencia reportada/)).toBeTruthy();
+    expect(await screen.findByText('Incidencia reportada · desde En reparto')).toBeTruthy();
   });
 
   it('shows status-history loading and the empty-history state', async () => {
@@ -374,8 +380,65 @@ describe('DeliveryOrderManagementPage', () => {
     expect(await screen.findByText('No se pudo cargar el historial. Inténtalo de nuevo.')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Reintentar' }));
 
-    expect(await screen.findByText(/Creado → Cancelado/)).toBeTruthy();
+    const trail = await screen.findByRole('list', { name: 'Historial LIM-2041' });
+    expect(within(trail).getByText('Cancelado')).toBeTruthy();
+    expect(within(trail).getByText('Desde Creado')).toBeTruthy();
     expect(client.listDeliveryOrderStatusHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the latest delivery photo of a closed order', async () => {
+    const user = setupUser();
+    const delivered: DeliveryOrder = { ...order, status: 'delivered' };
+    const evidence = (id: string, createdAt: string): DeliveryEvidence => ({
+      id, orderId: order.id, attemptId: 'attempt-1', incidentId: null, mimeType: 'image/jpeg', byteSize: 10,
+      checksum: 'x', uploadedBy: 'driver-1', status: 'available', createdAt, availableAt: createdAt,
+    });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:foto');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const client = makeClient({
+      listDeliveryOrdersPage: vi.fn().mockResolvedValue(pageOf([delivered])),
+      listEvidence: vi.fn().mockResolvedValue([evidence('old', '2026-10-29T12:00:00.000Z'), evidence('new', '2026-10-29T13:00:00.000Z')]),
+    });
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+
+    expect(await screen.findByRole('img', { name: 'Evidencia del pedido LIM-2041' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Foto de entrega' })).toBeTruthy();
+    expect(client.listEvidence).toHaveBeenCalledWith(order.id);
+    expect(client.downloadEvidence).toHaveBeenCalledWith('new');
+  });
+
+  it('keeps a placeholder for the photo while the order is still open', async () => {
+    const user = setupUser();
+    const client = makeClient();
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+
+    expect(await screen.findByText('La foto de entrega aparecerá aquí cuando el conductor cierre la parada.')).toBeTruthy();
+    expect(client.listEvidence).not.toHaveBeenCalled();
+  });
+
+  it('cancels the order from the detail footer and shows the new status', async () => {
+    const user = setupUser();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const client = makeClient({
+      listDeliveryOrdersPage: vi.fn().mockResolvedValueOnce(pageOf([order])).mockResolvedValue(pageOf([{ ...order, status: 'cancelled' }])),
+    });
+    render(<DeliveryOrderManagementPage client={client} />);
+
+    await screen.findByText('LIM-2041');
+    await chooseRowAction(user, 'Acciones de LIM-2041', 'Ver detalle');
+    const detail = await screen.findByRole('dialog', { name: 'LIM-2041' });
+    expect(within(detail).getByRole('button', { name: /Editar pedido/ })).toBeTruthy();
+    await user.click(within(detail).getByRole('button', { name: 'Cancelar pedido LIM-2041' }));
+
+    expect(client.cancelDeliveryOrder).toHaveBeenCalledWith(order.id);
+    expect(await within(detail).findByText('Cancelado')).toBeTruthy();
+    expect(within(detail).queryByRole('button', { name: 'Cancelar pedido LIM-2041' })).toBeNull();
   });
 
   it('surfaces inactive customer conflict and allows retrying failed list loads', async () => {
